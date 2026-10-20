@@ -1,0 +1,11 @@
+// expect: E5005
+// run: 1
+fun show(c: &Composition, s: &MutableState<Int>) { c.setContent { println(s.value) } }
+fun consume(s: MutableState<Int>) {}
+fun main() {
+    val c = composition { }
+    val s = mutableStateOf(0)
+    show(c, s)
+    consume(s)
+    println(c.recompose())
+}

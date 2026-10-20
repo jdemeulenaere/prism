@@ -540,7 +540,8 @@ impl<'a> LoanFlow<'a> {
         // Each loan-carrying operand's items, and whether the call may write through it, with
         // the type of what it writes when that is known: `R` for a `&mut R` argument. A
         // reference to a keeper, shared or not, receives what the call's `attached` arguments
-        // hold, which it keeps (D24 of `owned-state`).
+        // hold, which it keeps, and what its other operands hold, which a callee may give it
+        // (D24 of `owned-state`).
         let mut sources: Vec<(Vec<usize>, Option<Option<Type>>, bool)> = Vec::new();
         let attached = self.attached_items(state, arguments, parameter_kinds);
         let mut keepers: Vec<LocalId> = Vec::new();
@@ -568,7 +569,7 @@ impl<'a> LoanFlow<'a> {
         for keeper in keepers {
             writes.push((keeper, attached.clone()));
         }
-        for (index, (items, through, _)) in sources.iter().enumerate() {
+        for (index, (items, through, keeps)) in sources.iter().enumerate() {
             let Some(written) = through else {
                 continue;
             };
@@ -583,7 +584,10 @@ impl<'a> LoanFlow<'a> {
             if let Some(written) = written {
                 others = self.fitting(others, written);
             }
-            for referent in self.referents(items, true) {
+            // A callee may keep what the other operands hold in a keeper it is given by any
+            // reference, shared ones included, as `setContent` does with its content (D24 of
+            // `owned-state`): `show(c, s)` may make `c` keep `s` borrowed.
+            for referent in self.referents(items, !keeps) {
                 writes.push((referent, others.clone()));
             }
         }

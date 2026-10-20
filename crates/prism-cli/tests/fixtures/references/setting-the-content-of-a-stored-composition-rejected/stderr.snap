@@ -1,0 +1,9 @@
+error[E5010]: a composition whose content captures 's' weakly cannot be stored here
+  --> main.prism:7:5
+    7 |     app.c.setContent { println(s.value) }
+      |     ^^^^^ given to a composition held in a field, an element, a box or a state here
+  --> main.prism:7:32
+    7 |     app.c.setContent { println(s.value) }
+      |                                ^ 's' is captured weakly here
+   = note: the composition's content captures 's' weakly, so the composition keeps it borrowed while it is used
+   = help: keep the composition in a local of the scope that owns the state, or remember the state in the content

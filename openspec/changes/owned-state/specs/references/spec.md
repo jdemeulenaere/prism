@@ -41,7 +41,7 @@ When a closure that owns its captures and reaches no `attached` parameter uses a
 - **THEN** the borrow checker emits `E5007`, saying that a closure that captures the reference `count` cannot escape, with help suggesting `val countRef = count.weak()` before the closure and `countRef.get()` inside it
 
 ### Requirement: Weak Captures Keep Their States Borrowed
-A weak capture MUST be a shared borrow of the captured path's place, held by the closure value. A call's result whose type contains a keeper (`Composition`) MUST also hold the borrows of the arguments given to its `attached` parameters, and a call MUST write them through each argument that is a reference to a keeper, shared or mutable. No other call MUST keep them past it.
+A weak capture MUST be a shared borrow of the captured path's place, held by the closure value. A call's result whose type contains a keeper (`Composition`) MUST also hold the borrows of the arguments given to its `attached` parameters, and a call MUST write them, and the borrows its other operands hold, through each argument that is a reference to a keeper, shared or mutable, as through a `&mut` argument. No other call MUST keep them past it.
 
 #### Scenario: Moving a state its composition shows rejected
 - **WHEN** `fun consume(s: MutableState<Int>) {}` is declared and `fun main() { val s = mutableStateOf(0); val c = composition { println(s.value) }; consume(s); println(c.recompose()) }` is checked
@@ -55,16 +55,24 @@ A weak capture MUST be a shared borrow of the captured path's place, held by the
 - **WHEN** `fun show(s: &MutableState<Int>): Composition = composition { println(s.value) }` is declared and `fun main() { val s = mutableStateOf(1); val c = show(s); s.value = 2; println(c.recompose()) }` runs with `--check-allocations`
 - **THEN** stdout is `1`, `2` and `true`, one per line, and the exit status is 0
 
+#### Scenario: A helper setting a composition's content keeps its arguments borrowed
+- **WHEN** `fun show(c: &Composition, s: &MutableState<Int>) { c.setContent { println(s.value) } }` and `fun consume(s: MutableState<Int>) {}` are declared and `fun main() { val c = composition { }; val s = mutableStateOf(0); show(c, s); consume(s); println(c.recompose()) }` is checked
+- **THEN** the borrow checker emits `E5005` at `s` in `consume(s)`, labelling the borrow of `s` in `show(c, s)` and the later use `c.recompose()`: `show` may have given `c` content that captures `s`
+
 #### Scenario: An app keeps nothing past its call
 - **WHEN** `fun consume(s: MutableState<Int>) {}` is declared and `fun main() { val s = mutableStateOf(0); runApp { Text("${s.value}") }; consume(s) }` is checked with `import /prism/compose/ui` and `import /prism/compose/material3`
 - **THEN** the file passes `prism check`: `runApp` returns once its app has ended, so its content keeps `s` borrowed only during the call
 
 ### Requirement: Compositions Holding Weak Captures Stay Tracked
-A value whose type contains a keeper and that holds borrows MUST NOT be stored in a struct field, an enum payload, a box, a list, a state or a top-level value, or passed to a generic or `escaping` parameter, which the borrow checker MUST reject with `AttachedFunctionEscapes` (`E5010`). A function returning a keeper MUST have its result tied to its `attached` parameters as well as to the inputs its elision rule names.
+A value whose type contains a keeper and holds borrows MUST NOT be stored in a field, a payload, a box, a list, a state or a top-level value, or passed to a generic or `escaping` parameter, and a keeper held in one of those MUST NOT be given content holding weak captures (`app.c.setContent { }`): the borrow checker MUST reject both with `E5010`. A function returning a keeper MUST have its result tied to its `attached` parameters as well as to the inputs its elision rule names.
 
 #### Scenario: Storing a composition that holds a weak capture rejected
 - **WHEN** `struct App { val c: Composition }` is declared and `fun main() { val s = mutableStateOf(0); val app = App(composition { println(s.value) }) }` is checked
 - **THEN** the borrow checker emits `E5010` at the composition stored in `App`, saying that a composition whose content captures states weakly cannot be stored there
+
+#### Scenario: Setting the content of a stored composition rejected
+- **WHEN** `struct App { val c: Composition }` is declared and `fun main() { val s = mutableStateOf(0); val app = App(composition { }); app.c.setContent { println(s.value) } }` is checked
+- **THEN** the borrow checker emits `E5010` at `app.c`, saying that a composition whose content captures `s` weakly cannot be stored there
 
 #### Scenario: A composition wrapping attached content
 - **WHEN** `fun wrap(content: attached compose () -> Unit): Composition = composition(content)` is declared and `fun main() { val s = mutableStateOf(1); val c = wrap { println(s.value) }; s.value = 2; println(c.recompose()) }` runs with `--check-allocations`

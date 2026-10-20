@@ -127,6 +127,13 @@ pub(crate) fn check_escapes(
                     operand_span(operand, terminator.span),
                 ));
             }
+            errors.extend(checker.untracked_keepers(
+                state,
+                arguments,
+                parameters,
+                parameter_kinds,
+                terminator.span,
+            ));
             continue;
         };
         let StatementKind::Assign(destination, rvalue) = &statement.kind else {
@@ -473,6 +480,67 @@ impl Escapes<'_> {
         Some(self.attached_error(item, ty, position, span))
     }
 
+    /// `E5010` for each keeper given by reference to a call that keeps what its `attached`
+    /// arguments hold (`app.c.setContent { ... }`), when the keeper is held where loans are not
+    /// tracked: in a field of a struct, an element, a box's or a state's contents (D24 of
+    /// `owned-state`). A keeper in a local, or reached through a reference parameter, is
+    /// tracked by the loan flow.
+    fn untracked_keepers(
+        &self,
+        state: &Holdings,
+        arguments: &[Operand],
+        parameters: &[Type],
+        parameter_kinds: &[prism_mir::ParameterKind],
+        span: Span,
+    ) -> Option<BorrowError> {
+        let attached: Vec<Item> = arguments
+            .iter()
+            .zip(parameter_kinds)
+            .filter(|(_, kind)| kind.is_attached())
+            .filter_map(|(operand, _)| operand.place())
+            .flat_map(|place| {
+                let items = self.flow.holds(state, place.local);
+                self.partition_attached(state, &items, &Value::Local(place.local))
+                    .0
+            })
+            .collect();
+        let item = *attached.first()?;
+        for (operand, parameter) in arguments.iter().zip(parameters) {
+            let Some(keeper) = referent(parameter).filter(places::contains_keeper) else {
+                continue;
+            };
+            let Some(place) = operand.place() else {
+                continue;
+            };
+            let untracked = self.flow.holds(state, place.local).iter().any(|item| match item {
+                Item::Loan(loan) => !self.tracks_loans(&self.borrows.loans[*loan].place),
+                Item::Input(_) => false,
+            });
+            if untracked {
+                return Some(self.attached_error(
+                    item,
+                    &keeper,
+                    "given to a composition held in a field, an element, a box or a state here",
+                    operand_span(operand, span),
+                ));
+            }
+        }
+        None
+    }
+
+    /// Whether the loan flow tracks what `place` holds: every place on the way to it, from its
+    /// local, carries loans.
+    fn tracks_loans(&self, place: &Place) -> bool {
+        let mut prefix = Place::local(place.local);
+        for projection in &place.projections {
+            if !places::carries_loans(&prefix.ty(self.body, &self.file.types)) {
+                return false;
+            }
+            prefix.projections.push(projection.clone());
+        }
+        places::carries_loans(&prefix.ty(self.body, &self.file.types))
+    }
+
     /// `E5010` for a value of type `ty` holding the attached `item` that escapes at `span`.
     fn attached_error(&self, item: Item, ty: &Type, position: &str, span: Span) -> BorrowError {
         let primary = Label {
@@ -765,4 +833,13 @@ impl Escapes<'_> {
 /// or a nullable one, in parentheses.
 fn escaping_type(ty: &Type) -> String {
     ty.to_string()
+}
+
+/// What a reference type refers to, under nullables: `R` for `&R` or `(&R)?`.
+fn referent(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::Reference { inner, .. } => Some(inner.as_ref().clone()),
+        Type::Nullable(inner) => referent(inner),
+        _ => None,
+    }
 }
