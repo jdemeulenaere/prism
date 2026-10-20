@@ -1471,6 +1471,19 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
     /// Calls `prism_rt_panic` with `kind`, `detail` and the location `span`, which ends the
     /// block.
     fn panic(&mut self, kind: PanicKind, detail: &str, span: Span) -> Result<(), BackendError> {
+        self.call_panic(kind, detail, span)?;
+        self.builder.ins().trap(UNREACHABLE);
+        Ok(())
+    }
+
+    /// Calls `prism_rt_panic` with `kind`, `detail` and the location `span`, which never
+    /// returns, leaving the block open.
+    fn call_panic(
+        &mut self,
+        kind: PanicKind,
+        detail: &str,
+        span: Span,
+    ) -> Result<(), BackendError> {
         let pointer = self.pointer();
         let function = self.runtime_function("prism_rt_panic")?;
         let detail_data = self.context.text(detail)?;
@@ -1500,7 +1513,6 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 column,
             ],
         );
-        self.builder.ins().trap(UNREACHABLE);
         Ok(())
     }
 
@@ -1570,22 +1582,22 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         let address = self.builder.inst_results(call)[0];
         // The accessor gives 0 for a read during the value's own initialization and 1 for a
         // read after the allocation check dropped it (D13 of `drop-and-clone-hooks`): the fast
-        // path tests the address once.
+        // path tests the address once. The cold path tells them apart from the address carried
+        // through the frame (`fail_if`): read there as a value of this block, it kept every
+        // read's address live to the end of a body of many reads, as in a composable calling
+        // thousands of toolkit functions on `Modifier`, which compiled in quadratic time.
         let unavailable = self
             .builder
             .ins()
             .icmp_imm_s(IntCC::UnsignedLessThan, address, 2);
-        let failure = self.builder.create_block();
-        let success = self.builder.create_block();
-        self.builder.set_cold_block(failure);
-        self.builder
-            .ins()
-            .brif(unavailable, failure, &[], success, &[]);
-        self.builder.switch_to_block(failure);
-        let dropped = self.builder.ins().icmp_imm_s(IntCC::Equal, address, 1);
-        self.check(dropped, PanicKind::TopLevelValueDropped, &path.name, span)?;
-        self.panic(PanicKind::ValueReadDuringInitialization, &path.name, span)?;
-        self.builder.switch_to_block(success);
+        self.fail_if(unavailable, &[address], span, |lowering, carried, _| {
+            let dropped = lowering
+                .builder
+                .ins()
+                .icmp_imm_s(IntCC::Equal, carried[0], 1);
+            lowering.check(dropped, PanicKind::TopLevelValueDropped, &path.name, span)?;
+            lowering.call_panic(PanicKind::ValueReadDuringInitialization, &path.name, span)
+        })?;
         Ok(address)
     }
 
