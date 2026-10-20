@@ -30,6 +30,7 @@
 //! | 10 | `Toggleable(HandlerId, Bool, Bool, Int)` | 8, 24, 25, 16 |
 //! | 11 | `TextFieldFrame(Color, Color)` | 8, 16 |
 
+use crate::geometry::MAX_EXTENT;
 use crate::handle::HandlerId;
 use crate::properties::{Alignment, Color, Role, Shape};
 
@@ -246,16 +247,18 @@ impl ElementMirror {
 
     /// The element this holds, or `None` for `ModifierElement.None` and unknown tags.
     pub fn decode(&self) -> Option<Element> {
+        // Sizes and paddings are at most `MAX_EXTENT` (D23 of `layout-primitive`).
+        let extent = |value: i64| value.clamp(0, MAX_EXTENT);
         // `Size` uses -1 for an axis that is not set; other negative sizes lay out as 0.
-        let size = |value: i64| (value != -1).then_some(value.max(0));
+        let size = |value: i64| (value != -1).then_some(extent(value));
         // `defaultMinSize` treats every negative value as unspecified.
-        let minimum = |value: i64| (value >= 0).then_some(value);
+        let minimum = |value: i64| (value >= 0).then_some(extent(value));
         Some(match self.bytes[0] {
             TAG_PADDING => Element::Padding {
-                start: self.int(8).max(0),
-                top: self.int(16).max(0),
-                end: self.int(24).max(0),
-                bottom: self.int(32).max(0),
+                start: extent(self.int(8)),
+                top: extent(self.int(16)),
+                end: extent(self.int(24)),
+                bottom: extent(self.int(32)),
             },
             TAG_SIZE => Element::Size {
                 width: size(self.int(8)),

@@ -1,0 +1,6 @@
+window 400x300
+  layout #1 0,0 10x10
+    box #2 0,0 2147483647x2147483647 padding(5) background(#FFFF0000)
+      layout #3 5,5 2147483647x2147483647
+clear 400x300 #FFFFFFFF
+rect 5,5 2147483647x2147483647 #FFFF0000

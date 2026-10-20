@@ -3,6 +3,18 @@
 /// A maximum without a bound.
 pub const UNBOUNDED: i64 = i64::MAX;
 
+/// The largest size a node takes and the farthest a child is placed from its parent's content:
+/// Kotlin's `Int.MAX_VALUE`, the range of Compose's sizes and offsets. Larger values a program
+/// asks for (a modifier's size or padding, a size under huge constraints, a measure policy's
+/// size or position) are clamped to it, so that no sum of sizes and positions along the tree
+/// overflows (D23 of `layout-primitive`).
+pub const MAX_EXTENT: i64 = i32::MAX as i64;
+
+/// `value` clamped between `-MAX_EXTENT` and `MAX_EXTENT`.
+pub fn clamp_extent(value: i64) -> i64 {
+    value.clamp(-MAX_EXTENT, MAX_EXTENT)
+}
+
 /// A width and a height.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Size {
@@ -18,6 +30,11 @@ impl Size {
 
     pub fn new(width: i64, height: i64) -> Size {
         Size { width, height }
+    }
+
+    /// This size with each side at most [`MAX_EXTENT`].
+    pub fn bounded(self) -> Size {
+        Size::new(self.width.min(MAX_EXTENT), self.height.min(MAX_EXTENT))
     }
 }
 

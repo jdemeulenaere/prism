@@ -651,6 +651,25 @@ Rejected: a native fallback measuring a policy-less node as a box (D17 rejects n
 
 **Registering a policy** checks the pass as the setters do (`register_measure_policy`): a container composed outside `runApp` keeps ending with `ui misuse: toolkit composables run only inside runApp`, not with the handlers' `modifier handlers are made only while runApp runs`. `Measurable.measured()` of a child not measured in the running measurement, which only toolkit code can call, reuses the detail `a placeable was placed outside its parent's placement`.
 
+### D23. Sizes and positions stay within Kotlin's `Int` range (autonomous, review)
+
+Added at review. A policy can measure a child under `Constraints.Infinity`, return `layout(constraints.maxWidth, ...)` under unbounded constraints, or `place` a child at any `Int`, and a modifier can ask for `padding(9223372036854775807.dp)`. The native pass then added such values (padding around a size, a child's position to its parent's content origin, absolute bounds in dumps, drawing and hit testing) and overflowed: a Rust panic inside an entry point, which aborts the process ("panic in a function that cannot unwind"). The padding case predates this change; the protocol made the rest reachable.
+
+- A node's size is clamped to at most `MAX_EXTENT`, 2,147,483,647 (Kotlin's `Int.MAX_VALUE`, the range of Compose's sizes and offsets), after its content and after each padding of its chain. The constraints themselves keep `Constraints.Infinity` and any bound a program gives.
+- `place(x, y)` clamps `x` and `y` to `±MAX_EXTENT` before adding the content origin.
+- A modifier's padding, size and minimum size are clamped to `MAX_EXTENT` when the chain is decoded, so dumps print the clamped value.
+- So every sum the pass, dumps, drawing and hit testing make stays far inside `i64`: at most 17 extents per node and one node per level of a tree, whose depth the program's stack bounds.
+
+A size clamped this way may be below its constraints' minimum when that minimum is above the range; nothing reads it as an error.
+
+**Compile-time cost.** None. **Run-time cost.** A `min` per side in `finish` and per padding, two clamps per `place`.
+
+Rejected:
+
+- **Saturating arithmetic at every sum** (layout, dump, drawing, hit testing, scripts, the desktop rasterizer): many sites to keep right, and the values reach the rasterizer near `i64`'s limits.
+- **A `ui misuse:` error for an out-of-range size or position**, as Compose throws for sizes it cannot represent: it would end programs for a padding no window shows, and `Constraints.Infinity` measured by a `Box` would be an error.
+- **Clamping to a smaller range** (Compose's packed `Constraints` hold less): sizes up to `Int.MAX_VALUE` are Compose's `layout` range.
+
 ## Risks / Trade-offs
 
 - **[Re-entrancy in `prism-ui`]** The pass calls program code that calls the pass. → No borrow of the thread's UI state is held across a call (D14). Frames are a stack, and every entry call checks the innermost frame (D13). The randomized incremental-versus-full test keeps running through Rust policies (D17).

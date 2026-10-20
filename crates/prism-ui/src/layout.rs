@@ -50,7 +50,7 @@ use crate::error::{
     raise, UiResult, INVALID_CONSTRAINTS, LAYOUT_OUTSIDE, LAYOUT_TWICE, MEASURED_OUTSIDE,
     MEASURED_TWICE, NO_LAYOUT, NO_POLICY, PLACED_OUTSIDE, STALE_NODE,
 };
-use crate::geometry::{Constraints, Rect, Size, UNBOUNDED};
+use crate::geometry::{clamp_extent, Constraints, Rect, Size, UNBOUNDED};
 use crate::handle::NodeId;
 use crate::modifier::{Element, CAPACITY};
 use crate::node::{Node, NodeKind};
@@ -442,6 +442,8 @@ fn finish(
 ) -> Size {
     let node = state.tree.node_mut(id).unwrap();
     let mut changed = false;
+    // Sizes stay within `MAX_EXTENT`, whatever the constraints ask (D23).
+    let content = content.bounded();
     let mut size = content;
     for index in (0..fold.count).rev() {
         let entry = &mut node.chain[index];
@@ -452,10 +454,13 @@ fn finish(
                 end,
                 bottom,
             } => {
-                size = fold.received(index).constrain(Size::new(
-                    size.width + start + end,
-                    size.height + top + bottom,
-                ));
+                size = fold
+                    .received(index)
+                    .constrain(Size::new(
+                        size.width + start + end,
+                        size.height + top + bottom,
+                    ))
+                    .bounded();
             }
             element if element.records_bounds() => {
                 let (x, y) = fold.offset(index);
@@ -808,7 +813,11 @@ pub fn place(parent: NodeId, child: NodeId, x: i64, y: i64) -> UiResult<()> {
         {
             return Err(PLACED_OUTSIDE);
         }
-        let (x, y) = (frame.origin.0 + x, frame.origin.1 + y);
+        // Positions stay within `MAX_EXTENT` of the content (D23).
+        let (x, y) = (
+            frame.origin.0 + clamp_extent(x),
+            frame.origin.1 + clamp_extent(y),
+        );
         if node.x != x || node.y != y {
             node.x = x;
             node.y = y;

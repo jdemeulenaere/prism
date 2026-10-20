@@ -40,6 +40,21 @@
 - **WHEN** `compose fun Screen() { Layout(content = { Text("a") }) { measurables, constraints -> val a = measurables[0].measure(constraints); a.place(0, 0); layout(a.width, a.height) { } } }` is checked
 - **THEN** the type checker emits `E4034` at `place`, saying that it needs a `PlacementScope` and that the innermost receiver is a `MeasureScope`
 
+### Requirement: Layout Sizes and Positions Are Bounded
+A node's size MUST be at most 2,147,483,647 logical pixels on each axis, and a child MUST be placed at most that far from its parent's content's top-left corner on each axis. Larger values that a program asks for, through a modifier's size or padding, constraints without a bound or a measure policy's `layout` or `place`, MUST be clamped to that range, and never end the program.
+
+#### Scenario: A child placed out of range
+- **WHEN** a headless app of 400 × 300 composes `Column(modifier = Modifier.padding(10.dp)) { Layout(content = { Text("far"); Text("near") }) { measurables, constraints -> val far = measurables[0].measure(constraints); val near = measurables[1].measure(constraints); layout(near.width, near.height) { far.place(Constraints.Infinity, -9223372036854775807 - 1); near.place(0, 0) } } }` under `--check-allocations`, and its script is `dump`
+- **THEN** the dump holds `text #3 2147483657,-2147483637 24x20 "far"` and `text #4 10,10 32x20 "near"`, and the exit status is 0
+
+#### Scenario: A layout under unbounded constraints
+- **WHEN** a headless app of 400 × 300 composes a `Layout` that measures its child, `Box(modifier = Modifier.padding(5.dp).background(Color.Red)) { Layout(content = { }) { measurables, constraints -> layout(constraints.maxWidth, constraints.maxHeight) { } } }`, under `Constraints(0, Constraints.Infinity, 0, Constraints.Infinity)`, and its script is `dump` and `dump draw`
+- **THEN** the dump holds `box #2 0,0 2147483647x2147483647 padding(5) background(#FFFF0000)` and `layout #3 5,5 2147483647x2147483647`, and the exit status is 0
+
+#### Scenario: A padding out of range
+- **WHEN** a headless app of 400 × 300 composes `Column(modifier = Modifier.padding(start = 9223372036854775807.dp).padding(start = 9223372036854775807.dp).size(9223372036854775807.dp)) { Text("a") }` and its script is `dump`
+- **THEN** the dump holds `column #1 0,0 400x300 padding(2147483647,0,0,0) padding(2147483647,0,0,0) size(2147483647x2147483647)` and `text #2 4294967294,0 0x20 "a"`, and the exit status is 0
+
 ### Requirement: Children a Policy Does Not Place
 A child that its parent's policy did not place in its last measurement, and that child's subtree, MUST NOT be drawn, hit by presses or found by script targets. The children of a text or text field, which only a raw node group of `/prism/composer` can give it, MUST be unplaced too. `dump` MUST print an unplaced node with `unplaced` after its other properties and before its modifier elements.
 
