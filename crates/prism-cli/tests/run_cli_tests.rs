@@ -2420,24 +2420,28 @@ fn two_clicks_and_one_frame() {
 }
 
 /// ui: "Paced clicks" (`strong-skipping`): a pause sleeps the program thread outside every
-/// frame. The fastest of three runs with the pause is at least 50 ms slower than the fastest of
-/// three without it, and no frame holds the pause.
+/// frame. The fastest of five runs with the pause is at least 50 ms slower than the fastest of
+/// five without it, and no frame holds the pause.
 #[test]
 fn paced_clicks() {
     let paced = "click \"+\"\nframe\npause 50\nclick \"+\"\nframe\n";
     let unpaced = "click \"+\"\nframe\nclick \"+\"\nframe\n";
-    let fastest = |name: &str, script: &str| {
-        (0..3)
-            .map(|run| {
-                let started = std::time::Instant::now();
-                let stderr = counter_frame_stats(&format!("{}_{}", name, run), script);
-                (started.elapsed(), stderr)
-            })
-            .min_by_key(|(elapsed, _)| *elapsed)
-            .unwrap()
+    // Interleaved runs, the fastest of five each, so that a busy moment of the machine slows
+    // both kinds alike.
+    let time = |name: &str, script: &str| {
+        let started = std::time::Instant::now();
+        let stderr = counter_frame_stats(name, script);
+        (started.elapsed(), stderr)
     };
-    let (unpaced_time, _) = fastest("paced_clicks_without", unpaced);
-    let (paced_time, stderr) = fastest("paced_clicks_with", paced);
+    let mut unpaced_time = std::time::Duration::MAX;
+    let mut paced_time = std::time::Duration::MAX;
+    let mut stderr = String::new();
+    for run in 0..5 {
+        unpaced_time = unpaced_time.min(time(&format!("paced_clicks_without_{}", run), unpaced).0);
+        let (elapsed, report) = time(&format!("paced_clicks_with_{}", run), paced);
+        paced_time = paced_time.min(elapsed);
+        stderr = report;
+    }
     assert!(
         paced_time >= unpaced_time + std::time::Duration::from_millis(50),
         "{:?} against {:?}",
@@ -2590,4 +2594,43 @@ fn clicking_empty_space() {
         stderr
     );
     assert!(stderr.contains("none in 10 of 11 frames"), "{}", stderr);
+}
+
+/// example-apps: "Typing into the field of a thousand items skips every row" (`strong-skipping`
+/// D6): the rows skip without allocating, since the key lambdas borrow the versions they
+/// capture and keep their environments in the creating frame. A frame allocates only what the
+/// text field's change does, never one environment per row.
+#[test]
+fn typing_into_the_field_of_a_thousand_items_skips_every_row_without_allocating() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let directory = temporary_directory("typing_allocations");
+    let events = directory.join("events");
+    write(
+        &events,
+        &format!(
+            "click textfield\nframe\n{}",
+            "type \"a\"\nframe\n".repeat(10)
+        ),
+    );
+    let output = prism(
+        &[
+            "run",
+            "--frame-stats",
+            "--headless",
+            "--events",
+            events.to_str().unwrap(),
+            "apps/todo/large.prism",
+        ],
+        &examples,
+    );
+    let _ = fs::remove_dir_all(&directory);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let stderr = stderr(&output);
+    let median: u64 = stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("frame stats: allocations per frame median "))
+        .and_then(|rest| rest.split(',').next())
+        .and_then(|number| number.parse().ok())
+        .unwrap_or_else(|| panic!("no allocations line in {}", stderr));
+    assert!(median < 100, "{}", stderr);
 }

@@ -12,11 +12,11 @@ A composable body MUST take, after its change words, one `Int` version argument 
 - **THEN** the three calls of `main::Show` in `main::Screen` pass `const 0`, `const 1` and a copy of `main::Screen`'s `$version0` as their version arguments
 
 ### Requirement: Composable Closures Capture the Versions of Their Borrowed References
-A composable closure that captures a dereference of a reference MUST also own a copy of that reference's version, as a capture after its other captures, and its body MUST use that capture as the version of borrows derived from the captured reference.
+A composable closure that captures a dereference of a reference MUST also capture that reference's version, after its other captures: by a shared borrow of the local holding it when the closure borrows its captures, by a copy when it owns them. Its body MUST use that capture as the version of borrows derived from the captured reference.
 
 #### Scenario: A key lambda captures a version
 - **WHEN** `prism dump-mir --composed` runs on a file declaring `compose fun Show(s: &String) {}` and `compose fun Screen(items: &State<List<String>>) { for (s in items.value) { key(s.length) { Show(s) } } }`
-- **THEN** `main::Screen` builds the closure value of the `key` lambda from a borrow of `s` and then a copy of the version it passes for `s`, and the lambda's body passes a copy of its last capture local as the version argument of its call of `main::Show`
+- **THEN** `main::Screen` builds the closure value of the `key` lambda from a borrow of `s` and then a borrow of the local holding the version it passes for `s`, and the lambda's body passes a copy of its last capture local as the version argument of its call of `main::Show`
 
 ## MODIFIED Requirements
 

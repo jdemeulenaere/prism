@@ -17,11 +17,17 @@
 //! | App and action | Measure | Target |
 //! |---|---|---|
 //! | counter, `click button 1` then `frame` | `frame` median, p99 | under 1 ms, under 2 ms |
-//! | `large.prism`, `click checkbox 2` then `frame` | `recomposition` median | under 4 ms |
+//! | `large.prism`, `click checkbox 2`, `frame`, `pause 100` | `recomposition` median | under 1 ms |
+//! | the same | `frame` p99 | under 4 ms |
+//! | `large.prism`, `type "a"`, `frame`, `pause 100` | `recomposition` median | under 2 ms |
 //! | the same | `frame` p99 | under 4 ms |
 //! | both, a click on empty space then `frame` | allocations of those frames | zero |
 //! | counter clicks and todo toggles | live allocations after each frame | constant |
 //! | todo app, `main.prism` | first frame after start, cold and warm | under 50 ms, under 20 ms |
+//!
+//! The todo inputs are paced 100 ms apart, as a person's (D15 and D16 of `strong-skipping`): the
+//! same work takes longer on a core that clocked down while the program slept, which is what a
+//! person's input meets. Back-to-back toggles are still reported, without a target, to show it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -228,6 +234,17 @@ fn the_example_apps_meet_their_frame_budgets() {
     };
     let clicks = script("clicks.events", "click button 1\nframe\n".repeat(200));
     let toggles = script("toggles.events", "click checkbox 2\nframe\n".repeat(100));
+    let paced_toggles = script(
+        "paced-toggles.events",
+        "click checkbox 2\nframe\npause 100\n".repeat(100),
+    );
+    let paced_typing = script(
+        "paced-typing.events",
+        format!(
+            "click textfield\nframe\npause 100\n{}",
+            "type \"a\"\nframe\npause 100\n".repeat(100)
+        ),
+    );
     // A point no node covers in either app: the counter's 320 × 200 window right of its
     // buttons, and the 1,000-item list's window right of the filter row.
     let counter_empty = script(
@@ -245,8 +262,13 @@ fn the_example_apps_meet_their_frame_budgets() {
 
     let counter = Measurement::take("apps/counter/main.prism", &clicks, warm);
     counter.print("counter, click button 1 then frame");
-    let todo = Measurement::take("apps/todo/large.prism", &toggles, warm);
-    todo.print("todo of 1,000 items, click checkbox 2 then frame");
+    let todo = Measurement::take("apps/todo/large.prism", &paced_toggles, warm);
+    todo.print("todo of 1,000 items, click checkbox 2, frame, pause 100");
+    let typing = Measurement::take("apps/todo/large.prism", &paced_typing, warm);
+    typing.print("todo of 1,000 items, type \"a\", frame, pause 100");
+    let back_to_back = Measurement::take("apps/todo/large.prism", &toggles, warm);
+    back_to_back
+        .print("todo of 1,000 items, click checkbox 2 then frame, back to back (no target)");
     let counter_idle = Measurement::take("apps/counter/main.prism", &counter_empty, warm);
     counter_idle.print("counter, a click on empty space then frame");
     let todo_idle = Measurement::take("apps/todo/large.prism", &todo_empty, warm);
@@ -289,17 +311,28 @@ fn the_example_apps_meet_their_frame_budgets() {
             counter.largest_p99("frame") < 2.0,
         ),
         (
-            "todo recomposition median under 4 ms",
-            todo.median_of_medians("recomposition") < 4.0,
+            "todo toggle recomposition median under 1 ms",
+            todo.median_of_medians("recomposition") < 1.0,
         ),
-        ("todo frame p99 under 4 ms", todo.largest_p99("frame") < 4.0),
+        (
+            "todo toggle frame p99 under 4 ms",
+            todo.largest_p99("frame") < 4.0,
+        ),
+        (
+            "todo typing recomposition median under 2 ms",
+            typing.median_of_medians("recomposition") < 2.0,
+        ),
+        (
+            "todo typing frame p99 under 4 ms",
+            typing.largest_p99("frame") < 4.0,
+        ),
         (
             "frames that change nothing allocate nothing",
             idle_frames_allocate_nothing(&counter_idle) && idle_frames_allocate_nothing(&todo_idle),
         ),
         (
             "live allocations constant over clicks and toggles",
-            counter.constant_live() && todo.constant_live(),
+            counter.constant_live() && todo.constant_live() && back_to_back.constant_live(),
         ),
         ("first frame under 50 ms cold", cold < 50.0),
         ("first frame under 20 ms warm", warm_first < 20.0),

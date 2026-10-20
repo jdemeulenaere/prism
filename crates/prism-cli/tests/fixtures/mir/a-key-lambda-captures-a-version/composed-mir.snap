@@ -166,7 +166,7 @@ compose composed skippable fun main::Screen(_1: &State<List<String>>, _2: Int, _
     _12 = call builtin length(move _13) -> bb7 @5:13
   bb7:
     storage_live _14 @5:23
-    _14 = closure main::Screen#closure0 [&_11, copy _18] @5:23
+    _14 = closure main::Screen#closure0 [&_11, &_18] @5:23
     storage_live _15 @5:9
     _19 = call composer start_movable_group key 0x05ff8491470724aa /* key 0 */(copy _2, move _12) -> bb15 @5:9
   bb8:

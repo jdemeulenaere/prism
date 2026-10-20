@@ -530,6 +530,37 @@ fn weak_captures(n: usize) -> String {
     )
 }
 
+/// `n` composables each passing borrows to skippable callees (D5 and D18 of `strong-skipping`):
+/// a state's elements through a `for` loop and a `key` lambda, a field of a borrowed parameter,
+/// and a local, so the transform classifies each argument and gives versions to closures.
+fn borrowed_arguments(n: usize) -> String {
+    let mut source = String::from(
+        "struct Item { val id: Int, val title: String }\n\
+         compose fun Show(s: &String) { }\n\
+         compose fun Row(item: &Item) { Show(item.title) }\n",
+    );
+    for i in 0..n {
+        writeln!(
+            source,
+            "compose fun Screen{i}(items: &State<List<Item>>, item: &Item) {{\n\
+             for (it in items.value) {{ key(it.id) {{ Row(it) }} }}\n\
+             Show(item.title)\n\
+             val local = \"a\" + \"{i}\"\n\
+             Show(local)\n\
+             }}"
+        )
+        .unwrap();
+    }
+    writeln!(
+        source,
+        "fun main() {{ val items = mutableStateOf(listOf(Item(1, \"a\"))); val item = Item(2, \"b\"); \
+         val c = composition {{ Screen{}(items, item) }} }}",
+        n - 1
+    )
+    .unwrap();
+    source
+}
+
 /// One closure capturing `n` locals.
 fn many_captures(n: usize) -> String {
     format!(
@@ -1137,6 +1168,7 @@ fn shapes() -> Vec<Shape> {
             guarded_state_accesses,
         ),
         shape("weak-captures", true, SIZES, weak_captures),
+        shape("borrowed-arguments", true, SIZES, borrowed_arguments),
         shape("many-captures", true, SIZES, many_captures),
         shape("field-path-captures", true, SIZES, field_path_captures),
         shape("nested-path-captures", true, DEPTHS, nested_path_captures),

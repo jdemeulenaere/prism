@@ -173,6 +173,15 @@ impl HiddenCaptures {
     }
 
     /// The hidden captures of the closure `id`, in capture order.
+    /// Whether the closure `id` owns its captures (it escapes or outlives its author), so its
+    /// hidden captures hold copies of the versions; a borrowing closure borrows the locals that
+    /// hold them, which its author assigns beside the references they describe, so the two
+    /// always agree and the environment stays in the creating frame.
+    pub(crate) fn owns_captures(file: &MirFile, id: BodyId) -> bool {
+        let body = &file.bodies[id];
+        body.ownership_reason.is_some() || body.capture_modes.contains(&CaptureMode::Owned)
+    }
+
     pub(crate) fn of_body(&self, id: BodyId) -> &[HiddenCapture] {
         self.bodies.get(&id).map(Vec::as_slice).unwrap_or_default()
     }

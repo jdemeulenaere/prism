@@ -310,8 +310,13 @@ impl<'a> Rewriter<'a> {
         self.body.locals = locals;
         let widened = self.body.capture_widenings.len() == self.body.capture_count;
         self.body.capture_count += hidden.len();
+        let mode = if crate::identity::HiddenCaptures::owns_captures(self.file, self.id) {
+            prism_mir::CaptureMode::Owned
+        } else {
+            prism_mir::CaptureMode::Shared
+        };
         for _ in hidden {
-            self.body.capture_modes.push(prism_mir::CaptureMode::Owned);
+            self.body.capture_modes.push(mode);
             if widened {
                 self.body.capture_widenings.push(None);
             }
@@ -393,10 +398,21 @@ impl<'a> Rewriter<'a> {
 
     /// The hidden version captures to append to a composable closure value built from
     /// `captures`, in the order of its hidden captures (D6 of `strong-skipping`).
-    fn hidden_capture_values(&self, closure: BodyId, captures: &[Capture]) -> Vec<Capture> {
-        self.hidden
-            .of_body(closure)
-            .iter()
+    ///
+    /// A closure that owns its captures gets copies of the versions. A borrowing closure, whose
+    /// environment lives in the creating frame, borrows the locals holding them (a constant is
+    /// put in a temporary first), as it borrows the references they describe, so a value built
+    /// in an earlier iteration of a loop reads the reference and its version as they are now.
+    fn hidden_capture_values(
+        &mut self,
+        closure: BodyId,
+        captures: &[Capture],
+        span: Span,
+    ) -> Vec<Capture> {
+        let owning = crate::identity::HiddenCaptures::owns_captures(self.file, closure);
+        let hidden: Vec<_> = self.hidden.of_body(closure).to_vec();
+        hidden
+            .into_iter()
             .map(|hidden| {
                 let source = crate::identity::hidden_source(
                     &self.body,
@@ -405,7 +421,18 @@ impl<'a> Rewriter<'a> {
                     hidden.kind,
                     |local| self.is_hidden_place(local),
                 );
-                Capture::Owned(self.version_operand(source))
+                let version = self.version_operand(source);
+                if owning {
+                    return Capture::Owned(version);
+                }
+                match version {
+                    Operand::Copy(place, _) | Operand::Move(place, _) => Capture::Borrowed(place),
+                    constant => {
+                        let local = self.temporary(Type::Int);
+                        self.assign(local, Rvalue::Use(constant), span);
+                        Capture::Borrowed(Place::local(local))
+                    }
+                }
             })
             .collect()
     }
@@ -670,7 +697,7 @@ impl<'a> Rewriter<'a> {
                 // A composable closure also owns the versions of the references it borrows
                 // from (D6 of `strong-skipping`).
                 if let Rvalue::Closure { body, captures } = rvalue.as_mut() {
-                    let hidden = self.hidden_capture_values(*body, captures);
+                    let hidden = self.hidden_capture_values(*body, captures, span);
                     captures.extend(hidden);
                 }
                 let version = place
