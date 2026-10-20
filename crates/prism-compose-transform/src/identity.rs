@@ -445,7 +445,7 @@ pub(crate) fn analyze(
             }
             if *is_compose && !matches!(callee, Callee::Builtin(_)) {
                 for (argument, parameter) in arguments.iter().zip(parameters) {
-                    if !has_version_word(parameter, types) {
+                    if !has_version_word(parameter) {
                         continue;
                     }
                     if let VersionSource::Reference(local) = operand_source(argument) {

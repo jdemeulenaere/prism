@@ -169,8 +169,9 @@ pub(crate) struct Rewriter<'a> {
     unit: Option<LocalId>,
     /// The hidden version captures of the file's composable closures (D6 of `strong-skipping`).
     hidden: &'a HiddenCaptures,
-    /// Per declared parameter, its version argument, for a borrow other than of a state object
-    /// (D4 of `strong-skipping`).
+    /// Per declared parameter, its version argument, for any shared borrow (D4 and D21 of
+    /// `strong-skipping`). A borrowed state object's is not its identity: see
+    /// [`Rewriter::identity_version`].
     version_arguments: Vec<Option<LocalId>>,
     /// For a composable closure, per hidden capture: the capture local it versions, its own
     /// local and its kind (D6 of `strong-skipping`).
@@ -234,7 +235,7 @@ impl<'a> Rewriter<'a> {
     fn add_composer_arguments(&mut self) {
         let words = word_count(self.declared);
         let versioned: Vec<usize> = (0..self.declared)
-            .filter(|index| has_version_word(&self.declared_type(*index), self.types))
+            .filter(|index| has_version_word(&self.declared_type(*index)))
             .collect();
         let added = 1 + words + versioned.len();
         let first = self.declared + 1;
@@ -341,12 +342,25 @@ impl<'a> Rewriter<'a> {
         }
     }
 
+    /// The version argument of declared parameter `index` when it is the parameter's identity:
+    /// a shared borrow other than of a state object. A borrowed state object is kept by its
+    /// cell (D13 of `owned-state`), and the version word it is passed is not used, so that the
+    /// body behaves as when it took none (D21 of `strong-skipping`): it never takes the
+    /// replaceable path for it, and forwards it as no identity.
+    fn identity_version(&self, index: usize) -> Option<LocalId> {
+        let version = self.version_arguments[index]?;
+        (!crate::stability::is_borrowed_state(&self.declared_type(index), self.types))
+            .then_some(version)
+    }
+
     /// The version the body was given for the argument or capture local `local`: its version
     /// argument or its hidden capture.
     fn given_version(&self, local: LocalId) -> Option<crate::identity::Fixed> {
         let index = local.index();
         if index >= 1 && index <= self.declared {
-            return self.version_arguments[index - 1].map(crate::identity::Fixed::Given);
+            return self
+                .identity_version(index - 1)
+                .map(crate::identity::Fixed::Given);
         }
         self.hidden_locals
             .iter()
@@ -919,7 +933,7 @@ impl<'a> Rewriter<'a> {
                 let versions: Vec<Operand> = arguments
                     .iter()
                     .zip(parameters.iter())
-                    .filter(|(_, parameter)| has_version_word(parameter, self.types))
+                    .filter(|(_, parameter)| has_version_word(parameter))
                     .map(|(argument, _)| self.version_operand(operand_source(argument)))
                     .collect();
                 arguments.push(self.composer());
@@ -1669,7 +1683,9 @@ impl<'a> Rewriter<'a> {
         let functions: Vec<usize> = (0..self.declared)
             .filter(|index| is_function_parameter(&self.declared_type(*index)))
             .collect();
-        let versions: Vec<LocalId> = self.version_arguments.iter().flatten().copied().collect();
+        let versions: Vec<LocalId> = (0..self.declared)
+            .filter_map(|index| self.identity_version(index))
+            .collect();
         for index in 0..self.declared {
             self.parameter_bits(index);
         }
@@ -1859,7 +1875,7 @@ impl<'a> Rewriter<'a> {
             Rvalue::Bits(BitOperator::And, self.copy(passed), Self::int(3)),
             span,
         );
-        if let Some(version) = self.version_arguments[index] {
+        if let Some(version) = self.identity_version(index) {
             // A borrow is kept as its identity, its address and version, compared by its two
             // words (D7 of `strong-skipping`).
             let result = self.temporary(Type::Int);

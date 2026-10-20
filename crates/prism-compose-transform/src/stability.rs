@@ -31,10 +31,14 @@ pub fn is_keepable(ty: &Type, kind: ParameterKind, types: &TypeTable) -> bool {
 }
 
 /// Whether a parameter of type `ty` takes a version word after the change words: a shared
-/// borrow, or a nullable of one, of a type without a capture function (D4 of
-/// `strong-skipping`). A borrowed state object keeps its cell's identity instead.
-pub fn has_version_word(ty: &Type, types: &TypeTable) -> bool {
-    is_shared_reference(ty) && !is_borrowed_state(ty, types)
+/// borrow, or a nullable of one, of any type (D4 and D21 of `strong-skipping`). The answer
+/// depends only on the type's shape, never on the referent, so that substituting a type
+/// argument keeps a calling convention: a generic body's `&T` and a lambda's
+/// `&MutableState<Int>` given for it take the same words. A borrowed state object takes one
+/// too, which its callee does not use for its own identity: it keeps its cell's (D13 of
+/// `owned-state`).
+pub fn has_version_word(ty: &Type) -> bool {
+    is_shared_reference(ty)
 }
 
 /// Whether `ty` is a shared borrow `&T` or a nullable `(&T)?` of one.
@@ -207,13 +211,17 @@ mod tests {
         for (ty, kind) in &unkeepable {
             assert!(!is_keepable(ty, *kind, &types), "{} cannot be kept", ty);
         }
-        // Borrows other than of state objects take a version word.
+        // Every shared borrow takes a version word, whatever its referent.
         let borrow = Type::Reference {
             mutable: false,
             inner: Box::new(Type::String),
         };
-        assert!(has_version_word(&borrow, &types));
-        assert!(has_version_word(&borrow.nullable(), &types));
-        assert!(!has_version_word(&Type::Int, &types));
+        assert!(has_version_word(&borrow));
+        assert!(has_version_word(&borrow.nullable()));
+        assert!(!has_version_word(&Type::Int));
+        assert!(!has_version_word(&Type::Reference {
+            mutable: true,
+            inner: Box::new(Type::String),
+        }));
     }
 }

@@ -92,7 +92,7 @@ Rejected: per-state counters from 0 (the reuse case above); versions bumped by r
 
 ### D4. Versions are passed as one hidden word per borrowed parameter after the change words (autonomous)
 
-The address is the argument itself, so only the version is added: every composable, function or composable lambda, takes after its composer and change words one `Int` **version word** per parameter that is a shared borrow (or a nullable of one) of a type without a capture function (state objects keep `owned-state` D13's identity, D11), in parameter order, receiver and context parameters first as they are among the parameters. Every composable call passes them, through a function value too, since a composable function type determines them from its parameter types alone: a caller in another file knows them from the callee's signature, and the ABI hash is unchanged (it already covers the parameter types). Composable lambdas take them although they never skip, so a lambda forwards its parameter's identity (`Each(items) { s -> Show(s) }`).
+The address is the argument itself, so only the version is added: every composable, function or composable lambda, takes after its composer and change words one `Int` **version word** per parameter that is a shared borrow (or a nullable of one), of any type (borrowed state objects included since the review, D21; they keep `owned-state` D13's identity, D11), in parameter order, receiver and context parameters first as they are among the parameters. Every composable call passes them, through a function value too, since a composable function type determines them from its parameter types alone: a caller in another file knows them from the callee's signature, and the ABI hash is unchanged (it already covers the parameter types). Composable lambdas take them although they never skip, so a lambda forwards its parameter's identity (`Each(items) { s -> Show(s) }`).
 
 **Compile-time cost.** One test per parameter type of a composable function type, when composing its body and its calls.
 
@@ -161,7 +161,7 @@ Rejected: forwarding the parameter's bits through projections, since an index th
 
 ### D11. Borrowed state objects keep `owned-state`'s identity (autonomous)
 
-A `&State<T>` or `&MutableState<T>` parameter stays kept as its weak word and compared by cell (`owned-state` D13), with no version word: a state object moves with its container (a list of `Todo`s reallocated by an append), but its cell does not, so the cell is the better identity. Writes to the state's value do not change it: they invalidate the scopes that read it.
+A `&State<T>` or `&MutableState<T>` parameter stays kept as its weak word and compared by cell (`owned-state` D13), not by a version (it takes a version word since D21, which it does not use): a state object moves with its container (a list of `Todo`s reallocated by an append), but its cell does not, so the cell is the better identity. Writes to the state's value do not change it: they invalidate the scopes that read it.
 
 ### D12. The equality glue of kept values: nothing becomes dead (autonomous; an audit the brief asked for)
 
@@ -224,6 +224,14 @@ D2 calls a remembered value permanent because a new value lives at a new address
 **Compile-time cost.** None. **Run-time cost.** One allocation when a lent value's calculation reruns (a changed key or a reset), as for values with a drop entry today.
 
 Rejected: a version per `remember` slot passed beside the borrow (a word per lent value and a new operation, for the rare drop-less move-only value); deciding in place by a flag in the slot type record (a record layout change for one case).
+
+### D21. Every shared borrow takes a version word, borrowed state objects included (autonomous; found by the review)
+
+D4 first gave version words only to borrows of types without a capture function, so a borrowed state object took none. That made the calling convention depend on the referent, which substitution changes: `compose fun <T> Each2(items: &State<List<T>>, item: compose (&T, &String) -> Unit)` is composed once and passes two version words in its call of `item`, while the lambda `{ st, s -> Show(s, n) }` given for `T = MutableState<Int>` was composed with `&MutableState<Int>` and took one. The lambda read `x`'s version as `s`'s, so `Show` kept a borrow of `Each2`'s local with a version that was not 0 and its restart read a dead frame (a segmentation fault; fixture "A composable lambda forwards its parameter's identity", form `through-a-generic-function-type-instantiated-with-a-state`). Whether a parameter takes a version word now depends only on its type's shape: every shared borrow and nullable of one. A body whose parameter is a borrowed state object takes the word and does not use it: it keeps the cell's identity (D11), never takes the replaceable path for it, forwards the parameter as no identity (`0`, as before), and its restart function passes `0` for it. So behaviour is unchanged for programs that worked; only the signatures of composables with borrowed state parameters gain a word.
+
+**Compile-time cost.** None (one shape test per parameter type instead of a shape test and a capture-function lookup). **Run-time cost.** One more word passed per borrowed state argument.
+
+Rejected: deciding the words of a lambda from the function type it is given for (the lambda can reach a generic through variables and fields, so it is not local information); no version word for `&T` with `T` a type parameter (the reverse mismatch, with `T = String`); keeping a borrowed state's version for generic callees (a slot per state parameter for a rare case).
 
 ## Implementation Notes
 

@@ -84,36 +84,36 @@ compose composed skippable fun main::Show(_1: &String, _2: Int, _3: Int, _4: Int
     goto -> bb3 @2:1
   bb18:
     goto -> bb3 @2:1
-compose composed skippable fun main::Screen(_1: &State<List<String>>, _2: Int, _3: Int): Unit @3:1
+compose composed skippable fun main::Screen(_1: &State<List<String>>, _2: Int, _3: Int, _4: Int): Unit @3:1
   local _0: Unit (return)
   local _1 items: &State<List<String>> (argument)
   local _2 $composer: Int (argument)
   local _3 $changed: Int (argument)
-  local _4: &List<String> (temporary)
-  local _5: &State<List<String>> (temporary)
-  local _6: &List<String> (temporary)
-  local _7: Int (temporary)
+  local _4 $version0: Int (argument)
+  local _5: &List<String> (temporary)
+  local _6: &State<List<String>> (temporary)
+  local _7: &List<String> (temporary)
   local _8: Int (temporary)
-  local _9: Bool (temporary)
-  local _10: &List<String> (temporary)
-  local _11 s: &String (user)
-  local _12: &String (temporary)
-  local _13: Unit (temporary)
-  local _14: Int (temporary)
+  local _9: Int (temporary)
+  local _10: Bool (temporary)
+  local _11: &List<String> (temporary)
+  local _12 s: &String (user)
+  local _13: &String (temporary)
+  local _14: Unit (temporary)
   local _15: Int (temporary)
   local _16: Int (temporary)
   local _17: Int (temporary)
-  local _18: Unit (temporary)
-  local _19: Int (temporary)
+  local _18: Int (temporary)
+  local _19: Unit (temporary)
   local _20: Int (temporary)
   local _21: Int (temporary)
-  local _22: WeakReference<State<List<String>>> (temporary)
-  local _23: Int (temporary)
+  local _22: Int (temporary)
+  local _23: WeakReference<State<List<String>>> (temporary)
   local _24: Int (temporary)
-  local _25: Bool (temporary)
-  local _26: (Int) -> Unit (temporary)
+  local _25: Int (temporary)
+  local _26: Bool (temporary)
+  local _27: (Int) -> Unit (temporary)
   bb0:
-    storage_live _14 @3:1
     storage_live _15 @3:1
     storage_live _16 @3:1
     storage_live _17 @3:1
@@ -126,97 +126,99 @@ compose composed skippable fun main::Screen(_1: &State<List<String>>, _2: Int, _
     storage_live _24 @3:1
     storage_live _25 @3:1
     storage_live _26 @3:1
-    _14 = const 0 @3:1
+    storage_live _27 @3:1
     _15 = const 0 @3:1
     _16 = const 0 @3:1
     _17 = const 0 @3:1
-    _18 = call composer start_restart_group key 0x583440014437fd05 /* body main::Screen */(copy _2) -> bb14 @3:1
+    _18 = const 0 @3:1
+    _19 = call composer start_restart_group key 0x583440014437fd05 /* body main::Screen */(copy _2) -> bb14 @3:1
   bb1:
-    _4 = &(*_6) (iteration) @4:15
-    _14 = copy _15 @4:15
-    storage_live _7 @4:5
+    _5 = &(*_7) (iteration) @4:15
+    _15 = copy _16 @4:15
     storage_live _8 @4:5
     storage_live _9 @4:5
     storage_live _10 @4:5
-    _10 = &(*_4) (iteration) @4:5
-    _7 = call builtin size<String>(move _10) -> bb2 @4:5
+    storage_live _11 @4:5
+    _11 = &(*_5) (iteration) @4:5
+    _8 = call builtin size<String>(move _11) -> bb2 @4:5
   bb2:
-    _8 = const 0 @4:5
-    _9 = copy _7 == const 0 @4:5
-    switch copy _9 [0 -> bb4, otherwise -> bb3] @4:5
+    _9 = const 0 @4:5
+    _10 = copy _8 == const 0 @4:5
+    switch copy _10 [0 -> bb4, otherwise -> bb3] @4:5
   bb3:
     goto -> bb5 @4:5
   bb4:
     goto -> bb6 @4:5
   bb5:
+    storage_dead _11 @4:5
     storage_dead _10 @4:5
     storage_dead _9 @4:5
     storage_dead _8 @4:5
     storage_dead _7 @4:5
     storage_dead _6 @4:5
     storage_dead _5 @4:5
-    storage_dead _4 @4:5
-    _18 = call composer end_group(copy _2) -> bb13 @4:5
+    _19 = call composer end_group(copy _2) -> bb13 @4:5
   bb6:
-    storage_live _11 @4:5
-    _11 = &(*_4)[_8] (iteration) @4:5
-    _16 = copy _14 @4:5
-    storage_live _12 @5:14
-    _12 = copy _11 @5:14
-    _17 = copy _16 @5:14
-    storage_live _13 @5:9
-    _13 = call compose main::Show(move _12, copy _2, const 0, copy _17) -> bb7 @5:9
+    storage_live _12 @4:5
+    _12 = &(*_5)[_9] (iteration) @4:5
+    _17 = copy _15 @4:5
+    storage_live _13 @5:14
+    _13 = copy _12 @5:14
+    _18 = copy _17 @5:14
+    storage_live _14 @5:9
+    _14 = call compose main::Show(move _13, copy _2, const 0, copy _18) -> bb7 @5:9
   bb7:
+    storage_dead _14 @5:9
     storage_dead _13 @5:9
-    storage_dead _12 @5:9
-    storage_dead _11 @6:5
-    _8 = copy _8 + const 1 @4:5
-    _9 = copy _8 == copy _7 @4:5
-    switch copy _9 [0 -> bb9, otherwise -> bb8] @4:5
+    storage_dead _12 @6:5
+    _9 = copy _9 + const 1 @4:5
+    _10 = copy _9 == copy _8 @4:5
+    switch copy _10 [0 -> bb9, otherwise -> bb8] @4:5
   bb8:
     goto -> bb5 @4:5
   bb9:
     goto -> bb6 @4:5
   bb10:
-    _26 = closure main::Screen#restart [] @3:1
-    _18 = call composer end_restart_group(copy _2, move _26) -> bb23 @3:1
+    _27 = closure main::Screen#restart [] @3:1
+    _19 = call composer end_restart_group(copy _2, move _27) -> bb23 @3:1
   bb11:
-    storage_live _4 @4:5
-    storage_live _5 @4:15
-    _5 = &(*_1) (receiver) @4:15
+    storage_live _5 @4:5
     storage_live _6 @4:15
-    _15 = call state version<List<String>>(copy _5) -> bb12 @4:15
+    _6 = &(*_1) (receiver) @4:15
+    storage_live _7 @4:15
+    _16 = call state version<List<String>>(copy _6) -> bb12 @4:15
   bb12:
-    _6 = call state read<List<String>>(copy _5) -> bb1 @4:15
+    _7 = call state read<List<String>>(copy _6) -> bb1 @4:15
   bb13:
     _0 = const () @3:49
     goto -> bb10 @3:1
   bb14:
-    _20 = const 0 @3:1
-    _21 = bits copy _3 >>> const 1 @3:1
-    _21 = bits copy _21 & const 3 @3:1
-    _22 = call state weak<List<String>>(copy _1) -> bb15 @3:1
+    _21 = const 0 @3:1
+    _22 = bits copy _3 >>> const 1 @3:1
+    _22 = bits copy _22 & const 3 @3:1
+    _23 = call state weak<List<String>>(copy _1) -> bb15 @3:1
   bb15:
-    _23 = call composer keep<prism/compose/runtime::WeakReference<prism/compose/runtime::State<List<String>>>>(copy _2, copy _22, copy _21) -> bb16 @3:1
+    _24 = call composer keep<prism/compose/runtime::WeakReference<prism/compose/runtime::State<List<String>>>>(copy _2, copy _23, copy _22) -> bb16 @3:1
   bb16:
-    _19 = bits copy _23 & const 3 @3:1
-    _20 = bits copy _20 | copy _23 @3:1
-    _20 = bits copy _20 & const 4 @3:1
-    _24 = bits copy _3 & const 1 @3:1
-    switch copy _24 [0 -> bb18, otherwise -> bb17] @3:1
+    _20 = bits copy _24 & const 3 @3:1
+    _21 = bits copy _21 | copy _24 @3:1
+    _21 = bits copy _21 & const 4 @3:1
+    _25 = bits copy _3 & const 1 @3:1
+    switch copy _25 [0 -> bb18, otherwise -> bb17] @3:1
   bb17:
-    _18 = call composer start_group key 0x892dcb8b22b1fbfd /* loop 0 */(copy _2) -> bb11 @4:5
+    _19 = call composer start_group key 0x892dcb8b22b1fbfd /* loop 0 */(copy _2) -> bb11 @4:5
   bb18:
-    switch copy _20 [0 -> bb19, otherwise -> bb17] @3:1
+    switch copy _21 [0 -> bb19, otherwise -> bb17] @3:1
   bb19:
-    _25 = call composer skipping(copy _2) -> bb21 @3:1
+    _26 = call composer skipping(copy _2) -> bb21 @3:1
   bb20:
-    _18 = call composer skip_to_group_end(copy _2) -> bb22 @3:1
+    _19 = call composer skip_to_group_end(copy _2) -> bb22 @3:1
   bb21:
-    switch copy _25 [0 -> bb17, otherwise -> bb20] @3:1
+    switch copy _26 [0 -> bb17, otherwise -> bb20] @3:1
   bb22:
     goto -> bb10 @3:1
   bb23:
+    storage_dead _27 @3:1
     storage_dead _26 @3:1
     storage_dead _25 @3:1
     storage_dead _24 @3:1
@@ -229,7 +231,6 @@ compose composed skippable fun main::Screen(_1: &State<List<String>>, _2: Int, _
     storage_dead _17 @3:1
     storage_dead _16 @3:1
     storage_dead _15 @3:1
-    storage_dead _14 @3:1
     return @3:1
 closure main::Show#restart(_1: Int): Unit @2:1
   local _0: Unit (return)
@@ -259,7 +260,7 @@ closure main::Screen#restart(_1: Int): Unit @3:1
     _2 = call composer kept_parameter 0<prism/compose/runtime::WeakReference<prism/compose/runtime::State<List<String>>>>(copy _1) -> bb1 @3:1
   bb1:
     _3 = &view(_2) (argument) @3:1
-    _0 = call compose main::Screen(copy _3, copy _1, const 3) -> bb2 @3:1
+    _0 = call compose main::Screen(copy _3, copy _1, const 3, const 0) -> bb2 @3:1
   bb2:
     storage_dead _3 @3:1
     storage_dead _2 @3:1

@@ -456,28 +456,28 @@ compose composed fun main::H(_1: Int, _2: Int): Int @10:1
   bb2:
     storage_dead _3 @10:1
     return @10:1
-compose composed skippable fun main::I(_1: &State<Int>, _2: &MutableState<String>, _3: Int, _4: Int): Unit @11:1
+compose composed skippable fun main::I(_1: &State<Int>, _2: &MutableState<String>, _3: Int, _4: Int, _5: Int, _6: Int): Unit @11:1
   local _0: Unit (return)
   local _1 s: &State<Int> (argument)
   local _2 m: &MutableState<String> (argument)
   local _3 $composer: Int (argument)
   local _4 $changed: Int (argument)
-  local _5: Int (temporary)
-  local _6: Int (temporary)
-  local _7: Unit (temporary)
+  local _5 $version0: Int (argument)
+  local _6 $version1: Int (argument)
+  local _7: Int (temporary)
   local _8: Int (temporary)
-  local _9: Int (temporary)
-  local _10: WeakReference<State<Int>> (temporary)
+  local _9: Unit (temporary)
+  local _10: Int (temporary)
   local _11: Int (temporary)
-  local _12: Int (temporary)
-  local _13: WeakReference<MutableState<String>> (temporary)
+  local _12: WeakReference<State<Int>> (temporary)
+  local _13: Int (temporary)
   local _14: Int (temporary)
-  local _15: Int (temporary)
-  local _16: Bool (temporary)
-  local _17: (Int) -> Unit (temporary)
+  local _15: WeakReference<MutableState<String>> (temporary)
+  local _16: Int (temporary)
+  local _17: Int (temporary)
+  local _18: Bool (temporary)
+  local _19: (Int) -> Unit (temporary)
   bb0:
-    storage_live _5 @11:1
-    storage_live _6 @11:1
     storage_live _7 @11:1
     storage_live _8 @11:1
     storage_live _9 @11:1
@@ -489,45 +489,49 @@ compose composed skippable fun main::I(_1: &State<Int>, _2: &MutableState<String
     storage_live _15 @11:1
     storage_live _16 @11:1
     storage_live _17 @11:1
-    _7 = call composer start_restart_group key 0xfb061e025b60f4b1 /* body main::I */(copy _3) -> bb2 @11:1
+    storage_live _18 @11:1
+    storage_live _19 @11:1
+    _9 = call composer start_restart_group key 0xfb061e025b60f4b1 /* body main::I */(copy _3) -> bb2 @11:1
   bb1:
-    _17 = closure main::I#restart [] @11:1
-    _7 = call composer end_restart_group(copy _3, move _17) -> bb13 @11:1
+    _19 = closure main::I#restart [] @11:1
+    _9 = call composer end_restart_group(copy _3, move _19) -> bb13 @11:1
   bb2:
-    _8 = const 0 @11:1
-    _9 = bits copy _4 >>> const 1 @11:1
-    _9 = bits copy _9 & const 3 @11:1
-    _10 = call state weak<Int>(copy _1) -> bb3 @11:1
+    _10 = const 0 @11:1
+    _11 = bits copy _4 >>> const 1 @11:1
+    _11 = bits copy _11 & const 3 @11:1
+    _12 = call state weak<Int>(copy _1) -> bb3 @11:1
   bb3:
-    _11 = call composer keep<prism/compose/runtime::WeakReference<prism/compose/runtime::State<Int>>>(copy _3, copy _10, copy _9) -> bb4 @11:1
+    _13 = call composer keep<prism/compose/runtime::WeakReference<prism/compose/runtime::State<Int>>>(copy _3, copy _12, copy _11) -> bb4 @11:1
   bb4:
-    _5 = bits copy _11 & const 3 @11:1
-    _8 = bits copy _8 | copy _11 @11:1
-    _12 = bits copy _4 >>> const 3 @11:1
-    _12 = bits copy _12 & const 3 @11:1
-    _13 = call state weak<String>(copy _2) -> bb5 @11:1
+    _7 = bits copy _13 & const 3 @11:1
+    _10 = bits copy _10 | copy _13 @11:1
+    _14 = bits copy _4 >>> const 3 @11:1
+    _14 = bits copy _14 & const 3 @11:1
+    _15 = call state weak<String>(copy _2) -> bb5 @11:1
   bb5:
-    _14 = call composer keep<prism/compose/runtime::WeakReference<prism/compose/runtime::MutableState<String>>>(copy _3, copy _13, copy _12) -> bb6 @11:1
+    _16 = call composer keep<prism/compose/runtime::WeakReference<prism/compose/runtime::MutableState<String>>>(copy _3, copy _15, copy _14) -> bb6 @11:1
   bb6:
-    _6 = bits copy _14 & const 3 @11:1
-    _8 = bits copy _8 | copy _14 @11:1
-    _8 = bits copy _8 & const 4 @11:1
-    _15 = bits copy _4 & const 1 @11:1
-    switch copy _15 [0 -> bb8, otherwise -> bb7] @11:1
+    _8 = bits copy _16 & const 3 @11:1
+    _10 = bits copy _10 | copy _16 @11:1
+    _10 = bits copy _10 & const 4 @11:1
+    _17 = bits copy _4 & const 1 @11:1
+    switch copy _17 [0 -> bb8, otherwise -> bb7] @11:1
   bb7:
     _0 = const () @11:57
     goto -> bb1 @11:1
   bb8:
-    switch copy _8 [0 -> bb9, otherwise -> bb7] @11:1
+    switch copy _10 [0 -> bb9, otherwise -> bb7] @11:1
   bb9:
-    _16 = call composer skipping(copy _3) -> bb11 @11:1
+    _18 = call composer skipping(copy _3) -> bb11 @11:1
   bb10:
-    _7 = call composer skip_to_group_end(copy _3) -> bb12 @11:1
+    _9 = call composer skip_to_group_end(copy _3) -> bb12 @11:1
   bb11:
-    switch copy _16 [0 -> bb7, otherwise -> bb10] @11:1
+    switch copy _18 [0 -> bb7, otherwise -> bb10] @11:1
   bb12:
     goto -> bb1 @11:1
   bb13:
+    storage_dead _19 @11:1
+    storage_dead _18 @11:1
     storage_dead _17 @11:1
     storage_dead _16 @11:1
     storage_dead _15 @11:1
@@ -539,8 +543,6 @@ compose composed skippable fun main::I(_1: &State<Int>, _2: &MutableState<String
     storage_dead _9 @11:1
     storage_dead _8 @11:1
     storage_dead _7 @11:1
-    storage_dead _6 @11:1
-    storage_dead _5 @11:1
     return @11:1
 compose composed skippable fun main::J(_1: () -> Unit, _2: Int, _3: Int): Unit @12:1
   local _0: Unit (return)
@@ -926,7 +928,7 @@ closure main::I#restart(_1: Int): Unit @11:1
   bb2:
     _4 = &view(_2) (argument) @11:1
     _5 = &view(_3) (argument) @11:1
-    _0 = call compose main::I(copy _4, copy _5, copy _1, const 11) -> bb3 @11:1
+    _0 = call compose main::I(copy _4, copy _5, copy _1, const 11, const 0, const 0) -> bb3 @11:1
   bb3:
     storage_dead _5 @11:1
     storage_dead _4 @11:1

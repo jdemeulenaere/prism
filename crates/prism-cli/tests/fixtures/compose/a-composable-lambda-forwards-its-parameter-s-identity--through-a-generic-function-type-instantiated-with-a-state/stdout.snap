@@ -1,0 +1,11 @@
+screen
+each
+show lx 0
+screen
+each
+show lx 1
+true
+screen
+each
+show lx 2
+true

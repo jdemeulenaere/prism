@@ -1,0 +1,26 @@
+// expect: ok
+// run: 0
+// `Each2` is composed once with `&T`, and its call of `item` passes a version word for each
+// borrowed argument; the lambda, written with `T` a state object, must take the same words, or
+// its `s` would be given `x`'s version and `Show` would keep a borrow of `Each2`'s local.
+compose fun Show(s: &String, n: &State<Int>) { println("show $s ${n.value}") }
+compose fun <T> Each2(items: &State<List<T>>, item: compose (&T, &String) -> Unit) {
+    println("each")
+    for (x in items.value) {
+        val local = "l" + "x"
+        item(x, local)
+    }
+}
+compose fun Screen(items: &State<List<MutableState<Int>>>, n: &State<Int>) {
+    println("screen")
+    Each2(items) { st, s -> Show(s, n) }
+}
+fun main() {
+    val items = mutableStateOf(listOf(mutableStateOf(1)))
+    val n = mutableStateOf(0)
+    val c = composition { Screen(items, n) }
+    n.value = 1
+    println(c.recompose())
+    n.value = 2
+    println(c.recompose())
+}

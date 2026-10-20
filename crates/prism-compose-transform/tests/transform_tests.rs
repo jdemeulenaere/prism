@@ -371,13 +371,14 @@ fn identities_of_each_source() {
              Show(items.value[0])\n\
          }\n",
     );
+    // `items` takes `$version0`, unused (D21 of `strong-skipping`), `item` and `p` the next.
     assert_eq!(
         show_versions(&file, "main::Screen"),
         [
             "const 0",
             "const 1",
+            "$version2",
             "$version1",
-            "$version0",
             "const 1",
             "local"
         ]

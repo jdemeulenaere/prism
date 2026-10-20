@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Composable Calls Pass the Versions of Their Borrowed Arguments
-A composable body MUST take, after its change words, one `Int` version argument per parameter that is a shared borrow, or a nullable of one, of a type without a capture function, in parameter order, and every composable call MUST pass one per such parameter: `0` for none, `1` for a permanent source, a version argument or capture for a borrow derived from one, or the result of a `state version` call on the state object whose read the borrow derives from.
+A composable body MUST take, after its change words, one `Int` version argument per parameter that is a shared borrow, or a nullable of one, of any type, borrowed state objects included, in parameter order, so that substituting a type argument never changes a calling convention, and every composable call MUST pass one per such parameter: `0` for none, `1` for a permanent source, a version argument or capture for a borrow derived from one, or the result of a `state version` call on the state object whose read the borrow derives from.
 
 #### Scenario: Versions passed to a row
 - **WHEN** `prism dump-mir --composed` runs on a file declaring `compose fun Show(s: &String) {}` and `compose fun Screen(items: &State<List<String>>) { for (s in items.value) { Show(s) } }`

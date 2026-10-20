@@ -75,11 +75,14 @@ pub(crate) fn restart_body(
             locals.alloc(local(ty.clone(), LocalKind::Temporary, name, span))
         })
         .collect();
-    // A kept identity's version, read beside its reference (D7 of `strong-skipping`).
+    // A kept identity's version, read beside its reference (D7 of `strong-skipping`). A
+    // borrowed state object takes a version word it does not use, passed as `0` (D21).
     let versions: Vec<Option<LocalId>> = versioned
         .iter()
-        .map(|versioned| {
-            versioned.then(|| locals.alloc(local(Type::Int, LocalKind::Temporary, None, span)))
+        .zip(&parameter_types)
+        .map(|(versioned, ty)| {
+            (*versioned && !crate::stability::is_borrowed_state(ty, types))
+                .then(|| locals.alloc(local(Type::Int, LocalKind::Temporary, None, span)))
         })
         .collect();
     let viewed: Vec<Option<LocalId>> = parameter_types
@@ -182,8 +185,18 @@ pub(crate) fn restart_body(
             .into_iter()
             .map(|word| Operand::Constant(Constant::Int(word))),
     );
-    arguments.extend(versions.iter().flatten().map(|version| copy(*version)));
-    let added = 1 + words + versions.iter().flatten().count();
+    let version_words = versioned.iter().filter(|versioned| **versioned).count();
+    arguments.extend(
+        versioned
+            .iter()
+            .zip(&versions)
+            .filter(|(versioned, _)| **versioned)
+            .map(|(_, version)| match version {
+                Some(version) => copy(*version),
+                None => Operand::Constant(Constant::Int(0)),
+            }),
+    );
+    let added = 1 + words + version_words;
     let mut parameters = original
         .arguments()
         .map(|local| original.locals[local].ty.clone())
