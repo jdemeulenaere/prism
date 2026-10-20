@@ -20,6 +20,11 @@
 //!   of every instance unit;
 //! - `clif`: Cranelift's compilation of every function and glue function.
 //!
+//! Each shape is measured in a child process of its own (the test binary, run for that shape
+//! alone), so that no shape is slowed by the heap an earlier one left. Each program is
+//! compiled at least five times (fifteen for a shape whose growth is asserted on average), and
+//! a small one more often within a time budget, keeping each stage's fastest time.
+//!
 //! It is ignored by default, since timings of a debug build or a busy machine vary. Run it with
 //!
 //! ```text
@@ -1356,16 +1361,37 @@ fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 10] {
     times
 }
 
-/// The fastest time of each stage over five runs, or of one run when it takes over a second.
-fn best_of(program: &Generated, compiled: bool) -> [Option<Duration>; 10] {
+/// The fewest runs [`best_of`] takes of a program faster than a second.
+const MIN_RUNS: usize = 5;
+/// The fewest runs of a program of a shape whose growth is asserted on average
+/// ([`LINEAR_BORROW`], [`LINEAR_BORROW_HEAVY`], [`LINEAR_DEPTH`]). Single runs of the largest
+/// `when-patterns` borrow check spread from 41.7 to 47.9 ms within one process, and the fastest
+/// of five from 41.6 to 46.4 ms between full runs, which moved its growth between x4.58 and
+/// x4.77 per x4 against a bound of x4.6; the fastest of fifteen gave x4.46 to x4.53 over five
+/// full runs, every asserted shape varying by 0.1 at most.
+const ASSERTED_RUNS: usize = 15;
+/// The most runs [`best_of`] takes of a small program.
+const MAX_RUNS: usize = 25;
+/// How long [`best_of`] keeps running a program once it has run it the fewest times.
+const RUN_BUDGET: Duration = Duration::from_millis(1500);
+
+/// The fastest time of each stage over at least `min_runs` runs, more while they take less
+/// than [`RUN_BUDGET`] in all (at most [`MAX_RUNS`]), or of one run when it takes over a
+/// second. The smallest size of a shape is the denominator of every growth factor and takes a
+/// few milliseconds, so a single interrupted or frequency-scaled run of it would skew the
+/// growth most: it gets the most runs, for little time.
+fn best_of(program: &Generated, compiled: bool, min_runs: usize) -> [Option<Duration>; 10] {
+    let start = Instant::now();
     let mut best = compile(program, compiled);
     let total: Duration = best.iter().flatten().sum();
     if total < Duration::from_secs(1) {
-        for _ in 0..4 {
+        let mut runs = 1;
+        while runs < min_runs || (runs < MAX_RUNS && start.elapsed() < RUN_BUDGET) {
             let times = compile(program, compiled);
             for (best, time) in best.iter_mut().zip(times) {
                 *best = best.zip(time).map(|(a, b)| a.min(b));
             }
+            runs += 1;
         }
     }
     best
@@ -1397,97 +1423,7 @@ fn run_benchmark() {
                 continue;
             }
         }
-        let mut previous: Option<(usize, [Option<Duration>; 10])> = None;
-        // The size and `borrow` time of each program.
-        let mut borrow_times: Vec<(usize, Duration)> = Vec::new();
-        // The size and stage times of each program.
-        let mut all_times: Vec<(usize, [Option<Duration>; 10])> = Vec::new();
-        for &size in shape.sizes {
-            let program = Generated {
-                size,
-                source: (shape.generate)(size),
-            };
-            let times = best_of(&program, shape.compiled);
-            let mut line = format!("  {:<28}", format!("{}-{}", shape.name, size));
-            for time in times {
-                match time {
-                    Some(time) => write!(line, " {:>9.1}", milliseconds(time)).unwrap(),
-                    None => write!(line, " {:>9}", "-").unwrap(),
-                }
-            }
-            if let Some((previous_size, previous_times)) = previous {
-                let size_factor = program.size as f64 / previous_size as f64;
-                // The growth of the stage that grew the most, among those taking at least 5 ms.
-                let worst = STAGES
-                    .iter()
-                    .zip(times.iter().zip(previous_times))
-                    .filter_map(|(stage, (time, previous))| {
-                        let (time, previous) = (time.as_ref()?, previous?);
-                        (milliseconds(*time) >= 5.0)
-                            .then(|| (stage, time.as_secs_f64() / previous.as_secs_f64()))
-                    })
-                    .max_by(|a, b| a.1.total_cmp(&b.1));
-                if let Some((stage, factor)) = worst {
-                    write!(line, "   {} x{:.1} for x{:.1}", stage, factor, size_factor).unwrap();
-                    if factor > 2.0 * size_factor {
-                        too_fast_growth.push(format!("{}-{} ({})", shape.name, size, stage));
-                    }
-                }
-            }
-            println!("{}", line);
-            borrow_times.extend(times[5].map(|time| (program.size, time)));
-            all_times.push((program.size, times));
-            let total: Duration = times.iter().flatten().sum();
-            previous = Some((program.size, times));
-            if total > Duration::from_secs(20) {
-                println!("  {:<28} larger sizes skipped", shape.name);
-                break;
-            }
-        }
-        let bound = if LINEAR_BORROW.contains(&shape.name) {
-            Some(BORROW_GROWTH)
-        } else if LINEAR_BORROW_HEAVY.contains(&shape.name) {
-            Some(HEAVY_BORROW_GROWTH)
-        } else {
-            None
-        };
-        if let (Some(bound), [(first_size, first), .., (last_size, last)]) =
-            (bound, &borrow_times[..])
-        {
-            // The average growth per x4 of the size: the geometric mean of each step's.
-            let steps = (*last_size as f64 / *first_size as f64).log(4.0);
-            let growth = (last.as_secs_f64() / first.as_secs_f64()).powf(1.0 / steps);
-            println!(
-                "  {:<28} borrow x{:.2} per x4 on average",
-                shape.name, growth
-            );
-            if growth > bound && milliseconds(*last) >= 5.0 {
-                too_fast_growth.push(format!("{} (borrow x{:.2} per x4)", shape.name, growth));
-            }
-        }
-        if let (true, [(first_size, first), .., (last_size, last)]) =
-            (LINEAR_DEPTH.contains(&shape.name), &all_times[..])
-        {
-            // The average growth per doubling of the depth of each stage: the geometric mean
-            // of each step's.
-            let steps = (*last_size as f64 / *first_size as f64).log2();
-            for (stage, (first, last)) in STAGES.iter().zip(first.iter().zip(last)) {
-                let (Some(first), Some(last)) = (first, last) else {
-                    continue;
-                };
-                let growth = (last.as_secs_f64() / first.as_secs_f64()).powf(1.0 / steps);
-                if milliseconds(*last) >= 5.0 {
-                    println!(
-                        "  {:<28} {} x{:.2} per x2 on average",
-                        shape.name, stage, growth
-                    );
-                    if growth > DEPTH_GROWTH {
-                        too_fast_growth
-                            .push(format!("{} ({} x{:.2} per x2)", shape.name, stage, growth));
-                    }
-                }
-            }
-        }
+        too_fast_growth.extend(measure_in_child(shape.name));
     }
     if std::env::var_os("PRISM_ASSERT_TIMING").is_some_and(|value| value == "1") {
         assert!(
@@ -1498,13 +1434,170 @@ fn run_benchmark() {
     }
 }
 
+/// The environment variable naming the one shape a child process of [`run_benchmark`]
+/// measures.
+const CHILD_SHAPE: &str = "PRISM_TIMING_CHILD_SHAPE";
+/// The prefix of a child's lines that report a growth too fast.
+const TOO_FAST: &str = "too fast: ";
+
+/// Measures the shape `name` in a child process running this benchmark for it alone,
+/// forwarding its table lines, and returns the growths it found too fast. Each shape starts
+/// from a fresh process, so its times depend neither on the heap the shapes measured before it
+/// left nor on which shapes a `PRISM_TIMING_SHAPES` filter keeps.
+fn measure_in_child(name: &str) -> Vec<String> {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "every_stage_compiles_in_linear_time",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD_SHAPE, name)
+        .env_remove("PRISM_ASSERT_TIMING")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut too_fast = Vec::new();
+    for line in stdout.lines() {
+        if let Some(growth) = line.strip_prefix(TOO_FAST) {
+            too_fast.push(growth.to_string());
+        } else if line.starts_with("  ") {
+            println!("{}", line);
+        }
+    }
+    assert!(
+        output.status.success(),
+        "measuring {} failed:\n{}{}",
+        name,
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    too_fast
+}
+
+/// Measures `shape` in this process, printing its table lines, and returns the growths it
+/// finds too fast.
+fn measure_shape(shape: &Shape) -> Vec<String> {
+    let mut too_fast_growth = Vec::new();
+    let mut previous: Option<(usize, [Option<Duration>; 10])> = None;
+    // The size and `borrow` time of each program.
+    let mut borrow_times: Vec<(usize, Duration)> = Vec::new();
+    // The size and stage times of each program.
+    let mut all_times: Vec<(usize, [Option<Duration>; 10])> = Vec::new();
+    for &size in shape.sizes {
+        let program = Generated {
+            size,
+            source: (shape.generate)(size),
+        };
+        let asserted = LINEAR_BORROW.contains(&shape.name)
+            || LINEAR_BORROW_HEAVY.contains(&shape.name)
+            || LINEAR_DEPTH.contains(&shape.name);
+        let min_runs = if asserted { ASSERTED_RUNS } else { MIN_RUNS };
+        let times = best_of(&program, shape.compiled, min_runs);
+        let mut line = format!("  {:<28}", format!("{}-{}", shape.name, size));
+        for time in times {
+            match time {
+                Some(time) => write!(line, " {:>9.1}", milliseconds(time)).unwrap(),
+                None => write!(line, " {:>9}", "-").unwrap(),
+            }
+        }
+        if let Some((previous_size, previous_times)) = previous {
+            let size_factor = program.size as f64 / previous_size as f64;
+            // The growth of the stage that grew the most, among those taking at least 5 ms.
+            let worst = STAGES
+                .iter()
+                .zip(times.iter().zip(previous_times))
+                .filter_map(|(stage, (time, previous))| {
+                    let (time, previous) = (time.as_ref()?, previous?);
+                    (milliseconds(*time) >= 5.0)
+                        .then(|| (stage, time.as_secs_f64() / previous.as_secs_f64()))
+                })
+                .max_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((stage, factor)) = worst {
+                write!(line, "   {} x{:.1} for x{:.1}", stage, factor, size_factor).unwrap();
+                if factor > 2.0 * size_factor {
+                    too_fast_growth.push(format!("{}-{} ({})", shape.name, size, stage));
+                }
+            }
+        }
+        println!("{}", line);
+        borrow_times.extend(times[5].map(|time| (program.size, time)));
+        all_times.push((program.size, times));
+        let total: Duration = times.iter().flatten().sum();
+        previous = Some((program.size, times));
+        if total > Duration::from_secs(20) {
+            println!("  {:<28} larger sizes skipped", shape.name);
+            break;
+        }
+    }
+    let bound = if LINEAR_BORROW.contains(&shape.name) {
+        Some(BORROW_GROWTH)
+    } else if LINEAR_BORROW_HEAVY.contains(&shape.name) {
+        Some(HEAVY_BORROW_GROWTH)
+    } else {
+        None
+    };
+    if let (Some(bound), [(first_size, first), .., (last_size, last)]) = (bound, &borrow_times[..])
+    {
+        // The average growth per x4 of the size: the geometric mean of each step's.
+        let steps = (*last_size as f64 / *first_size as f64).log(4.0);
+        let growth = (last.as_secs_f64() / first.as_secs_f64()).powf(1.0 / steps);
+        println!(
+            "  {:<28} borrow x{:.2} per x4 on average",
+            shape.name, growth
+        );
+        if growth > bound && milliseconds(*last) >= 5.0 {
+            too_fast_growth.push(format!("{} (borrow x{:.2} per x4)", shape.name, growth));
+        }
+    }
+    if let (true, [(first_size, first), .., (last_size, last)]) =
+        (LINEAR_DEPTH.contains(&shape.name), &all_times[..])
+    {
+        // The average growth per doubling of the depth of each stage: the geometric mean
+        // of each step's.
+        let steps = (*last_size as f64 / *first_size as f64).log2();
+        for (stage, (first, last)) in STAGES.iter().zip(first.iter().zip(last)) {
+            let (Some(first), Some(last)) = (first, last) else {
+                continue;
+            };
+            let growth = (last.as_secs_f64() / first.as_secs_f64()).powf(1.0 / steps);
+            if milliseconds(*last) >= 5.0 {
+                println!(
+                    "  {:<28} {} x{:.2} per x2 on average",
+                    shape.name, stage, growth
+                );
+                if growth > DEPTH_GROWTH {
+                    too_fast_growth
+                        .push(format!("{} ({} x{:.2} per x2)", shape.name, stage, growth));
+                }
+            }
+        }
+    }
+    too_fast_growth
+}
+
 #[test]
 #[ignore = "a benchmark: run it with --ignored --nocapture"]
 fn every_stage_compiles_in_linear_time() {
+    let run = || match std::env::var(CHILD_SHAPE) {
+        Ok(name) => {
+            let shape = shapes()
+                .into_iter()
+                .find(|shape| shape.name == name)
+                .unwrap_or_else(|| panic!("no shape {}", name));
+            // Ends the line libtest's `test ... ` starts, so that every table line is whole.
+            println!();
+            for growth in measure_shape(&shape) {
+                println!("{}{}", TOO_FAST, growth);
+            }
+        }
+        Err(_) => run_benchmark(),
+    };
     // The stack of `prism`'s main thread, which the recursive passes run on.
     std::thread::Builder::new()
         .stack_size(8 << 20)
-        .spawn(run_benchmark)
+        .spawn(run)
         .unwrap()
         .join()
         .unwrap();
