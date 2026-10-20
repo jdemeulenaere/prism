@@ -57,10 +57,15 @@ fn repository() -> PathBuf {
 
 // --- The child: an app in a window, and the driver
 
+/// How long the driver waits for a window to open, draw or settle. A first launch of a freshly
+/// built test binary can take several seconds before its window opens (the system checks the
+/// new executable), so this is far above a normal start of a fraction of a second.
+const WAIT: Duration = Duration::from_secs(60);
+
 fn wait_until(what: &str, condition: impl Fn() -> bool) {
     let start = Instant::now();
     while !condition() {
-        if start.elapsed() > Duration::from_secs(20) {
+        if start.elapsed() > WAIT {
             fail(&format!("timed out waiting until {}", what));
         }
         std::thread::sleep(Duration::from_millis(5));
@@ -68,7 +73,7 @@ fn wait_until(what: &str, condition: impl Fn() -> bool) {
 }
 
 fn fail(message: &str) -> ! {
-    eprintln!("app window driver: {}", message);
+    eprintln!("app window driver failed: {}", message);
     std::process::exit(2);
 }
 
@@ -124,7 +129,7 @@ impl Driver {
             if counts() == before {
                 return;
             }
-            if start.elapsed() > Duration::from_secs(20) {
+            if start.elapsed() > WAIT {
                 fail("the window keeps drawing");
             }
         }
@@ -480,7 +485,7 @@ fn run(name: &str) -> Outcome {
         }
     });
     let watching = name.starts_with("watch-");
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = Instant::now() + Duration::from_secs(180);
     let mut stderr = Vec::new();
     let mut idle_start = None;
     let mut idle_cpu = None;
@@ -578,12 +583,32 @@ fn parent() -> Result<(), String> {
         }
         let watching = name.starts_with("watch-");
         if !watching {
+            // The detail of a failed run: the driver's and the runtime's last words.
+            let detail: Vec<&str> = outcome
+                .stderr
+                .iter()
+                .rev()
+                .take(12)
+                .rev()
+                .map(String::as_str)
+                .collect();
             check(
                 &mut failures,
                 name,
                 outcome.status == Some(0),
-                format!("exit status {:?}", outcome.status),
+                format!(
+                    "exit status {:?}, stderr ending with:\n    {}",
+                    outcome.status,
+                    detail.join("\n    ")
+                ),
             );
+        }
+        if let Some(line) = outcome
+            .stderr
+            .iter()
+            .find(|line| line.starts_with("app window driver failed: "))
+        {
+            check(&mut failures, name, false, line.clone());
         }
         check(
             &mut failures,
