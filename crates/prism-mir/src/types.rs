@@ -188,6 +188,7 @@ mod tests {
         Body {
             owner: BodyOwner::Function(DeclarationPath::new("main", "f")),
             is_compose: false,
+            explicit_groups: false,
             type_parameters: Vec::new(),
             type_arguments: Vec::new(),
             locals,

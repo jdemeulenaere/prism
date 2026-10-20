@@ -1,0 +1,6 @@
+package prism.compose
+
+@ExplicitGroupsComposable
+public compose fun L(kind: Int, update: (Int) -> Unit): Unit {
+    update(kind)
+}

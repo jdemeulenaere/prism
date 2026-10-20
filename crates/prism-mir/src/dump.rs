@@ -87,6 +87,11 @@ impl MirFile {
         // `compose-transform`).
         let compose = match (body.is_compose, self.phase) {
             (false, _) => String::new(),
+            // A composable with explicit groups (D5 of `compose-library-in-prism`).
+            (true, MirPhase::Composed) if body.explicit_groups => {
+                "compose composed explicit_groups ".to_string()
+            }
+            (true, _) if body.explicit_groups => "compose explicit_groups ".to_string(),
             (true, MirPhase::Composed) if self.is_skippable(id) => {
                 "compose composed skippable ".to_string()
             }
@@ -640,6 +645,7 @@ pub(crate) mod tests {
         let body = Body {
             owner: BodyOwner::Function(DeclarationPath::new("main", "f")),
             is_compose: false,
+            explicit_groups: false,
             type_parameters: Vec::new(),
             type_arguments: Vec::new(),
             locals,

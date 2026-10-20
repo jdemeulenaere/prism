@@ -1006,6 +1006,32 @@ impl TypeChecker {
         }
     }
 
+    /// Reports `E4029` for each composable call of the body being built that runs in a group
+    /// of its own, and for each `remember` and `key`, in a composable annotated
+    /// `@ExplicitGroupsComposable` (D5 of `compose-library-in-prism`): with no group of its
+    /// own, a varying group structure in it would shift its caller's later groups. One walk of
+    /// the body, outside closures.
+    fn check_explicit_groups_body(&mut self) {
+        let body = self.builder.body();
+        let Some(value) = body.value else {
+            return;
+        };
+        let mut found = Vec::new();
+        explicit_groups_violations(body, value, false, &mut found);
+        for (span, what) in found {
+            self.errors.push(TypeError::InvalidLibraryDeclaration {
+                message: format!(
+                    "a composable with explicit groups composes only outside branches and loops, and remembers nothing: {}",
+                    what
+                ),
+                help: Some(
+                    "'@ExplicitGroupsComposable' runs the body in its caller's group, so the groups it starts must be the same on every pass; start further groups through the composer protocol".to_string(),
+                ),
+                span,
+            });
+        }
+    }
+
     /// Reports `E4030` for a direct call of `path`, a function annotated `@DrivesComposition`,
     /// in a composable context (D6 of `compose-library-in-prism`).
     fn reject_driving_call(&mut self, path: &DeclarationPath, span: Span) {
@@ -4085,6 +4111,10 @@ impl TypeChecker {
         self.env.exit_scope();
         self.in_function = prev_in_func;
         self.context_candidates = outer_candidates;
+        let explicit_groups = f.is_compose && f.has_explicit_groups();
+        if explicit_groups {
+            self.check_explicit_groups_body();
+        }
         let receiver = f
             .receiver
             .as_ref()
@@ -4096,6 +4126,7 @@ impl TypeChecker {
                 path,
                 visibility: f.visibility,
                 is_compose: f.is_compose,
+                explicit_groups,
                 type_parameters,
                 receiver,
                 context: f
@@ -12138,6 +12169,100 @@ pub(crate) fn is_built_in_type(ty: &Type) -> bool {
         | Type::Heap(_) => true,
         Type::Struct { id, .. } => *id == NominalId::builtin_range(),
         _ => false,
+    }
+}
+
+/// The calls of `id` of `body`, outside closures, that a composable with explicit groups may
+/// not make (D5 of `compose-library-in-prism`): a `remember` or `key` anywhere, and a
+/// composable call where `grouped`, inside a branch, a loop, the right operand of `&&` or `||`,
+/// the fallback of `?:`, a safe call or a `when`'s tests and branches. Each is recorded with
+/// its span and what it is.
+fn explicit_groups_violations(
+    body: &prism_typed_tree::Body,
+    id: ExpressionId,
+    grouped: bool,
+    found: &mut Vec<(Span, String)>,
+) {
+    let expression = &body.expressions[id];
+    let visit = |child: ExpressionId, grouped: bool, found: &mut Vec<(Span, String)>| {
+        explicit_groups_violations(body, child, grouped, found)
+    };
+    match &expression.kind {
+        // A closure's calls run in its own body.
+        ExpressionKind::Closure { .. } => {}
+        ExpressionKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            visit(*condition, grouped, found);
+            visit(*then_branch, true, found);
+            if let Some(branch) = else_branch {
+                visit(*branch, true, found);
+            }
+        }
+        ExpressionKind::When {
+            subject, branches, ..
+        } => {
+            if let Some(subject) = subject {
+                visit(*subject, grouped, found);
+            }
+            for branch in branches {
+                let mut tests = Vec::new();
+                for pattern in &branch.patterns {
+                    pattern.expressions(&mut tests);
+                }
+                tests.extend(branch.guard);
+                tests.push(branch.body);
+                for test in tests {
+                    visit(test, true, found);
+                }
+            }
+        }
+        ExpressionKind::Logical { left, right, .. } => {
+            visit(*left, grouped, found);
+            visit(*right, true, found);
+        }
+        ExpressionKind::Elvis { nullable, fallback } => {
+            visit(*nullable, grouped, found);
+            visit(*fallback, true, found);
+        }
+        ExpressionKind::SafeNavigation { chain, .. } => visit(*chain, true, found),
+        kind => {
+            if let ExpressionKind::Call(call) = kind {
+                match &call.callee {
+                    Callee::Builtin(BuiltinFunction::Remember) => {
+                        found.push((expression.span, "'remember'".to_string()))
+                    }
+                    Callee::Builtin(BuiltinFunction::Key) => {
+                        found.push((expression.span, "'key'".to_string()))
+                    }
+                    Callee::Builtin(BuiltinFunction::CurrentComposer) => {}
+                    _ if call.is_compose && grouped => found.push((
+                        expression.span,
+                        "a composable call in a branch or loop".to_string(),
+                    )),
+                    _ => {}
+                }
+            }
+            let mut statements = Vec::new();
+            for child in kind.children(&mut statements) {
+                visit(child, grouped, found);
+            }
+            for statement in statements {
+                let statement = &body.statements[statement];
+                let in_loop = grouped
+                    || matches!(
+                        statement.kind,
+                        prism_typed_tree::StatementKind::While { .. }
+                            | prism_typed_tree::StatementKind::DoWhile { .. }
+                            | prism_typed_tree::StatementKind::For { .. }
+                    );
+                for child in statement.kind.children() {
+                    visit(child, in_loop, found);
+                }
+            }
+        }
     }
 }
 

@@ -119,6 +119,7 @@ fn lower_function(
         let owner = BodyOwner::Function(function.path.clone());
         let mut builder = Builder::new(file, types, bodies, tree, id, owner, function.span);
         builder.is_compose = function.is_compose;
+        builder.explicit_groups = function.explicit_groups;
         builder.start_regions(None);
         builder.type_parameters = function.type_parameters.clone();
         builder.set_return_type(function.return_type.clone(), function.span);
@@ -289,6 +290,8 @@ pub(crate) struct Builder<'a> {
     id: BodyId,
     owner: BodyOwner,
     is_compose: bool,
+    /// Whether the body is a composable with explicit groups (D5 of `compose-library-in-prism`).
+    explicit_groups: bool,
     span: Span,
     locals: Arena<LocalId, LocalDeclaration>,
     argument_count: usize,
@@ -362,6 +365,7 @@ impl<'a> Builder<'a> {
             id,
             owner,
             is_compose: false,
+            explicit_groups: false,
             span,
             locals: Arena::new(),
             argument_count: 0,
@@ -508,6 +512,7 @@ impl<'a> Builder<'a> {
         let mut body = Body {
             owner: self.owner,
             is_compose: self.is_compose,
+            explicit_groups: self.explicit_groups,
             type_parameters: self.type_parameters,
             type_arguments: Vec::new(),
             locals: self.locals,

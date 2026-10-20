@@ -66,12 +66,12 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 4. Composables with explicit groups (D5)
 
-- [ ] 4.1 Type checker:
+- [x] 4.1 Type checker:
   - a body annotated `@ExplicitGroupsComposable` gets `E4029` for a composable call, outside closures, in a branch, loop, `&&`/`||` right operand, `?:` fallback, safe call or `when` with composable tests, and for `remember` and `key`;
   - the annotation is recorded on the MIR body.
 
   Add the fixture for "Grouped code in a body with explicit groups rejected".
-- [ ] 4.2 Transform: such a body gets no body group, no keep, no skipping and no restart closure. Its calls pass its composer and its change words. Add the fixture for "A node function's body" (`mir/`). Verify with `cargo test -p prism-compose-transform -p prism-cli --test fixture_tests`.
+- [x] 4.2 Transform: such a body gets no body group, no keep, no skipping and no restart closure. Its calls pass its composer and its change words. Add the fixture for "A node function's body" (`mir/`). Verify with `cargo test -p prism-compose-transform -p prism-cli --test fixture_tests`.
 
 ## 5. The runtime module in Prism (D6, D7, D13)
 

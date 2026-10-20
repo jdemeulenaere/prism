@@ -609,6 +609,7 @@ const COMPOSED_SCENARIOS: &[&str] = &[
     "composed-remember-of-a-state",
     "a-toolkit-composable-starts-a-node-group",
     "the-composer-read-in-a-composable",
+    "a-node-function-s-body",
 ];
 
 /// The scenarios of the `code-generation` spec whose cases must hold a `layout.snap`: those of

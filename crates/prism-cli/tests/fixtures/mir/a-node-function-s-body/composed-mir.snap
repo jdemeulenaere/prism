@@ -1,0 +1,22 @@
+module prism/compose/test
+phase composed
+compose composed explicit_groups fun prism/compose/test::L(_1: Int, _2: (Int) -> Unit, _3: Int, _4: Int): Unit @3:1
+  local _0: Unit (return)
+  local _1 kind: Int (argument)
+  local _2 update: (Int) -> Unit (argument)
+  local _3 $composer: Int (argument)
+  local _4 $changed: Int (argument)
+  local _5: Int (temporary)
+  local _6: Unit (temporary)
+  bb0:
+    storage_live _5 @5:12
+    _5 = copy _1 @5:12
+    storage_live _6 @5:5
+    _6 = call _2(move _5) -> bb1 @5:5
+  bb1:
+    storage_dead _6 @5:5
+    storage_dead _5 @5:5
+    _0 = const () @4:62
+    drop _2 -> bb2 @3:1
+  bb2:
+    return @3:1

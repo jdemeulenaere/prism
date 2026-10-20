@@ -1,0 +1,17 @@
+package prism
+
+import compose/runtime
+
+public compose fun Leaf(): Unit {}
+
+@ExplicitGroupsComposable
+public compose fun A(on: Bool): Unit {
+    if (on) {
+        Leaf()
+    }
+}
+
+@ExplicitGroupsComposable
+public compose fun B(): Unit {
+    val n = remember { 1 }
+}

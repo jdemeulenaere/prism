@@ -243,6 +243,7 @@ pub(crate) fn restart_body(
     let mut body = Body {
         owner: BodyOwner::Restart { function },
         is_compose: false,
+        explicit_groups: false,
         type_parameters: original.type_parameters.clone(),
         type_arguments: Vec::new(),
         locals,
@@ -306,6 +307,7 @@ pub(crate) fn root_content_body(
     Body {
         owner: BodyOwner::RootContent { parent },
         is_compose: false,
+        explicit_groups: false,
         type_parameters: parent_body.type_parameters.clone(),
         type_arguments: Vec::new(),
         locals,

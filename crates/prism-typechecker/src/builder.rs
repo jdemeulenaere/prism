@@ -194,6 +194,10 @@ impl BodyBuilder {
             .unwrap_or_default()
     }
 
+    pub(crate) fn body(&self) -> &Body {
+        &self.body
+    }
+
     pub(crate) fn body_mut(&mut self) -> &mut Body {
         &mut self.body
     }

@@ -1957,6 +1957,7 @@ impl Codec for Body {
             groups,
             origin,
             body_key,
+            explicit_groups,
             // Recomputed from the blocks when decoding, so the encoding (and every hash of it)
             // is that of the blocks alone.
             requests_instances: _,
@@ -1976,6 +1977,7 @@ impl Codec for Body {
         groups.encode(encoder);
         origin.encode(encoder);
         body_key.encode(encoder);
+        explicit_groups.encode(encoder);
         span.encode(encoder);
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1994,6 +1996,7 @@ impl Codec for Body {
             groups: decoder.decode()?,
             origin: decoder.decode()?,
             body_key: decoder.decode()?,
+            explicit_groups: decoder.decode()?,
             requests_instances: false,
             span: decoder.decode()?,
         };

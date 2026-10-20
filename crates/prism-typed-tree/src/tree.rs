@@ -56,6 +56,9 @@ pub struct FunctionItem {
     pub path: DeclarationPath,
     pub visibility: Visibility,
     pub is_compose: bool,
+    /// Whether it is a composable annotated `@ExplicitGroupsComposable`, which starts no group
+    /// of its own (D5 of `compose-library-in-prism`).
+    pub explicit_groups: bool,
     /// The type parameters of a generic function, in order, with their bounds; the types of
     /// its signature and body mention them.
     pub type_parameters: Vec<TypeParameter>,

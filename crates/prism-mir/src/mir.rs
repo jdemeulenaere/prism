@@ -150,6 +150,10 @@ pub struct Body {
     pub owner: BodyOwner,
     /// Whether the body is a `compose fun` or a composable closure.
     pub is_compose: bool,
+    /// Whether the body is a composable annotated `@ExplicitGroupsComposable`, which the
+    /// compose transform gives no group of its own, no kept parameters, no skipping and no
+    /// restart function (D5 of `compose-library-in-prism`).
+    pub explicit_groups: bool,
     /// The type parameters the body's types may mention: its function's, also for the
     /// function's default generators and closures, and none for a top-level `val`. A generic
     /// body is lowered once, polymorphically (D9 of `generics`).

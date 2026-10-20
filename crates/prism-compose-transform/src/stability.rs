@@ -110,7 +110,8 @@ fn is_reference(ty: &Type) -> bool {
 /// Whether the composable function `body` is skippable: it returns `Unit` and every parameter,
 /// the context and the receiver included, can be kept. Closures never are (D14).
 pub fn is_skippable(body: &Body, types: &TypeTable) -> bool {
-    if !body.is_compose || !matches!(body.owner, BodyOwner::Function(_)) {
+    // A composable with explicit groups never skips (D5 of `compose-library-in-prism`).
+    if !body.is_compose || body.explicit_groups || !matches!(body.owner, BodyOwner::Function(_)) {
         return false;
     }
     if *body.return_type() != Type::Unit {

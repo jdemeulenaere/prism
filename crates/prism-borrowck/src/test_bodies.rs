@@ -46,6 +46,7 @@ pub(crate) fn body_with_edges(successors: &[&[u32]]) -> Body {
     Body {
         owner: BodyOwner::Function(DeclarationPath::new("main", "f")),
         is_compose: false,
+        explicit_groups: false,
         type_parameters: Vec::new(),
         type_arguments: Vec::new(),
         locals,

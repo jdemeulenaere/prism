@@ -908,6 +908,7 @@ pub(crate) mod tests {
                 path,
                 visibility: Visibility::Private,
                 is_compose: false,
+                explicit_groups: false,
                 type_parameters: Vec::new(),
                 receiver: None,
                 context: None,

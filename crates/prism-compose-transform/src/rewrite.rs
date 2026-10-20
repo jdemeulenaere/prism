@@ -1622,7 +1622,14 @@ impl<'a> Rewriter<'a> {
         self.current = BlockId(0);
         let end = self.end.expect("a composable body has an end");
         let ret = self.new_block();
-        if self.skippable {
+        if self.body.explicit_groups {
+            // No group of its own: the body runs in its caller's group, at the call's position
+            // (D5 of `compose-library-in-prism`).
+            self.compute_passed_bits();
+            self.goto(self.entry, self.span);
+            self.current = end;
+            self.goto(ret, self.span);
+        } else if self.skippable {
             let restarted = self.skippable_prologue(key.clone());
             self.skippable_end(end, ret, restarted);
         } else {
