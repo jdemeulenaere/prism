@@ -5,7 +5,7 @@ When a bare name (`E4001`) or a member or extension (`E4006`) is not found, and 
 
 #### Scenario: An unimported library function
 - **WHEN** a file without imports declares `fun main() { println(1) }`
-- **THEN** `prism check` reports `E4001` for `println` with the help line `` `println` is declared by the library module `/prism/core`: add `import /prism/core` ``
+- **THEN** `prism check` reports `E4001` for `println` with the help line `'println' is declared by the library module '/prism/core': add 'import /prism/core'`
 
 #### Scenario: An unimported library extension
 - **WHEN** a file without imports declares `fun f(xs: &List<Int>): Int = xs.sumOf { x -> x }` and `fun g(n: Int): Int = n.sumOf { x -> x }`

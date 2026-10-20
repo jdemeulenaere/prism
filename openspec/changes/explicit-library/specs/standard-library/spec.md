@@ -143,7 +143,7 @@ Every library module MUST pass `prism check` with no diagnostic and `prism fmt -
 
 #### Scenario: Signatures of the compose module
 - **WHEN** `prism abi` prints the ABI of `/prism/compose/runtime`
-- **THEN** it holds `public intrinsic fun composition(content: escaping compose () -> Unit): Composition`, `public intrinsic fun Composition.setContent(content: escaping compose () -> Unit)`, `public intrinsic fun Composition.recompose(): Bool`, `public intrinsic fun Composition.dump(): String`, `public intrinsic compose fun <T : Copy> remember(calculation: () -> T): T`, `public intrinsic compose fun key(value: Int, content: compose () -> Unit)`, `public intrinsic compose fun currentRecomposeScope(): RecomposeScope` and `public intrinsic fun RecomposeScope.invalidate()`
+- **THEN** it holds `public intrinsic fun composition(content: attached compose () -> Unit): Composition`, `public intrinsic fun Composition.setContent(content: attached compose () -> Unit)`, `public intrinsic fun Composition.recompose(): Bool`, `public intrinsic fun Composition.dump(): String`, `public intrinsic compose fun <T> remember(calculation: () -> T): T`, `public intrinsic compose fun key(value: Int, content: compose () -> Unit)`, `public intrinsic compose fun currentRecomposeScope(): RecomposeScope` and `public intrinsic fun RecomposeScope.invalidate()`
 
 #### Scenario: Members of a composition
 - **WHEN** a file declares `import /prism/compose/runtime` and `fun Composition.recompose(): Bool = false`
