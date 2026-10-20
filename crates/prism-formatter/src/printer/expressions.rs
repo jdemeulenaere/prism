@@ -561,11 +561,17 @@ impl<'a> Printer<'a> {
     }
 
     fn argument(&mut self, argument: &CallArg) -> Document {
+        // A spread's `*` sits directly before its expression, after `name = ` when named (D15
+        // of `vararg`).
+        let spread = if argument.is_spread { "*" } else { "" };
         match &argument.name {
             Some(name) => concat(vec![
-                text(format!("{} = ", name)),
+                text(format!("{} = {}", name, spread)),
                 self.expression(&argument.value),
             ]),
+            None if argument.is_spread => {
+                concat(vec![text(spread), self.expression(&argument.value)])
+            }
             None => self.expression(&argument.value),
         }
     }

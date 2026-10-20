@@ -852,6 +852,12 @@ impl Parser {
                 start.merge(self.peek().span),
             ));
         }
+        if self.at_vararg_modifier() {
+            return Err(Self::vararg_misplaced(
+                "a context parameter",
+                self.peek().span,
+            ));
+        }
         let name_token = self.peek().clone();
         let TokenKind::Ident(name) = name_token.kind else {
             return Err(ParseError::new(
@@ -1092,15 +1098,68 @@ impl Parser {
         Some((arguments, end))
     }
 
+    /// Whether the current token is `vararg` used as a modifier: followed by a parameter's name
+    /// (D1 of `vararg`). Anywhere else `vararg` is a name.
+    fn at_vararg_modifier(&self) -> bool {
+        matches!(self.peek_kind(), TokenKind::Ident(word) if word == "vararg")
+            && matches!(self.peek_ahead(1), TokenKind::Ident(_) | TokenKind::Compose)
+    }
+
+    /// The error for `vararg` where only a `fun` declaration's parameter may carry it.
+    fn vararg_misplaced(place: &str, span: Span) -> ParseError {
+        ParseError::new(
+            format!(
+                "'vararg' marks a parameter of a 'fun' declaration, not {}; take a 'List<T>' instead",
+                place
+            ),
+            span,
+        )
+    }
+
     /// Function parameters up to (not including) the closing `)`.
     fn parse_params(&mut self) -> Result<Vec<Param>, ParseError> {
-        let mut params = Vec::new();
+        let mut params: Vec<Param> = Vec::new();
         while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
-            let (param_name, p_span) = self.expect_ident()?;
+            // `vararg` before a parameter's name is the modifier (D1 of `vararg`); followed by
+            // `:` it is the parameter's own name.
+            let vararg_span = if self.at_vararg_modifier() {
+                Some(self.bump().span)
+            } else {
+                None
+            };
+            let (param_name, name_span) = self.expect_ident()?;
+            let p_span = vararg_span.unwrap_or(name_span);
+            if let Some(span) = vararg_span {
+                if params.iter().any(|param| param.is_vararg) {
+                    return Err(ParseError::new(
+                        "A function has at most one vararg parameter; pass the other values as a list",
+                        span,
+                    ));
+                }
+            }
             self.expect(TokenKind::Colon)?;
+            if let (Some(_), Some(kind)) = (vararg_span, self.parameter_modifier_before_type()) {
+                let word = match kind {
+                    ParameterKind::Attached => "attached",
+                    _ => "escaping",
+                };
+                return Err(ParseError::new(
+                    format!(
+                        "A vararg parameter cannot be '{}': it is a list the callee owns, whose function-typed elements are stored values",
+                        word
+                    ),
+                    self.peek().span,
+                ));
+            }
             let (kind, ty) = self.parse_parameter_type()?;
             let mut default_value = None;
             if self.peek_kind() == &TokenKind::Eq {
+                if vararg_span.is_some() {
+                    return Err(ParseError::new(
+                        "A vararg parameter has no default value: a call with no element passes the empty list",
+                        self.peek().span,
+                    ));
+                }
                 self.bump();
                 default_value = Some(self.parse_expr(Precedence::Lowest)?);
             }
@@ -1110,6 +1169,7 @@ impl Parser {
                 ty,
                 kind,
                 default_value,
+                is_vararg: vararg_span.is_some(),
                 span: p_span.merge(end_p_span),
             });
 
@@ -1150,6 +1210,9 @@ impl Parser {
                     }
                     _ => false,
                 };
+                if self.at_vararg_modifier() {
+                    return Err(Self::vararg_misplaced("a struct's field", self.peek().span));
+                }
                 let (fname, _) = self.expect_ident()?;
                 self.expect(TokenKind::Colon)?;
                 let fty = self.parse_type()?;
@@ -1640,6 +1703,12 @@ impl Parser {
         let mut parameter_kinds = Vec::new();
         let mut first_modifier = None;
         while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
+            if self.at_vararg_modifier() {
+                return Err(Self::vararg_misplaced(
+                    "a function type's parameter",
+                    self.peek().span,
+                ));
+            }
             if first_modifier.is_none() {
                 if let Some(kind) = self.parameter_modifier_before_type() {
                     first_modifier = Some((kind, self.peek().span));
@@ -2228,6 +2297,12 @@ impl Parser {
 
         if has_header {
             while self.peek_kind() != &TokenKind::Arrow && !self.is_eof() {
+                if self.at_vararg_modifier() {
+                    return Err(Self::vararg_misplaced(
+                        "a closure's parameter",
+                        self.peek().span,
+                    ));
+                }
                 let (name, span) = self.expect_ident()?;
                 params.push(ClosureParameter { name, span });
                 if self.peek_kind() == &TokenKind::Comma {
@@ -2317,6 +2392,7 @@ impl Parser {
                 span: lambda.span,
                 value: lambda,
                 is_trailing_lambda: true,
+                is_spread: false,
             });
         }
 
@@ -2345,6 +2421,15 @@ impl Parser {
                 name = Some(n);
                 arg_start = n_span;
             }
+            // A spread `*xs` passes a whole list to a vararg parameter (D5 of `vararg`); which
+            // spreads a call accepts is the type checker's rule.
+            let is_spread = self.peek_kind() == &TokenKind::Star;
+            if is_spread {
+                let star = self.bump().span;
+                if name.is_none() {
+                    arg_start = star;
+                }
+            }
             let value = self.parse_expr(Precedence::Lowest)?;
             let arg_span = arg_start.merge(value.span);
             args.push(CallArg {
@@ -2352,6 +2437,7 @@ impl Parser {
                 value,
                 span: arg_span,
                 is_trailing_lambda: false,
+                is_spread,
             });
             if self.peek_kind() == &TokenKind::Comma {
                 self.bump();
@@ -2378,6 +2464,7 @@ impl Parser {
                     span: lambda.span,
                     value: lambda,
                     is_trailing_lambda: true,
+                    is_spread: false,
                 }],
             },
             span,

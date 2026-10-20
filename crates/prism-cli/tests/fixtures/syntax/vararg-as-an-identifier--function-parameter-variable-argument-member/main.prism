@@ -1,0 +1,10 @@
+// expect: ok
+fun vararg(vararg: Int): Int = vararg
+fun f(vararg vararg: Int) {}
+fun k(vararg: Int) {}
+fun h() {
+    val vararg = 1
+    k(vararg = vararg)
+}
+fun Int.vararg(): Int = this
+fun m(x: Int): Int = x.vararg()

@@ -11619,6 +11619,7 @@ mod tests {
                 value: expr(ExprKind::Literal(Literal::Int(1))),
                 span: Span::dummy(),
                 is_trailing_lambda: false,
+                is_spread: false,
             }],
         });
         infer(&mut checker, &call_wrong_arity);
@@ -11635,12 +11636,14 @@ mod tests {
                     value: expr(ExprKind::Literal(Literal::Int(1))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
                 CallArg {
                     name: None,
                     value: expr(ExprKind::Literal(Literal::String("bad".to_string()))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
             ],
         });
@@ -11730,12 +11733,14 @@ mod tests {
                     value: expr(ExprKind::Literal(Literal::Int(10))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
                 CallArg {
                     name: None,
                     value: expr(ExprKind::Literal(Literal::Int(20))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
             ],
         });
@@ -11752,12 +11757,14 @@ mod tests {
                     value: expr(ExprKind::Literal(Literal::Int(10))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
                 CallArg {
                     name: Some("y".to_string()),
                     value: expr(ExprKind::Literal(Literal::Int(20))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
             ],
         });
@@ -11808,12 +11815,14 @@ mod tests {
                         value: expr(ExprKind::Literal(Literal::Int(1))),
                         span: Span::dummy(),
                         is_trailing_lambda: false,
+                        is_spread: false,
                     },
                     CallArg {
                         name: None,
                         value: expr(ExprKind::Literal(Literal::Int(20))),
                         span: Span::dummy(),
                         is_trailing_lambda: false,
+                        is_spread: false,
                     },
                 ],
             }),
@@ -11865,12 +11874,14 @@ mod tests {
                         value: expr(ExprKind::Literal(Literal::Int(2))),
                         span: Span::dummy(),
                         is_trailing_lambda: false,
+                        is_spread: false,
                     },
                     CallArg {
                         name: None,
                         value: expr(ExprKind::Literal(Literal::Int(30))),
                         span: Span::dummy(),
                         is_trailing_lambda: false,
+                        is_spread: false,
                     },
                 ],
             }),
@@ -11925,6 +11936,7 @@ mod tests {
                 value: expr(ExprKind::Literal(Literal::Int(42))),
                 span: Span::dummy(),
                 is_trailing_lambda: false,
+                is_spread: false,
             }],
         });
         let res_some = infer(&mut checker, &some_call);
@@ -11943,6 +11955,7 @@ mod tests {
                 value: expr(ExprKind::Literal(Literal::String("bad".to_string()))),
                 span: Span::dummy(),
                 is_trailing_lambda: false,
+                is_spread: false,
             }],
         });
         infer(&mut checker, &some_bad);
@@ -12134,12 +12147,14 @@ mod tests {
                     value: expr(ExprKind::Literal(Literal::Int(1))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
                 CallArg {
                     name: None,
                     value: expr(ExprKind::Literal(Literal::Int(2))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
             ],
         });
@@ -12194,6 +12209,7 @@ mod tests {
                 value: expr(ExprKind::Literal(Literal::String("hello".to_string()))),
                 span: Span::dummy(),
                 is_trailing_lambda: false,
+                is_spread: false,
             }],
         });
         assert_eq!(infer(&mut checker, &call_one), Type::String);
@@ -12209,12 +12225,14 @@ mod tests {
                     value: expr(ExprKind::Literal(Literal::String("hi".to_string()))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
                 CallArg {
                     name: Some("prefix".to_string()),
                     value: expr(ExprKind::Literal(Literal::String(">>".to_string()))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
             ],
         });
@@ -12231,12 +12249,14 @@ mod tests {
                     value: expr(ExprKind::Literal(Literal::String("a".to_string()))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
                 CallArg {
                     name: Some("msg".to_string()),
                     value: expr(ExprKind::Literal(Literal::String("b".to_string()))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
             ],
         });
@@ -12253,6 +12273,7 @@ mod tests {
                 value: expr(ExprKind::Literal(Literal::Int(2))),
                 span: Span::dummy(),
                 is_trailing_lambda: false,
+                is_spread: false,
             }],
         });
         infer(&mut checker, &call_missing);
@@ -12281,12 +12302,14 @@ mod tests {
                     value: expr(ExprKind::Literal(Literal::Int(1))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
                 CallArg {
                     name: Some("y".to_string()),
                     value: expr(ExprKind::Literal(Literal::Int(2))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
             ],
         });
@@ -12303,12 +12326,14 @@ mod tests {
                     value: expr(ExprKind::Literal(Literal::Int(1))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
                 CallArg {
                     name: Some("x".to_string()),
                     value: expr(ExprKind::Literal(Literal::Int(2))),
                     span: Span::dummy(),
                     is_trailing_lambda: false,
+                    is_spread: false,
                 },
             ],
         });
@@ -12325,6 +12350,7 @@ mod tests {
                 value: expr(ExprKind::Literal(Literal::Int(1))),
                 span: Span::dummy(),
                 is_trailing_lambda: false,
+                is_spread: false,
             }],
         });
         infer(&mut checker, &call_missing);

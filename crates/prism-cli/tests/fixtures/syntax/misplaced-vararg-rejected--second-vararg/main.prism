@@ -1,0 +1,2 @@
+// expect: E2001
+fun a(vararg x: Int, vararg y: Int) {}

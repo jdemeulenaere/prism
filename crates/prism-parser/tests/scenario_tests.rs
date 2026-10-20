@@ -790,7 +790,7 @@ fn write_through_in_an_unbraced_branch_or_loop_body() {
 fn prefix_star_outside_an_assignment_target_rejected() {
     for (src, column) in [
         ("fun f() { val x = *r }", 19),
-        ("fun f() { g(*r) }", 13),
+        ("fun f() { g((*r)) }", 14),
         ("fun f() { return *r }", 18),
         ("fun f() { (*r).x = 1 }", 12),
         ("fun f() { *r }", 11),

@@ -259,7 +259,8 @@ impl<'a> Printer<'a> {
     }
 
     fn parameter(&mut self, parameter: &Param) -> Document {
-        let mut parts = vec![text(format!("{}: ", parameter.name))];
+        let modifier = if parameter.is_vararg { "vararg " } else { "" };
+        let mut parts = vec![text(format!("{}{}: ", modifier, parameter.name))];
         parts.push(text(parameter.kind.to_string()));
         parts.push(self.ty(&parameter.ty));
         if let Some(default) = &parameter.default_value {

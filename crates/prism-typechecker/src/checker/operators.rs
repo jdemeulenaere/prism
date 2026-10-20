@@ -1100,6 +1100,7 @@ impl TypeChecker {
             value: right.clone(),
             span: right.span,
             is_trailing_lambda: false,
+            is_spread: false,
         };
         let args = std::slice::from_ref(&argument);
         if has_builtin_operators(&left_ty) {
@@ -1270,6 +1271,7 @@ impl TypeChecker {
                 value: left.clone(),
                 span: left.span,
                 is_trailing_lambda: false,
+                is_spread: false,
             };
             let called = self.call_operator(OperatorUse {
                 operator: spelled,
@@ -1560,6 +1562,7 @@ impl TypeChecker {
             value: value.clone(),
             span: value.span,
             is_trailing_lambda: false,
+            is_spread: false,
         };
         let key =
             preinferred.map(|(node, is_place)| self.preinfer(&argument.value, node, is_place));
@@ -1726,6 +1729,7 @@ impl TypeChecker {
                 value: index.clone(),
                 span: index.span,
                 is_trailing_lambda: false,
+                is_spread: false,
             })
             .collect();
         let use_of = |name| OperatorUse {
@@ -2063,6 +2067,7 @@ impl TypeChecker {
             span: value.span,
             value,
             is_trailing_lambda: false,
+            is_spread: false,
         };
         let Some(operator) = compound else {
             let mut args: Vec<CallArg> = indices.iter().cloned().map(as_argument).collect();

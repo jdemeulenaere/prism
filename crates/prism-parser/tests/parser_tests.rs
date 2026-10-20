@@ -1946,4 +1946,139 @@ mod tests {
         // `intrinsic` stays a name elsewhere.
         assert!(parse_source("fun f() { val intrinsic = 1 }").is_ok());
     }
+
+    /// The parameters of the first function declared in `src`.
+    fn first_function_params(src: &str) -> Vec<Param> {
+        let file = parse_source(src).unwrap();
+        file.declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                Declaration::Function(f) => Some(f.params.clone()),
+                _ => None,
+            })
+            .expect("a function")
+    }
+
+    #[test]
+    fn vararg_parameters() {
+        for (src, name, element) in [
+            ("fun sum(vararg xs: Int): Int = 0", "xs", "Int"),
+            (
+                "public fun <T> listOf(vararg elements: T): List<T> = elements",
+                "elements",
+                "T",
+            ),
+            (
+                "compose fun Row(vararg labels: String) {}",
+                "labels",
+                "String",
+            ),
+        ] {
+            let params = first_function_params(src);
+            assert_eq!(params.len(), 1, "{}", src);
+            assert!(params[0].is_vararg, "{}", src);
+            assert_eq!(params[0].name, name);
+            assert_eq!(params[0].ty.to_string(), element);
+            let start = src.find("vararg").unwrap();
+            assert_eq!(params[0].span.start, start, "the span starts at 'vararg'");
+        }
+        let params = first_function_params(
+            "fun Builder.items(vararg names: String, separator: String = \", \") {}",
+        );
+        assert!(params[0].is_vararg && !params[1].is_vararg);
+        assert_eq!(params[1].name, "separator");
+    }
+
+    #[test]
+    fn misplaced_vararg_rejected() {
+        for (src, message) in [
+            (
+                "fun a(vararg x: Int, vararg y: Int) {}",
+                "at most one vararg parameter",
+            ),
+            (
+                "fun b(vararg x: Int = 1) {}",
+                "a call with no element passes the empty list",
+            ),
+            (
+                "fun c(vararg f: escaping () -> Unit) {}",
+                "cannot be 'escaping'",
+            ),
+            (
+                "fun c(vararg f: attached () -> Unit) {}",
+                "cannot be 'attached'",
+            ),
+            ("struct S(vararg xs: Int)", "not a struct's field"),
+            (
+                "fun d(f: (vararg Int) -> Unit) {}",
+                "not a function type's parameter",
+            ),
+            (
+                "fun e() { val g = { vararg x -> x } }",
+                "not a closure's parameter",
+            ),
+            (
+                "context(vararg s: Int) fun f() {}",
+                "not a context parameter",
+            ),
+        ] {
+            assert_parse_error(src, message);
+        }
+    }
+
+    #[test]
+    fn vararg_as_an_identifier() {
+        let params = first_function_params("fun f(vararg vararg: Int) {}");
+        assert!(params[0].is_vararg);
+        assert_eq!(params[0].name, "vararg");
+        let params = first_function_params("fun vararg(vararg: Int): Int = vararg");
+        assert!(!params[0].is_vararg);
+        assert_eq!(params[0].name, "vararg");
+        let types = param_types("fun g(x: vararg, y: vararg?) {}");
+        let shown: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+        assert_eq!(shown, ["vararg", "vararg?"]);
+        parse_source("fun h() { val vararg = 1; k(vararg = vararg); x.vararg() }").unwrap();
+    }
+
+    /// The arguments of the call that is the body of the first function in `src`.
+    fn body_call_args(src: &str) -> Vec<CallArg> {
+        let file = parse_source(src).unwrap();
+        let Declaration::Function(f) = &file.declarations[0] else {
+            panic!("Expected function");
+        };
+        let Some(FunctionBody::Expr(body)) = &f.body else {
+            panic!("Expected an expression body");
+        };
+        let ExprKind::Call { args, .. } = &body.kind else {
+            panic!("Expected a call");
+        };
+        args.clone()
+    }
+
+    #[test]
+    fn spread_arguments_parse() {
+        let args = body_call_args("fun f() = sum(*numbers)");
+        assert_eq!(args.len(), 1);
+        assert!(args[0].is_spread && args[0].name.is_none());
+        assert!(matches!(&args[0].value.kind, ExprKind::Ident(name) if name == "numbers"));
+        assert_eq!(
+            args[0].span.start,
+            "fun f() = sum(".len(),
+            "the span starts at '*'"
+        );
+
+        let args = body_call_args("fun f() = listOf(elements = *xs)");
+        assert!(args[0].is_spread);
+        assert_eq!(args[0].name.as_deref(), Some("elements"));
+
+        let args = body_call_args("fun f() = f(1, *a.items())");
+        assert!(!args[0].is_spread && args[1].is_spread);
+        assert!(matches!(&args[1].value.kind, ExprKind::Call { .. }));
+
+        let args = body_call_args("fun f() = f(a * b, a *b)");
+        assert!(args.iter().all(|arg| !arg.is_spread));
+        assert!(args
+            .iter()
+            .all(|arg| matches!(&arg.value.kind, ExprKind::Binary { .. })));
+    }
 }

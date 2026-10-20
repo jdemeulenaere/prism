@@ -136,6 +136,9 @@ pub struct CallArg {
     pub span: Span,
     /// Whether the argument is the trailing lambda, written after the parentheses.
     pub is_trailing_lambda: bool,
+    /// Whether the argument is a spread `*value`, passing a whole list to a vararg parameter
+    /// (D5 of `vararg`).
+    pub is_spread: bool,
 }
 
 /// A pattern of a `when` branch (D1 of `payload-patterns`): it mirrors how the matched value is
@@ -199,6 +202,7 @@ impl Pattern {
                             value,
                             span: argument.span,
                             is_trailing_lambda: false,
+                            is_spread: false,
                         })
                     })
                     .collect::<Option<Vec<_>>>()?;

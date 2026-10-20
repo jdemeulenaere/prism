@@ -1,5 +1,5 @@
 // expect: E2001
 fun g(x: Int) {}
 fun f(r: &Int) {
-    g(*r)
+    g((*r))
 }

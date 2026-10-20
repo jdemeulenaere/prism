@@ -1,0 +1,3 @@
+// expect: ok
+struct vararg(val x: Int)
+fun g(x: vararg) {}

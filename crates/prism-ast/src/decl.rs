@@ -78,6 +78,9 @@ pub struct Param {
     /// when the callee may keep its function value.
     pub kind: ParameterKind,
     pub default_value: Option<Expr>,
+    /// Whether the parameter is written `vararg name: E` (D1 of `vararg`): its type `ty` is the
+    /// element type, and the body sees a `List<E>`.
+    pub is_vararg: bool,
     pub span: Span,
 }
 

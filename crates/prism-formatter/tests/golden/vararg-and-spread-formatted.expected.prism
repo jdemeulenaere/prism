@@ -1,0 +1,1 @@
+fun f(vararg xs: Int, last: Int = 0): Int = g(*xs) + h(items = *xs)
