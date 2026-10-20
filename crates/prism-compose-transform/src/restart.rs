@@ -81,7 +81,7 @@ pub(crate) fn restart_body(
         .iter()
         .zip(&parameter_types)
         .map(|(versioned, ty)| {
-            (*versioned && !crate::stability::is_borrowed_state(ty, types))
+            (*versioned && crate::stability::has_identity(ty, types))
                 .then(|| locals.alloc(local(Type::Int, LocalKind::Temporary, None, span)))
         })
         .collect();

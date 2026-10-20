@@ -169,7 +169,7 @@ pub(crate) struct Rewriter<'a> {
     unit: Option<LocalId>,
     /// The hidden version captures of the file's composable closures (D6 of `strong-skipping`).
     hidden: &'a HiddenCaptures,
-    /// Per declared parameter, its version argument, for any shared borrow (D4 and D21 of
+    /// Per declared parameter, its version argument, for any borrow (D4 and D21 of
     /// `strong-skipping`). A borrowed state object's is not its identity: see
     /// [`Rewriter::identity_version`].
     version_arguments: Vec<Option<LocalId>>,
@@ -344,13 +344,12 @@ impl<'a> Rewriter<'a> {
 
     /// The version argument of declared parameter `index` when it is the parameter's identity:
     /// a shared borrow other than of a state object. A borrowed state object is kept by its
-    /// cell (D13 of `owned-state`), and the version word it is passed is not used, so that the
-    /// body behaves as when it took none (D21 of `strong-skipping`): it never takes the
-    /// replaceable path for it, and forwards it as no identity.
+    /// cell (D13 of `owned-state`), and a mutable borrow has no identity, so the version word
+    /// either is passed is not used, as when it took none (D21 of `strong-skipping`): the body
+    /// never takes the replaceable path for it, and forwards it as no identity.
     fn identity_version(&self, index: usize) -> Option<LocalId> {
         let version = self.version_arguments[index]?;
-        (!crate::stability::is_borrowed_state(&self.declared_type(index), self.types))
-            .then_some(version)
+        crate::stability::has_identity(&self.declared_type(index), self.types).then_some(version)
     }
 
     /// The version the body was given for the argument or capture local `local`: its version

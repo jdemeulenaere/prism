@@ -30,15 +30,23 @@ pub fn is_keepable(ty: &Type, kind: ParameterKind, types: &TypeTable) -> bool {
     types.is_copy(ty) && ty.reference_outside_functions().is_none() && !is_reference(ty)
 }
 
-/// Whether a parameter of type `ty` takes a version word after the change words: a shared
-/// borrow, or a nullable of one, of any type (D4 and D21 of `strong-skipping`). The answer
-/// depends only on the type's shape, never on the referent, so that substituting a type
-/// argument keeps a calling convention: a generic body's `&T` and a lambda's
-/// `&MutableState<Int>` given for it take the same words. A borrowed state object takes one
-/// too, which its callee does not use for its own identity: it keeps its cell's (D13 of
-/// `owned-state`).
+/// Whether a parameter of type `ty` takes a version word after the change words: a borrow,
+/// shared or mutable, or a nullable of one, of any type (D4 and D21 of `strong-skipping`). The
+/// answer depends only on the type's shape, never on the referent or the mutability, so that
+/// every conversion of a function value in place keeps its calling convention: substituting a
+/// type argument (a generic body's `&T` and a lambda's `&MutableState<Int>` given for it), and
+/// a `&T` parameter used as a `&mut T` one. Only a shared borrow of a type other than a state
+/// object uses its word as its identity ([`has_identity`]).
 pub fn has_version_word(ty: &Type) -> bool {
-    is_shared_reference(ty)
+    is_reference(ty)
+}
+
+/// Whether a parameter of type `ty` is kept as its identity, its address and the version word
+/// it is given (D2 of `strong-skipping`): a shared borrow, or a nullable of one, of a type
+/// other than a state object, which keeps its cell's identity (D13 of `owned-state`). A
+/// mutable borrow has no identity: its version word is never used.
+pub fn has_identity(ty: &Type, types: &TypeTable) -> bool {
+    is_shared_reference(ty) && !is_borrowed_state(ty, types)
 }
 
 /// Whether `ty` is a shared borrow `&T` or a nullable `(&T)?` of one.
@@ -217,11 +225,14 @@ mod tests {
             inner: Box::new(Type::String),
         };
         assert!(has_version_word(&borrow));
-        assert!(has_version_word(&borrow.nullable()));
+        assert!(has_version_word(&borrow.clone().nullable()));
         assert!(!has_version_word(&Type::Int));
-        assert!(!has_version_word(&Type::Reference {
+        let mutable = Type::Reference {
             mutable: true,
             inner: Box::new(Type::String),
-        }));
+        };
+        assert!(has_version_word(&mutable));
+        assert!(has_identity(&borrow, &types));
+        assert!(!has_identity(&mutable, &types));
     }
 }

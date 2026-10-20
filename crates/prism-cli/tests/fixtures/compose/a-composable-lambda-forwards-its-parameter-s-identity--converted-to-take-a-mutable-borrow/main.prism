@@ -1,0 +1,20 @@
+// expect: ok
+// run: 0
+// A lambda taking `&String` given for `compose (&mut String) -> Unit` keeps its representation,
+// so both take a version word; `Host` passes 0 for its mutable borrow, and `Show` never keeps
+// a borrow of `Host`'s local.
+compose fun Show(s: &String, n: &State<Int>) { println("show $s ${n.value}") }
+compose fun Host(item: compose (&mut String) -> Unit) { var s = "a" + "b"; item(&mut s) }
+compose fun Screen(n: &State<Int>) {
+    println("screen")
+    val f: compose (&String) -> Unit = { s -> Show(s, n) }
+    Host(f)
+}
+fun main() {
+    val n = mutableStateOf(0)
+    val c = composition { Screen(n) }
+    n.value = 1
+    println(c.recompose())
+    n.value = 2
+    println(c.recompose())
+}

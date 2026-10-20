@@ -837,20 +837,21 @@ compose composed skippable fun main::L(_1: (&String)?, _2: &Point, _3: Int, _4: 
     goto -> bb3 @14:1
   bb20:
     goto -> bb3 @14:1
-compose composed fun main::M(_1: &mut Int, _2: Int, _3: Int): Unit @15:1
+compose composed fun main::M(_1: &mut Int, _2: Int, _3: Int, _4: Int): Unit @15:1
   local _0: Unit (return)
   local _1 r: &mut Int (argument)
   local _2 $composer: Int (argument)
   local _3 $changed: Int (argument)
-  local _4: Unit (temporary)
+  local _4 $version0: Int (argument)
+  local _5: Unit (temporary)
   bb0:
-    storage_live _4 @15:1
-    _4 = call composer start_group key 0x403cefa8d3d2d41c /* body main::M */(copy _2) -> bb1 @15:1
+    storage_live _5 @15:1
+    _5 = call composer start_group key 0x403cefa8d3d2d41c /* body main::M */(copy _2) -> bb1 @15:1
   bb1:
     _0 = const () @15:28
-    _4 = call composer end_group(copy _2) -> bb2 @15:1
+    _5 = call composer end_group(copy _2) -> bb2 @15:1
   bb2:
-    storage_dead _4 @15:1
+    storage_dead _5 @15:1
     return @15:1
 closure main::A#restart(_1: Int): Unit @3:1
   local _0: Unit (return)
