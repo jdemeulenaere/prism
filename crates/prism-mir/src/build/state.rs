@@ -24,8 +24,7 @@ use crate::mir::{Callee, Constant, Operand, Place, Rvalue, StateOperation, Termi
 use prism_ast::Span;
 use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{
-    Argument, BinaryOperator, BuiltinFunction, Call, ExpressionId, IntrinsicStruct,
-    Type,
+    Argument, BinaryOperator, BuiltinFunction, Call, ExpressionId, IntrinsicStruct, Type,
 };
 
 /// How a state place is used, which decides the flag its access takes outside composable
@@ -106,6 +105,15 @@ impl Builder<'_> {
         let (ty, span) = (expression.ty.clone(), expression.span);
         let (kind, value) = handle_kind(&ty);
         let operand = self.operand(handle);
+        // A borrow lowered into a temporary of this scope is already held: it is copied, with
+        // no second temporary, since each local of an access costs every borrow-check analysis.
+        if let Operand::Move(place, _) | Operand::Copy(place, _) = &operand {
+            if let Some(local) = place.as_local() {
+                if self.locals[local].kind == crate::mir::LocalKind::Temporary {
+                    return (Operand::Copy(Place::local(local), span), kind, value);
+                }
+            }
+        }
         let local = self.new_temporary(ty, span);
         self.assign(Place::local(local), Rvalue::Use(operand), span);
         (Operand::Copy(Place::local(local), span), kind, value)
@@ -132,7 +140,7 @@ impl Builder<'_> {
         let access = std::mem::take(&mut self.state_access);
         let extended = self.extended_guards.remove(&node);
         let handle_ty = self.expression(handle).ty.clone();
-        let (handle, kind, value) = self.held_handle(handle);
+        let (kind, value) = handle_kind(&handle_ty);
         let (operation, pointer_ty) = match access {
             _ if self.is_compose => (StateOperation::Read, false),
             StateAccess::Read => (StateOperation::Read, false),
@@ -143,8 +151,9 @@ impl Builder<'_> {
             mutable: pointer_ty,
             inner: Box::new(value.clone()),
         };
-        let pointer = self.new_temporary(reference, span);
         let Some(end) = operation.guard_end() else {
+            let (handle, _, _) = self.held_handle(handle);
+            let pointer = self.new_temporary(reference, span);
             self.state_call(
                 operation,
                 kind,
@@ -157,10 +166,13 @@ impl Builder<'_> {
         };
         // The guard's local holds the state object's borrow until its scope ends; the
         // reference the begin call gives is tied to a borrow of it, so it cannot outlive the
-        // guard (`E5006`).
+        // guard (`E5006`). The borrow is lowered into the guard's local directly, with no
+        // temporary between them, since each local of an access costs every borrow-check
+        // analysis.
         let scope = extended.unwrap_or(self.scope_depth() - 1);
         let guard = self.new_guard_local(handle_ty.clone(), end, value.clone(), scope, span);
-        self.assign(Place::local(guard), Rvalue::Use(handle), span);
+        self.expression_into(Some(&Place::local(guard)), handle);
+        let pointer = self.new_temporary(reference, span);
         let guard_borrow = self.new_temporary(
             Type::Reference {
                 mutable: false,

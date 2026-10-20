@@ -45,9 +45,12 @@ pub struct Liveness<'a> {
     pub borrows: &'a BorrowSet,
     /// What each location does to loan-carrying locals, in evaluation order: each carrier it
     /// uses (`true`) or defines (`false`), found once rather than on every pass of the solver.
-    /// A `Return` uses the locals the caller sees afterwards.
-    effects: Vec<Vec<(u32, bool)>>,
-    /// The position in `effects` of each block's first location.
+    /// A `Return` uses the locals the caller sees afterwards. Every location's effects are in
+    /// one array, one allocation for the body rather than one per location.
+    effects: Vec<(u32, bool)>,
+    /// Where the effects of each location start in `effects`, with the end of the last.
+    effect_starts: Vec<u32>,
+    /// The position in `effect_starts` of each block's first location.
     block_starts: Vec<usize>,
 }
 
@@ -56,31 +59,41 @@ impl<'a> Liveness<'a> {
         let returned = returned_locals(body, borrows);
         let carrier = |local: LocalId| borrows.carrier(local).map(|bit| bit as u32);
         let mut effects = Vec::new();
+        let mut effect_starts = Vec::new();
         let mut block_starts = Vec::with_capacity(body.blocks.len());
         for (_, data) in body.blocks.iter() {
-            block_starts.push(effects.len());
+            block_starts.push(effect_starts.len());
             for statement in &data.statements {
-                effects.push(carrier_effects(statement_effects(statement), &carrier));
+                effect_starts.push(effects.len() as u32);
+                effects.extend(carrier_effects(statement_effects(statement), &carrier));
             }
-            effects.push(match data.terminator.kind {
-                TerminatorKind::Return => returned
-                    .iter()
-                    .filter_map(|local| carrier(*local))
-                    .map(|bit| (bit, true))
-                    .collect(),
-                _ => carrier_effects(terminator_effects(&data.terminator), &carrier),
-            });
+            effect_starts.push(effects.len() as u32);
+            match data.terminator.kind {
+                TerminatorKind::Return => effects.extend(
+                    returned
+                        .iter()
+                        .filter_map(|local| carrier(*local))
+                        .map(|bit| (bit, true)),
+                ),
+                _ => effects.extend(carrier_effects(
+                    terminator_effects(&data.terminator),
+                    &carrier,
+                )),
+            }
         }
+        effect_starts.push(effects.len() as u32);
         Self {
             borrows,
             effects,
+            effect_starts,
             block_starts,
         }
     }
 
     /// The carriers `location` uses (`true`) or defines (`false`), in evaluation order.
     pub fn carrier_effects(&self, location: Location) -> &[(u32, bool)] {
-        &self.effects[self.block_starts[location.block.index()] + location.statement]
+        let index = self.block_starts[location.block.index()] + location.statement;
+        &self.effects[self.effect_starts[index] as usize..self.effect_starts[index + 1] as usize]
     }
 
     /// Applies the effects of `location`, backward.

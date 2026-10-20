@@ -100,6 +100,10 @@ impl Holdings {
 
     /// Removes everything `carrier` holds.
     fn clear(&mut self, carrier: usize) {
+        // Most locals hold nothing when they are cleared: their storage starts or ends.
+        if self.pairs.with_first(carrier as u32).next().is_none() {
+            return;
+        }
         let held: Vec<(u32, u32)> = self.pairs.with_first(carrier as u32).collect();
         for (carrier, item) in held {
             self.pairs.remove((carrier, item));
@@ -163,10 +167,11 @@ impl<'a> LoanFlow<'a> {
         liveness: &Results<Liveness>,
     ) -> Self {
         let mut flow = Self::new(file, body, borrows);
-        let mut dying = Vec::with_capacity(body.blocks.len());
-        for (block, data) in body.blocks.iter() {
-            // Backward through the block, from the state after its terminator.
-            let mut live = liveness.block_state(block, body);
+        let mut dying = vec![Vec::new(); body.blocks.len()];
+        // Backward through each block, from the state after its terminator, which the visit
+        // carries along chains of blocks.
+        liveness.visit_blocks(|block, live| {
+            let data = &body.blocks[block];
             let mut block_dying = vec![Vec::new(); data.statements.len() + 1];
             for index in (0..=data.statements.len()).rev() {
                 let location = Location {
@@ -185,18 +190,14 @@ impl<'a> LoanFlow<'a> {
                     block_dying[index] = touched;
                 }
                 match data.statements.get(index) {
-                    Some(statement) => liveness
+                    Some(statement) => liveness.analysis.apply_statement(live, statement, location),
+                    None => liveness
                         .analysis
-                        .apply_statement(&mut live, statement, location),
-                    None => {
-                        liveness
-                            .analysis
-                            .apply_terminator(&mut live, &data.terminator, location)
-                    }
+                        .apply_terminator(live, &data.terminator, location),
                 }
             }
-            dying.push(block_dying);
-        }
+            dying[block.index()] = block_dying;
+        });
         flow.dying = Some(dying);
         flow
     }
@@ -278,6 +279,15 @@ impl<'a> LoanFlow<'a> {
         if let Some(carrier) = self.borrows.carrier(local) {
             state.clear(carrier);
         }
+    }
+
+    /// Whether `items` hold a loan of a place that is itself a reference, which only some
+    /// types may hold ([`Self::fitting`]).
+    fn has_loan_of_reference(&self, items: &[usize]) -> bool {
+        items.iter().any(|item| match self.borrows.item(*item) {
+            Item::Loan(loan) => self.fits_only_references(loan),
+            Item::Input(_) => false,
+        })
     }
 
     /// Whether only a value that can borrow a reference holds `loan`: a loan of a reference,
@@ -448,8 +458,20 @@ impl<'a> LoanFlow<'a> {
 
     /// Writes a value carrying `items` to `destination`.
     fn write(&self, state: &mut Holdings, destination: &Place, items: &[usize]) {
-        let items = &self.fitting(items.to_vec(), &destination.ty(self.body, &self.file.types));
         let root = destination.local;
+        // A destination that carries no loan, the most frequent one, is written nothing.
+        if self.borrows.carrier(root).is_none() {
+            return;
+        }
+        // Only loans of references may not fit, so the destination's type is needed only when
+        // one is written.
+        let fitted;
+        let items = if !self.has_loan_of_reference(items) {
+            items
+        } else {
+            fitted = self.fitting(items.to_vec(), &destination.ty(self.body, &self.file.types));
+            &fitted
+        };
         if destination.projections.is_empty() {
             if self.borrows.carrier(root).is_some() {
                 self.clear(state, root);

@@ -32,9 +32,9 @@
 //! from one size to the next, skips the larger sizes of a shape once one size takes over 20 s,
 //! and fails when any stage of at least 5 ms grows more than twice as fast as the size, or when
 //! the `borrow` stage of a shape of [`LINEAR_BORROW`] grows on average faster than x4.6 per x4
-//! (`n^1.1`), or when a stage of at least 5 ms of a shape of [`LINEAR_DEPTH`] grows on average
-//! faster than x2.5 per doubling of the depth (`n^1.3`), only when `PRISM_ASSERT_TIMING=1` is
-//! set.
+//! (`n^1.1`), or one of [`LINEAR_BORROW_HEAVY`] faster than x4.8 per x4, or when a stage of at
+//! least 5 ms of a shape of [`LINEAR_DEPTH`] grows on average faster than x2.5 per doubling of
+//! the depth (`n^1.3`), only when `PRISM_ASSERT_TIMING=1` is set.
 
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_jit::{JITBuilder, JITModule};
@@ -63,7 +63,7 @@ const SIZES: &[usize] = &[256, 1024, 4096];
 /// conflict check's search among them). Their `borrow` time may grow at most `BORROW_GROWTH`
 /// per x4 on average from the smallest size to the largest, which leaves room for the slower
 /// memory accesses of larger programs, while a quadratic step grows x16.
-const LINEAR_BORROW: [&str; 7] = [
+const LINEAR_BORROW: [&str; 9] = [
     "handlers-kept-to-end",
     "live-handlers",
     "many-closures",
@@ -71,8 +71,18 @@ const LINEAR_BORROW: [&str; 7] = [
     "live-borrows",
     "template-computed-parts",
     "when-patterns",
+    "state-accesses",
+    "weak-captures",
 ];
 const BORROW_GROWTH: f64 = 4.6;
+/// The shapes whose borrow check is held to near-linear growth with heavier items: each item
+/// keeps a borrow and several locals live to the end of one body (`guarded-state-accesses`:
+/// a state's guard, the borrow it gives and three more accesses per item), so the largest size
+/// works far beyond the caches. A shape of plain borrows of the same weight (a list borrowed
+/// and kept, a size printed, a list changed and a string written per item) grows about x4.8 per
+/// x4, the bound here, while a quadratic step still grows x16.
+const LINEAR_BORROW_HEAVY: [&str; 1] = ["guarded-state-accesses"];
+const HEAVY_BORROW_GROWTH: f64 = 4.8;
 /// The shapes nesting calls through their trailing lambdas, every stage of which is held to
 /// near-linear growth in the depth: each stage taking at least 5 ms at the deepest nest may
 /// grow at most `DEPTH_GROWTH` per doubling of the depth on average, from the shallowest to
@@ -1398,8 +1408,15 @@ fn run_benchmark() {
                 break;
             }
         }
-        if let (true, [(first_size, first), .., (last_size, last)]) =
-            (LINEAR_BORROW.contains(&shape.name), &borrow_times[..])
+        let bound = if LINEAR_BORROW.contains(&shape.name) {
+            Some(BORROW_GROWTH)
+        } else if LINEAR_BORROW_HEAVY.contains(&shape.name) {
+            Some(HEAVY_BORROW_GROWTH)
+        } else {
+            None
+        };
+        if let (Some(bound), [(first_size, first), .., (last_size, last)]) =
+            (bound, &borrow_times[..])
         {
             // The average growth per x4 of the size: the geometric mean of each step's.
             let steps = (*last_size as f64 / *first_size as f64).log(4.0);
@@ -1408,7 +1425,7 @@ fn run_benchmark() {
                 "  {:<28} borrow x{:.2} per x4 on average",
                 shape.name, growth
             );
-            if growth > BORROW_GROWTH && milliseconds(*last) >= 5.0 {
+            if growth > bound && milliseconds(*last) >= 5.0 {
                 too_fast_growth.push(format!("{} (borrow x{:.2} per x4)", shape.name, growth));
             }
         }

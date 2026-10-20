@@ -383,6 +383,9 @@ const PAIR_CHUNK: usize = 128;
 pub struct PairSet {
     /// Non-empty chunks, each sorted, every pair of a chunk before every pair of the next.
     chunks: Vec<Rc<Vec<(u32, u32)>>>,
+    /// The last pair of each chunk, side by side, so that finding a pair's chunk searches one
+    /// array rather than following a pointer per step.
+    lasts: Vec<(u32, u32)>,
     len: usize,
 }
 
@@ -411,8 +414,8 @@ impl PairSet {
     /// The chunk where `pair` is or would be inserted: the first whose last pair is not below
     /// it, or the last chunk.
     fn chunk_of(&self, pair: (u32, u32)) -> usize {
-        self.chunks
-            .partition_point(|chunk| *chunk.last().expect("a non-empty chunk") < pair)
+        self.lasts
+            .partition_point(|last| *last < pair)
             .min(self.chunks.len().saturating_sub(1))
     }
 
@@ -424,11 +427,17 @@ impl PairSet {
 
     /// The pairs whose first element is `first`, in increasing order.
     pub fn with_first(&self, first: u32) -> impl Iterator<Item = (u32, u32)> + '_ {
-        let start = self.chunk_of((first, 0));
-        self.chunks[start.min(self.chunks.len())..]
+        // The first pair not below `(first, 0)` is found by binary search, in the chunk and
+        // within it, so a lookup costs `log n` whatever the chunk holds.
+        let start = self.chunk_of((first, 0)).min(self.chunks.len());
+        let offset = self
+            .chunks
+            .get(start)
+            .map_or(0, |chunk| chunk.partition_point(|pair| pair.0 < first));
+        self.chunks[start..]
             .iter()
             .flat_map(|chunk| chunk.iter().copied())
-            .skip_while(move |pair| pair.0 < first)
+            .skip(offset)
             .take_while(move |pair| pair.0 == first)
     }
 
@@ -436,6 +445,7 @@ impl PairSet {
     pub fn insert(&mut self, pair: (u32, u32)) -> bool {
         if self.chunks.is_empty() {
             self.chunks.push(Rc::new(vec![pair]));
+            self.lasts.push(pair);
             self.len = 1;
             return true;
         }
@@ -445,9 +455,18 @@ impl PairSet {
         };
         let chunk = Rc::make_mut(&mut self.chunks[index]);
         chunk.insert(position, pair);
+        if position + 1 == chunk.len() {
+            self.lasts[index] = pair;
+        }
         if chunk.len() > PAIR_CHUNK {
             let upper = chunk.split_off(chunk.len() / 2);
+            let (lower_last, upper_last) = (
+                *chunk.last().expect("a non-empty chunk"),
+                *upper.last().expect("a non-empty chunk"),
+            );
             self.chunks.insert(index + 1, Rc::new(upper));
+            self.lasts[index] = lower_last;
+            self.lasts.insert(index + 1, upper_last);
         }
         self.len += 1;
         true
@@ -465,15 +484,20 @@ impl PairSet {
         let chunk = Rc::make_mut(&mut self.chunks[index]);
         chunk.remove(position);
         let small = chunk.len();
+        if let Some(last) = chunk.last() {
+            self.lasts[index] = *last;
+        }
         self.len -= 1;
         if small == 0 {
             self.chunks.remove(index);
+            self.lasts.remove(index);
         } else if small < PAIR_CHUNK / 4 && index + 1 < self.chunks.len() {
             // A small chunk joins the next one when both fit in one, so that a set that shrank
             // keeps about `len / PAIR_CHUNK` chunks.
             if small + self.chunks[index + 1].len() <= PAIR_CHUNK {
                 let next = self.chunks.remove(index + 1);
                 Rc::make_mut(&mut self.chunks[index]).extend(next.iter().copied());
+                self.lasts[index] = self.lasts.remove(index + 1);
             }
         }
         true
@@ -491,11 +515,15 @@ impl PairSet {
     /// The set of `pairs`, sorted and without duplicates.
     fn from_sorted(pairs: Vec<(u32, u32)>) -> Self {
         let len = pairs.len();
-        let chunks = pairs
+        let chunks: Vec<Rc<Vec<(u32, u32)>>> = pairs
             .chunks(PAIR_CHUNK / 2)
             .map(|chunk| Rc::new(chunk.to_vec()))
             .collect();
-        Self { chunks, len }
+        let lasts = chunks
+            .iter()
+            .map(|chunk| *chunk.last().expect("a non-empty chunk"))
+            .collect();
+        Self { chunks, lasts, len }
     }
 
     /// Adds every pair of `other`, returning whether this set changed. The chunks of `other`
@@ -615,16 +643,19 @@ pub trait Analysis {
 /// The fixpoint of an analysis: the state where the analysis enters each block (its start
 /// forward, its end backward).
 ///
-/// Forward, a block whose only predecessor has it as only successor is *chained* to that
-/// predecessor: its state is the predecessor's exit state, which the solver and the cursor
-/// carry from one to the other instead of storing it, so that a long straight-line body (whose
-/// calls each end a block) stores one state, not one per block.
+/// A block whose state is another block's exit state in the analysis's direction is *chained*
+/// to that block, its *source*: forward, a block whose only predecessor has it as only
+/// successor is chained to that predecessor; backward, a block whose only successor has it as
+/// only predecessor is chained to that successor. The solver and the cursors carry the state
+/// from a source to the block chained to it instead of storing it, so that a long
+/// straight-line body (whose calls each end a block) stores one state, not one per block, and
+/// a state of many bits is not copied and joined at every block.
 pub struct Results<A: Analysis> {
     pub analysis: A,
     /// The state where the analysis enters each block that is not chained; `None` for a
     /// chained block.
     block_states: Vec<Option<A::Domain>>,
-    /// The predecessor each chained block is chained to.
+    /// The source each chained block is chained to.
     chained_from: Vec<Option<BlockId>>,
 }
 
@@ -656,6 +687,31 @@ fn chains(
     chained_from
 }
 
+/// Backward: the successor each reachable block of `body` is chained to, when the edge between
+/// them is its only way out, its successor's only way in, and kept, and the successor is not
+/// `bb0`. A depth-first search reaches such a successor only through the block, and finishes
+/// the block right after it, so the postorder visits a chained block right after its source.
+fn backward_chains(
+    graph: &Graph,
+    order: &[BlockId],
+    keep_edge: &impl Fn(BlockId, BlockId) -> bool,
+) -> Vec<Option<BlockId>> {
+    let mut chained_from = vec![None; graph.block_count()];
+    for &block in order {
+        if let [successor] = *graph.successors(block) {
+            let single_entry = graph.predecessors(successor).len() == 1;
+            if successor != block
+                && successor.index() != 0
+                && single_entry
+                && keep_edge(block, successor)
+            {
+                chained_from[block.index()] = Some(successor);
+            }
+        }
+    }
+    chained_from
+}
+
 /// The stored state of `block`, which is not chained.
 fn stored<D>(states: &mut [Option<D>], block: BlockId) -> &mut D {
     states[block.index()]
@@ -679,7 +735,7 @@ pub fn solve_with<A: Analysis>(
     };
     let chained_from = match direction {
         Direction::Forward => chains(&graph, &order, &keep_edge),
-        Direction::Backward => vec![None; count],
+        Direction::Backward => backward_chains(&graph, &order, &keep_edge),
     };
     let mut block_states: Vec<Option<A::Domain>> = chained_from
         .iter()
@@ -706,11 +762,13 @@ pub fn solve_with<A: Analysis>(
         let mut carried: Option<A::Domain> = None;
         for &block in &order {
             let mut state = match chained_from[block.index()] {
-                Some(predecessor) => {
+                Some(source) => {
                     let mut state = carried
                         .take()
-                        .expect("a chained block is visited right after its predecessor");
-                    analysis.apply_edge(&mut state, predecessor, block);
+                        .expect("a chained block is visited right after its source");
+                    if direction == Direction::Forward {
+                        analysis.apply_edge(&mut state, source, block);
+                    }
                     state
                 }
                 None => block_states[block.index()]
@@ -741,7 +799,14 @@ pub fn solve_with<A: Analysis>(
                     }
                 }
                 Direction::Backward => {
-                    for &predecessor in graph.predecessors(block) {
+                    let predecessors = graph.predecessors(block);
+                    if let [predecessor] = *predecessors {
+                        if chained_from[predecessor.index()] == Some(block) {
+                            carried = Some(state);
+                            continue;
+                        }
+                    }
+                    for &predecessor in predecessors {
                         if keep_edge(predecessor, block) {
                             changed |= stored(&mut block_states, predecessor).join(&state);
                         }
@@ -795,10 +860,10 @@ impl<A: Analysis> Results<A> {
     /// The state where the analysis enters `block`: its start forward, its end backward. The
     /// state of a chained block is replayed from the block its chain starts at.
     pub fn block_state(&self, block: BlockId, body: &Body) -> A::Domain {
-        // The chain back to the first block whose state is stored: `block`, its predecessor, ...
+        // The chain back to the first block whose state is stored: `block`, its source, ...
         let mut chain = vec![block];
-        while let Some(predecessor) = self.chained_from[chain[chain.len() - 1].index()] {
-            chain.push(predecessor);
+        while let Some(source) = self.chained_from[chain[chain.len() - 1].index()] {
+            chain.push(source);
         }
         let head = chain[chain.len() - 1];
         let mut state = self.block_states[head.index()]
@@ -807,9 +872,41 @@ impl<A: Analysis> Results<A> {
         for pair in chain.windows(2).rev() {
             let (to, from) = (pair[0], pair[1]);
             apply_block(body, &self.analysis, from, &mut state);
-            self.analysis.apply_edge(&mut state, from, to);
+            if self.analysis.direction() == Direction::Forward {
+                self.analysis.apply_edge(&mut state, from, to);
+            }
         }
         state
+    }
+
+    /// Calls `visit` on every block of `body` with the state where the analysis enters it,
+    /// which `visit` must bring through the whole block, in the analysis's direction: the
+    /// state it leaves is carried to the block chained to it, so that each state is copied
+    /// once per stored block rather than once per block.
+    pub fn visit_blocks(&self, mut visit: impl FnMut(BlockId, &mut A::Domain)) {
+        let mut chained_to = vec![None; self.chained_from.len()];
+        for (block, source) in self.chained_from.iter().enumerate() {
+            if let Some(source) = source {
+                chained_to[source.index()] = Some(BlockId(block as u32));
+            }
+        }
+        for (head, stored) in self.block_states.iter().enumerate() {
+            let Some(stored) = stored else {
+                continue;
+            };
+            let mut state = stored.clone();
+            let mut block = BlockId(head as u32);
+            loop {
+                visit(block, &mut state);
+                let Some(next) = chained_to[block.index()] else {
+                    break;
+                };
+                if self.analysis.direction() == Direction::Forward {
+                    self.analysis.apply_edge(&mut state, block, next);
+                }
+                block = next;
+            }
+        }
     }
 
     /// A cursor over these results in `body`.
@@ -820,6 +917,7 @@ impl<A: Analysis> Results<A> {
             position: None,
             state: self.analysis.bottom(),
             snapshots: None,
+            chain_exits: std::collections::HashMap::new(),
         }
     }
 }
@@ -839,6 +937,10 @@ pub struct ResultsCursor<'a, A: Analysis> {
     state: A::Domain,
     /// Backward: the block last entered, and the state after each of its locations.
     snapshots: Option<(BlockId, Vec<A::Domain>)>,
+    /// Backward: the exit states of chained blocks replayed when a block of their chain was
+    /// entered, each taken when its block is entered, so that entering every block of a long
+    /// chain replays it once.
+    chain_exits: std::collections::HashMap<BlockId, A::Domain>,
 }
 
 impl<A: Analysis> ResultsCursor<'_, A> {
@@ -919,9 +1021,9 @@ impl<A: Analysis> ResultsCursor<'_, A> {
     fn seek_backward(&mut self, location: Location) -> &A::Domain {
         let entered = matches!(&self.snapshots, Some((block, _)) if *block == location.block);
         if !entered {
+            let mut state = self.backward_block_state(location.block);
             let analysis = &self.results.analysis;
             let data = &self.body.blocks[location.block];
-            let mut state = self.results.block_state(location.block, self.body);
             // The state after each location, from the terminator's back to the first
             // statement's, in the buffer of the block entered before.
             let mut states = match self.snapshots.take() {
@@ -950,6 +1052,36 @@ impl<A: Analysis> ResultsCursor<'_, A> {
         }
         let (_, states) = self.snapshots.as_ref().expect("the block was entered");
         &states[location.statement]
+    }
+
+    /// Backward: the state at the exit of `block`. A chained block's is taken from the states
+    /// replayed for its chain, replaying the chain from its stored block when it was not.
+    fn backward_block_state(&mut self, block: BlockId) -> A::Domain {
+        let results = self.results;
+        if results.chained_from[block.index()].is_none() {
+            return results.block_state(block, self.body);
+        }
+        if let Some(state) = self.chain_exits.remove(&block) {
+            return state;
+        }
+        // The chain to the stored block: `block`, its source, ... Each source's entry state is
+        // the exit state of the block chained to it.
+        let mut chain = vec![block];
+        while let Some(source) = results.chained_from[chain[chain.len() - 1].index()] {
+            chain.push(source);
+        }
+        let tail = chain[chain.len() - 1];
+        let mut state = results.block_states[tail.index()]
+            .clone()
+            .expect("the state of a block that is not chained");
+        for pair in chain.windows(2).rev() {
+            let (chained, source) = (pair[0], pair[1]);
+            apply_block(self.body, &results.analysis, source, &mut state);
+            if chained != block {
+                self.chain_exits.insert(chained, state.clone());
+            }
+        }
+        state
     }
 
     fn apply(&mut self, location: Location) {
@@ -1127,6 +1259,47 @@ mod tests {
         assert!(set.union(&other));
         assert_eq!(set.iter().collect::<Vec<_>>(), expected);
         assert_eq!(set.len(), expected.len());
+    }
+
+    /// A pair set and a sorted set kept in step through pseudo-random inserts and removes,
+    /// including in copies sharing chunks: each step checks the chunks' last pairs, which the
+    /// lookups search.
+    #[test]
+    fn pair_sets_follow_a_model() {
+        let mut set = PairSet::default();
+        let mut model = std::collections::BTreeSet::new();
+        let mut seed: u64 = 7;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) as u32
+        };
+        let mut copies = Vec::new();
+        for step in 0..6_000 {
+            let pair = (next() % 40, next() % 200);
+            if next() % 3 == 0 {
+                assert_eq!(set.remove(pair), model.remove(&pair));
+            } else {
+                assert_eq!(set.insert(pair), model.insert(pair));
+            }
+            if step % 997 == 0 {
+                copies.push((set.clone(), model.clone()));
+            }
+            assert_eq!(set.len(), model.len());
+            assert_eq!(set.lasts.len(), set.chunks.len());
+            for (chunk, last) in set.chunks.iter().zip(&set.lasts) {
+                assert_eq!(chunk.last(), Some(last));
+            }
+            let first = next() % 40;
+            assert!(set
+                .with_first(first)
+                .eq(model.iter().copied().filter(|(f, _)| *f == first)));
+            assert_eq!(set.contains(pair), model.contains(&pair));
+        }
+        for (copy, model) in copies {
+            assert!(copy.iter().eq(model.iter().copied()));
+        }
     }
 
     /// Forward: the blocks that may have run before a point. Backward: the blocks that may run

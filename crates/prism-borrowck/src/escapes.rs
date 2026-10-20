@@ -70,40 +70,55 @@ pub(crate) fn check_escapes(
             else {
                 continue;
             };
+            // A box is an owned container that can be returned or stored anywhere, like a
+            // struct (D11 of `heap-boxes`); an `escaping` parameter may be kept by the callee; a
+            // generic slot's body sees a value of a type parameter.
+            let position = |index: usize, parameter: &Type| -> Option<&'static str> {
+                Some(
+                    if *callee == Callee::Builtin(BuiltinFunction::HeapAllocate) {
+                        "stored in a box here"
+                    } else if parameter_kinds
+                        .get(index)
+                        .is_some_and(|kind| kind.is_escaping())
+                    {
+                        "passed to an escaping parameter here"
+                    } else if parameter_kinds
+                        .get(index)
+                        .is_some_and(|kind| kind.is_attached())
+                    {
+                        "passed to an attached parameter here"
+                    } else if matches!(callee, Callee::State(_))
+                        && parameter.mentions_parameter_outside_functions()
+                    {
+                        // A state keeps the value it is given (D18 of `state-handles`).
+                        "stored in a state here"
+                    } else if parameter.mentions_parameter_outside_functions() {
+                        "passed to a generic parameter here"
+                    } else {
+                        return None;
+                    },
+                )
+            };
+            // The arguments that may escape: those of function or keeper type at an escaping
+            // position. The loan flow's state is sought only when there is one, or an `attached`
+            // argument that a keeper may keep, so a body without such calls replays nothing.
+            let candidates: Vec<(usize, &'static str, &Place, Type)> = arguments
+                .iter()
+                .zip(parameters)
+                .enumerate()
+                .filter_map(|(index, (operand, parameter))| {
+                    let position = position(index, parameter)?;
+                    let place = operand.place()?;
+                    let ty = escape_candidate_type(body, file, place)?;
+                    Some((index, position, place, ty))
+                })
+                .collect();
+            if candidates.is_empty() && !parameter_kinds.iter().any(|kind| kind.is_attached()) {
+                continue;
+            }
             let state = cursor.seek(location);
-            for (index, (operand, parameter)) in arguments.iter().zip(parameters).enumerate() {
-                // A box is an owned container that can be returned or stored anywhere, like a
-                // struct (D11 of `heap-boxes`); an `escaping` parameter may be kept by the
-                // callee; a generic slot's body sees a value of a type parameter.
-                let position = if *callee == Callee::Builtin(BuiltinFunction::HeapAllocate) {
-                    "stored in a box here"
-                } else if parameter_kinds
-                    .get(index)
-                    .is_some_and(|kind| kind.is_escaping())
-                {
-                    "passed to an escaping parameter here"
-                } else if parameter_kinds
-                    .get(index)
-                    .is_some_and(|kind| kind.is_attached())
-                {
-                    "passed to an attached parameter here"
-                } else if matches!(callee, Callee::State(_))
-                    && parameter.mentions_parameter_outside_functions()
-                {
-                    // A state keeps the value it is given (D18 of `state-handles`).
-                    "stored in a state here"
-                } else if parameter.mentions_parameter_outside_functions() {
-                    "passed to a generic parameter here"
-                } else {
-                    continue;
-                };
-                let Some(place) = operand.place() else {
-                    continue;
-                };
-                let ty = place.ty(body, &file.types);
-                if !places::contains_function(&ty) && !places::contains_keeper(&ty) {
-                    continue;
-                }
+            for (index, position, place, ty) in candidates {
+                let operand = &arguments[index];
                 let attached = parameter_kinds
                     .get(index)
                     .is_some_and(|kind| kind.is_attached());
@@ -139,6 +154,22 @@ pub(crate) fn check_escapes(
         let StatementKind::Assign(destination, rvalue) = &statement.kind else {
             continue;
         };
+        // The loan flow's state is sought only for a statement that may make a value escape:
+        // an aggregate of a function or keeper operand, or a write of one where it escapes.
+        let aggregate_escape = match rvalue.as_ref() {
+            Rvalue::Aggregate(_, operands) => operands.iter().any(|operand| {
+                operand
+                    .place()
+                    .is_some_and(|place| escape_candidate_type(body, file, place).is_some())
+            }),
+            _ => false,
+        };
+        if !aggregate_escape
+            && (checker.position(destination).is_none()
+                || escape_candidate_type(body, file, destination).is_none())
+        {
+            continue;
+        }
         let state = cursor.seek(location);
         if let Rvalue::Aggregate(kind, operands) = rvalue.as_ref() {
             let position = match kind {
@@ -512,10 +543,14 @@ impl Escapes<'_> {
             let Some(place) = operand.place() else {
                 continue;
             };
-            let untracked = self.flow.holds(state, place.local).iter().any(|item| match item {
-                Item::Loan(loan) => !self.tracks_loans(&self.borrows.loans[*loan].place),
-                Item::Input(_) => false,
-            });
+            let untracked = self
+                .flow
+                .holds(state, place.local)
+                .iter()
+                .any(|item| match item {
+                    Item::Loan(loan) => !self.tracks_loans(&self.borrows.loans[*loan].place),
+                    Item::Input(_) => false,
+                });
             if untracked {
                 return Some(self.attached_error(
                     item,
@@ -536,7 +571,7 @@ impl Escapes<'_> {
             if !places::carries_loans(&prefix.ty(self.body, &self.file.types)) {
                 return false;
             }
-            prefix.projections.push(projection.clone());
+            prefix.projections.push(*projection);
         }
         places::carries_loans(&prefix.ty(self.body, &self.file.types))
     }
@@ -833,6 +868,18 @@ impl Escapes<'_> {
 /// or a nullable one, in parentheses.
 fn escaping_type(ty: &Type) -> String {
     ty.to_string()
+}
+
+/// The type of `place` when a value of it may escape: it contains a function type or a
+/// keeper. A whole local's type is tested in place, without copying it.
+fn escape_candidate_type(body: &Body, file: &MirFile, place: &Place) -> Option<Type> {
+    let escapes = |ty: &Type| places::contains_function(ty) || places::contains_keeper(ty);
+    if place.projections.is_empty() {
+        let ty = &body.locals[place.local].ty;
+        return escapes(ty).then(|| ty.clone());
+    }
+    let ty = place.ty(body, &file.types);
+    escapes(&ty).then_some(ty)
 }
 
 /// What a reference type refers to, under nullables: `R` for `&R` or `(&R)?`.

@@ -92,6 +92,13 @@ pub struct ReachingUninitializations<'a> {
 impl ReachingUninitializations<'_> {
     /// Removes the events of `path` and of every path below it.
     fn kill_tree(&self, state: &mut BitSet, path: MovePathId) {
+        // Most paths are whole locals without field paths: their events alone, with no list.
+        if !self.data.has_children(path) {
+            for event in self.data.events_of(path) {
+                state.remove(self.data.event_index(*event));
+            }
+            return;
+        }
         for path in self.data.descendants(path) {
             for event in self.data.events_of(path) {
                 state.remove(self.data.event_index(*event));

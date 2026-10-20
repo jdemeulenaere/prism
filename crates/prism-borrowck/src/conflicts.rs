@@ -345,7 +345,10 @@ pub(crate) fn check_conflicts(
     let mut reported_drops: HashSet<LoanId> = HashSet::new();
     let mut errors = Vec::new();
     for location in locations(body) {
-        let live_after = live_cursor.seek(location);
+        // The locals live after the location, sought only when a conflicting loan's holder must
+        // be tested: a backward cursor copies its state at each location of a block it enters,
+        // which costs what many live locals hold.
+        let mut live_after = None;
         let state = flow_cursor.seek(location);
         let events = location_events(file, body, location, &checker.returned);
         for (index, event) in events.iter().enumerate() {
@@ -354,9 +357,11 @@ pub(crate) fn check_conflicts(
             };
             // The earliest loan of an overlapping place, which must be rooted at the same
             // local, that conflicts with the access and that a local in scope holds.
-            let in_scope = |local: LocalId| {
-                in_scope_after_event(&events[index + 1..], local)
-                    .unwrap_or_else(|| liveness.analysis.is_live(live_after, local))
+            let mut in_scope = |local: LocalId| {
+                in_scope_after_event(&events[index + 1..], local).unwrap_or_else(|| {
+                    let live = live_after.get_or_insert_with(|| live_cursor.seek(location).clone());
+                    liveness.analysis.is_live(live, local)
+                })
             };
             // A read or a shared borrow conflicts with mutable loans only, so the many shared
             // loans of a value lent to many parameters are not even looked at.
@@ -546,7 +551,7 @@ impl Checker<'_, '_> {
                     helps,
                 };
             }
-AccessKind::Drop | AccessKind::StorageDead => {
+            AccessKind::Drop | AccessKind::StorageDead => {
                 let name = place_name.clone();
                 let default_slot =
                     loan.mutable && loan.kind == LoanKind::Borrow(BorrowOrigin::Default);

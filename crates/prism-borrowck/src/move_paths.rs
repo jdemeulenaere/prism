@@ -111,8 +111,13 @@ pub struct MoveData {
     roots: Vec<MovePathId>,
     /// The child path of each path for each field index.
     fields: HashMap<(MovePathId, usize), MovePathId>,
-    /// The effects of each location: per block, per statement and then the terminator.
-    effects: Vec<Vec<Vec<Effect>>>,
+    /// The effects of every location, block by block, each block's statements and then its
+    /// terminator, in one array: one allocation for the body rather than one per location.
+    effects: Vec<Effect>,
+    /// Where the effects of each location start in `effects`, with the end of the last.
+    effect_starts: Vec<u32>,
+    /// The position in `effect_starts` of each block's first location.
+    block_starts: Vec<u32>,
     /// The events of each path: its moves, and the storage starts of a root path's local.
     path_events: Vec<Vec<Event>>,
 }
@@ -131,6 +136,8 @@ impl MoveData {
             roots: Vec::new(),
             fields: HashMap::new(),
             effects: Vec::new(),
+            effect_starts: Vec::new(),
+            block_starts: Vec::new(),
             path_events: Vec::new(),
         };
         for local in body.locals.ids() {
@@ -148,7 +155,7 @@ impl MoveData {
             }
         }
         for (block, block_data) in body.blocks.iter() {
-            let mut block_effects = Vec::new();
+            data.block_starts.push(data.effect_starts.len() as u32);
             let count = block_data.statements.len();
             for index in 0..=count {
                 let location = Location {
@@ -165,14 +172,16 @@ impl MoveData {
                     }
                 };
                 // Uses and moves carry their own spans; `span` is the location's.
-                let effects = raw
-                    .into_iter()
-                    .filter_map(|effect| data.resolve(body, types, effect, location, span, is_call))
-                    .collect();
-                block_effects.push(effects);
+                data.effect_starts.push(data.effects.len() as u32);
+                for effect in raw {
+                    if let Some(effect) = data.resolve(body, types, effect, location, span, is_call)
+                    {
+                        data.effects.push(effect);
+                    }
+                }
             }
-            data.effects.push(block_effects);
         }
+        data.effect_starts.push(data.effects.len() as u32);
         data.path_events = vec![Vec::new(); data.paths.len()];
         for (id, out) in data.moves.iter() {
             data.path_events[out.path.index()].push(Event::Move(id));
@@ -291,7 +300,8 @@ impl MoveData {
 
     /// The effects of `location`, in evaluation order.
     pub fn effects(&self, location: Location) -> &[Effect] {
-        &self.effects[location.block.index()][location.statement]
+        let index = self.block_starts[location.block.index()] as usize + location.statement;
+        &self.effects[self.effect_starts[index] as usize..self.effect_starts[index + 1] as usize]
     }
 
     /// The initializations at the body's entry: its arguments and captures.
@@ -300,6 +310,11 @@ impl MoveData {
             .iter()
             .map(|(_, init)| init)
             .filter(|init| init.kind == InitKind::Entry)
+    }
+
+    /// Whether a path lies below `path`.
+    pub fn has_children(&self, path: MovePathId) -> bool {
+        !self.paths[path].children.is_empty()
     }
 
     /// `path` and every path below it, `path` first.

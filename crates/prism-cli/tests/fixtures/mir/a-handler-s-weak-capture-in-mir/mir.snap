@@ -27,20 +27,16 @@ closure main::row#closure0(_1: Bool): Unit @4:29
   local _1 it: Bool (argument)
   local _2 todo.done: WeakReference<MutableState<Bool>> (capture)
   local _3: &MutableState<Bool> (temporary)
-  local _4: &MutableState<Bool> (temporary)
-  local _5: Bool (temporary)
-  local _6: Unit (temporary)
+  local _4: Bool (temporary)
+  local _5: Unit (temporary)
   bb0:
     storage_live _3 @4:31
     _3 = &view(_2) (receiver) @4:31
-    storage_live _4 @4:31
-    _4 = move _3 @4:31
-    storage_live _5 @4:49
-    _5 = copy _1 @4:49
-    storage_live _6 @4:31
-    _6 = call state write<Bool>(copy _4, move _5) -> bb1 @4:31
+    storage_live _4 @4:49
+    _4 = copy _1 @4:49
+    storage_live _5 @4:31
+    _5 = call state write<Bool>(copy _3, move _4) -> bb1 @4:31
   bb1:
-    storage_dead _6 @4:31
     storage_dead _5 @4:31
     storage_dead _4 @4:31
     storage_dead _3 @4:31
