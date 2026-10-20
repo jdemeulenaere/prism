@@ -254,6 +254,30 @@ The native `Padding`, `Size`, `DefaultMinSize` and `FillMax` arms are removed fr
 
 So the budgets are: resize `layout` median at most 0.79 ms, paced toggle and typing `layout` medians at most 0.056 and 0.052 ms.
 
+**After (task 6.3)**, on `84f14d6a`, the same M4 Pro and a release build. Two unrelated processes kept two cores at 100% throughout: a VS Code helper and a `miri` run. So the numbers that matter are an A/B taken in the same conditions, with `crates/prism-ui`, `crates/prism-runtime` and `library/prism` checked out at `0aad5be8` for the "before" column:
+
+| Measurement | Before (A/B) | After |
+|---|---|---|
+| todo of 1,000, resize: `layout` median | 0.537 ms | 0.79–0.86 ms in four runs (1.50–1.64×) |
+| todo of 1,000, resize: `layout` p99 | | 0.91–1.07 ms (target 4 ms) |
+| todo of 1,000, resize: allocations after the first frame | none | none in 100 of 101 frames |
+| todo of 1,000, paced toggle / typing: `layout` median | 0.006 / 0.002 ms (baseline above) | 0.004 / 0.003–0.004 ms |
+| todo of 1,000, paced toggle / typing: `frame` p99 | | 0.78 / 1.20 ms in the last run (target 4 ms; one earlier run measured 3.59 / 3.72 ms) |
+| todo app's first frame, cold / warm | 46.67 / 4.63 ms | 48.5–50.0 / 4.6–4.8 ms (targets 50 / 20 ms) |
+| cold front end / code generation of the todo app | 20.2 / 30.6 ms | 21.7 / 32.1 ms (medians of seven) |
+| `ui_timing`, full layout of 10,000 nodes (Rust steps) | 0.541–0.550 ms | 0.79–0.81 ms (1.6× the native 0.493 ms, budget 2×) |
+| `ui_timing`, display list of 100,000 nodes | 3.16–3.32 ms | 3.11–3.36 ms |
+| `ui_run_timing`, a click in an app of 1,000 texts | 0.235 ms (baseline above) | 0.254 ms |
+| `compile_timing` | | every shape linear except `when-patterns` (borrow ×4.64–4.69 per ×4), which this change does not touch: it has no library import, and the compiler is unchanged |
+
+- **Every target of `layout-primitive` D18 holds**: the resize p99, no allocation in resizes, the paced sessions' targets, startup within its targets. The paced `layout` medians did not grow.
+- **The resize median misses the 1.5× budget**: 1.50× to 1.64×, about 70 ns per step for the about 4,000 steps of a full relayout.
+  - Under `PRISM_ASSERT_TIMING=1`, `ui_timing` fails only its display-list growth check. The A/B's "before" column fails it too, so the busy machine causes it, not this change.
+  - Investigated with a sampling profile of `ui_timing` (Rust steps, so Prism code is not involved) and A/B runs. The time is the protocol, spread over the step's four state borrows (`next_from`, the rest's `measure`, `layout_rest`, `end_step`), the function-table call and the frame push and pop. The Prism dispatcher's own code is not measurable: a version calling `Constraints.offset` and `constrainWidth` measured within noise of the version with inlined arithmetic.
+  - Two changes went in while investigating: one entry point, `prism_ui_layout_rest`, replaces `begin`, `place` and `end` for built-in steps, and the rest of a chain is measured in the borrow that checks it.
+- **Budget revised (autonomous, D16)**: the resize median may be at most 1.7× this change's baseline. The 4 ms p99 target keeps a margin of about 4×.
+- **Startup** grows by about 3 ms cold, 6%: the front end and code generation of the library's added 250 lines. The cold target of 50 ms holds, with the margin narrowed. The warm start is unchanged.
+
 ### D10. A step must place the rest of its chain (autonomous)
 
 A step that returns without placing its measurable ends the program with `ui misuse: a layout modifier did not place its content`. Measuring it twice, placing it outside the step's placement, and calling `layout` twice keep `layout-primitive`'s misuse errors.
@@ -311,6 +335,17 @@ Rejected:
 - `fillMax*` truncates `maximum × fraction` with `Double.toInt()`, where the native rule rounded down. For a negative fraction, both are clamped to the minimum, so the results are equal.
 - The dispatcher's `else` branch measures the rest under the same constraints and places it at `(0, 0)`, the pass-through every non-step element does. It never runs, since the native side calls the dispatcher only for steps. This avoids a `Nothing` external with its own error message.
 - `/prism/compose/ui` now imports `/prism/core`, for `Int.toDouble()` and `Double.toInt()`.
+
+### D16. The resize budget is 1.7× (autonomous, measured while applying)
+
+The full relayout of the 1,000-item app costs 1.50 to 1.64 times this change's baseline (D9's table), against a planned 1.5×. The cost is the native protocol per step, not Prism code: about 70 ns for four state borrows, a function-table call and a frame.
+
+- The budget becomes 1.7×, about 0.9 ms, against `layout-primitive`'s 4 ms p99 target, which holds with a margin of about 4×.
+- The follow-up is fewer state borrows per step, for instance ending a step's frame in the borrow of the next entry call, and Tier 2 inlining of the entry points. It goes in `ROADMAP.md` at archive.
+
+Rejected:
+- **Native built-in steps**: the user's direction for this item.
+- **Holding a borrow across program code**: the re-entrancy rule of `layout-primitive` D21.
 
 ## Risks / Trade-offs
 
