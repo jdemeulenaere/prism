@@ -37,12 +37,18 @@ static CHECKING: AtomicBool = AtomicBool::new(false);
 /// The function that drops a top-level value in place, its drop glue.
 pub type DropFunction = extern "C" fn(*mut u8);
 
+/// The state a top-level value's state byte holds once the allocation check dropped it (D13 of
+/// `drop-and-clone-hooks`), after the generated accessor's uninitialized (0), initializing (1)
+/// and initialized (2): its accessor then returns null, and the read raises "read after the
+/// allocation check dropped it".
+pub const TOP_LEVEL_VALUE_DROPPED: u8 = 3;
+
 /// What the allocation check tracks.
 struct Tracking {
     allocations: AllocationMap,
-    /// The storage of each initialized top-level value that owns memory, and its drop glue, in
-    /// order of initialization.
-    top_level_values: Vec<(usize, DropFunction)>,
+    /// The storage of each initialized top-level value that owns memory or reaches a drop hook,
+    /// its drop glue and its state byte, in order of initialization.
+    top_level_values: Vec<(usize, DropFunction, usize)>,
 }
 
 static TRACKING: Mutex<Tracking> = Mutex::new(Tracking {
@@ -189,13 +195,22 @@ pub fn set_finish_report(report: Option<FinishReport>) {
 /// Ends a checked run whose `main` returned: drops the registered top-level values in reverse
 /// order of initialization, then gives the finish report's line and the report of the
 /// allocations still live, if any, one per line. Without the check, gives nothing.
+///
+/// A drop runs the value's hooks (D13 of `drop-and-clone-hooks`), which may read other top-level
+/// values: each value is marked dropped in its state byte before its drop, so that reading it
+/// later is a runtime error rather than a read of freed memory, and a value a hook initializes
+/// registers and is dropped in turn, the latest first, until none is left.
 pub(crate) fn finish_tracking() -> Option<String> {
     if !CHECKING.load(Ordering::Relaxed) {
         return None;
     }
-    // The drops free through `prism_rt_free`, which takes the lock: release it first.
-    let values = with_tracking(|tracking| std::mem::take(&mut tracking.top_level_values));
-    for (storage, drop) in values.into_iter().rev() {
+    // The drops free through `prism_rt_free`, which takes the lock: release it before each.
+    while let Some((storage, drop, state)) =
+        with_tracking(|tracking| tracking.top_level_values.pop())
+    {
+        // SAFETY: `state` is the state byte the value's accessor registered, which lives as
+        // long as the program's value table.
+        unsafe { *(state as *mut u8) = TOP_LEVEL_VALUE_DROPPED };
         drop(storage as *mut u8);
     }
     let report = *FINISH_REPORT
@@ -337,9 +352,17 @@ pub unsafe extern "C" fn prism_rt_free(pointer: *mut u8, size: usize, alignment:
 /// registration before reporting what is still live; otherwise nothing is recorded, since
 /// top-level values are never dropped.
 #[no_mangle]
-pub extern "C" fn prism_rt_register_top_level_value(storage: *mut u8, drop: DropFunction) {
+pub extern "C" fn prism_rt_register_top_level_value(
+    storage: *mut u8,
+    drop: DropFunction,
+    state: *mut u8,
+) {
     if CHECKING.load(Ordering::Relaxed) {
-        with_tracking(|tracking| tracking.top_level_values.push((storage as usize, drop)));
+        with_tracking(|tracking| {
+            tracking
+                .top_level_values
+                .push((storage as usize, drop, state as usize))
+        });
     }
 }
 
@@ -424,8 +447,14 @@ mod tests {
         assert_eq!(allocation_statistics().live_allocations, 1);
         // A top-level value owning the only allocation is released before the check.
         let mut storage = pointer;
-        prism_rt_register_top_level_value(std::ptr::addr_of_mut!(storage).cast(), free_five_bytes);
+        let mut state = 2u8;
+        prism_rt_register_top_level_value(
+            std::ptr::addr_of_mut!(storage).cast(),
+            free_five_bytes,
+            std::ptr::addr_of_mut!(state),
+        );
         assert_eq!(finish_tracking(), None);
+        assert_eq!(state, TOP_LEVEL_VALUE_DROPPED);
         assert_eq!(
             allocation_statistics(),
             AllocationStatistics {

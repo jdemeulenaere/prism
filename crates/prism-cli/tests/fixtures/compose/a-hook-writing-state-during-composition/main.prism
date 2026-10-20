@@ -1,0 +1,9 @@
+// expect: ok
+// run: 101
+import /prism/compose/runtime
+
+val Count: MutableState<Int> = mutableStateOf(0)
+struct Bump { val n: Int }
+operator mut fun Bump.drop() { Count.value += n }
+compose fun Content() { val b = Bump(1) }
+fun main() { val c = composition { Content() } }

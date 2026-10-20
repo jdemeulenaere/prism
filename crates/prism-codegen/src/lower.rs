@@ -1568,13 +1568,24 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         let signature = self.builder.import_signature(accessor);
         let call = self.builder.ins().call_indirect(signature, target, &[]);
         let address = self.builder.inst_results(call)[0];
-        let null = self.builder.ins().icmp_imm_s(IntCC::Equal, address, 0);
-        self.check(
-            null,
-            PanicKind::ValueReadDuringInitialization,
-            &path.name,
-            span,
-        )?;
+        // The accessor gives 0 for a read during the value's own initialization and 1 for a
+        // read after the allocation check dropped it (D13 of `drop-and-clone-hooks`): the fast
+        // path tests the address once.
+        let unavailable = self
+            .builder
+            .ins()
+            .icmp_imm_s(IntCC::UnsignedLessThan, address, 2);
+        let failure = self.builder.create_block();
+        let success = self.builder.create_block();
+        self.builder.set_cold_block(failure);
+        self.builder
+            .ins()
+            .brif(unavailable, failure, &[], success, &[]);
+        self.builder.switch_to_block(failure);
+        let dropped = self.builder.ins().icmp_imm_s(IntCC::Equal, address, 1);
+        self.check(dropped, PanicKind::TopLevelValueDropped, &path.name, span)?;
+        self.panic(PanicKind::ValueReadDuringInitialization, &path.name, span)?;
+        self.builder.switch_to_block(success);
         Ok(address)
     }
 

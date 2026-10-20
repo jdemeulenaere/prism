@@ -101,7 +101,11 @@ pub fn start(arguments: Vec<String>, check_allocations: bool) {
 /// released, reports them on stderr and gives [`ALLOCATION_CHECK_EXIT_STATUS`].
 pub fn finish() -> i32 {
     flush();
-    match finish_tracking() {
+    // Dropping the top-level values under the check runs their hooks, which may print (D13 of
+    // `drop-and-clone-hooks`): their output is flushed before the report.
+    let report = finish_tracking();
+    flush();
+    match report {
         None => 0,
         Some(report) => {
             let mut stderr = std::io::stderr().lock();

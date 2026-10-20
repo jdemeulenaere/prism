@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+import /prism/core
+import /prism/compose/runtime
+
+struct Noisy { val name: String }
+operator mut fun Noisy.drop() { println("drop " + name) }
+val Visible: MutableState<Bool> = mutableStateOf(true)
+compose fun Held() { val s = remember { mutableStateOf(Noisy("held")) }; println("composed") }
+fun dispose(c: Composition) {}
+fun main() { val c = composition { if (Visible.value) { Held() } }; Visible.value = false; c.recompose(); println("removed"); dispose(c); println("done") }

@@ -313,6 +313,13 @@ fn instantiated_symbols(files: &[prism_mir::MirFile]) -> std::collections::BTree
     seen
 }
 
+/// Whether `symbol` names an instance of a generic type's drop or clone hook
+/// (`app/main::app/main.Owned.drop<Bool>`).
+fn is_hook_instance(symbol: &str) -> bool {
+    let name = symbol.split('<').next().unwrap_or(symbol);
+    name.ends_with(".drop") || name.ends_with(".clone")
+}
+
 #[test]
 fn planning_finds_the_instances_instantiation_finds() {
     let mut programs = 0;
@@ -327,7 +334,15 @@ fn planning_finds_the_instances_instantiation_finds() {
         };
         let planned: std::collections::BTreeSet<String> =
             units.into_iter().map(|unit| unit.symbol).collect();
-        assert_eq!(planned, expected, "{}", entry.display());
+        // Planning also finds the hook instances of generic types the bodies hold, which no
+        // call names (D11 of `drop-and-clone-hooks`): beside them, it finds exactly what
+        // instantiation finds.
+        let calls: std::collections::BTreeSet<String> = planned
+            .iter()
+            .filter(|symbol| !is_hook_instance(symbol))
+            .cloned()
+            .collect();
+        assert_eq!(calls, expected, "{}", entry.display());
         if !expected.is_empty() {
             programs += 1;
         }

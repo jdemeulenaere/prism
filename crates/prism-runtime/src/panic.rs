@@ -110,11 +110,15 @@ pub enum PanicKind {
     /// the detail says which and why (D16 of `desktop-window`). Reported without a location,
     /// since it is the environment's failure, not an expression's.
     DisplayFailed = 17,
+    /// A top-level value read after the allocation check dropped it, by a drop hook that runs
+    /// while the check drops top-level values; the detail is its name (D13 of
+    /// `drop-and-clone-hooks`).
+    TopLevelValueDropped = 18,
 }
 
 impl PanicKind {
     /// Every kind, in code order.
-    pub const ALL: [PanicKind; 18] = [
+    pub const ALL: [PanicKind; 19] = [
         PanicKind::IntegerOverflow,
         PanicKind::DivisionByZero,
         PanicKind::ValueReadDuringInitialization,
@@ -133,6 +137,7 @@ impl PanicKind {
         PanicKind::UiMisuse,
         PanicKind::EventScriptFailed,
         PanicKind::DisplayFailed,
+        PanicKind::TopLevelValueDropped,
     ];
 
     /// The kind with code `code`.
@@ -171,6 +176,10 @@ pub fn panic_message(kind: PanicKind, detail: &str) -> String {
         PanicKind::UiMisuse => format!("ui misuse: {}", detail),
         PanicKind::EventScriptFailed => format!("event script line {}", detail),
         PanicKind::DisplayFailed => format!("display error: {}", detail),
+        PanicKind::TopLevelValueDropped => format!(
+            "top-level value '{}' read after the allocation check dropped it",
+            detail
+        ),
     }
 }
 
@@ -357,6 +366,11 @@ mod tests {
                 PanicKind::DisplayFailed,
                 "cannot open a window (no display)",
                 "display error: cannot open a window (no display)",
+            ),
+            (
+                PanicKind::TopLevelValueDropped,
+                "A",
+                "top-level value 'A' read after the allocation check dropped it",
             ),
         ];
         assert_eq!(cases.len(), PanicKind::ALL.len());

@@ -204,6 +204,15 @@ impl<'t> TypeFingerprints<'t> {
             Some(prism_ast::TypeMarker::Copy) => 1,
             Some(prism_ast::TypeMarker::Clone) => 2,
         });
+        // Whether the type has a drop and a clone hook: values made with and without one must
+        // never meet glue of the other kind (D12 of `drop-and-clone-hooks`). A type without
+        // hooks keeps the bytes it always had.
+        if self.types.has_drop_hook(id) {
+            inner.write_str("drop hook");
+        }
+        if self.types.has_clone_hook(id) {
+            inner.write_str("clone hook");
+        }
         // The type arguments are hashed whatever the definition says: a struct without fields,
         // such as an intrinsic state handle, whose one word names a cell of its argument's
         // type, is a different type for each argument (`State<Int>` is not `State<String>`).

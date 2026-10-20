@@ -2778,3 +2778,16 @@ fn clone_glue_calls_a_generic_type_s_clone_hook_instance() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     function_ir(&stdout(&output), "main::main.Owned.clone<String>");
 }
+
+/// execution: "Without the check a top-level value runs no hook".
+#[test]
+fn without_the_check_a_top_level_value_runs_no_hook() {
+    let directory = single_file(
+        "top_level_hook_unchecked",
+        "import /prism/core\nstruct Noisy { val name: String }\noperator mut fun Noisy.drop() { println(\"drop \" + name) }\nval GLOBAL: Noisy = Noisy(\"global\")\nfun main() { println(GLOBAL.name) }\n",
+    );
+    let output = prism(&["run", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "global\n");
+    assert_eq!(stderr(&output), "");
+}

@@ -1,0 +1,6 @@
+import /prism/core
+
+struct T { val id: Int }
+operator mut fun T.drop() {}
+fun show(t: &T) { println(t.id * 10) }
+fun main() { val t = T(1); show(t); show(t) }

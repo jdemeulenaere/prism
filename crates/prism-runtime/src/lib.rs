@@ -40,7 +40,7 @@ pub use allocation::{
     allocation_layout, allocation_statistics, prism_rt_allocate, prism_rt_free,
     prism_rt_reallocate, prism_rt_register_top_level_value, set_finish_report, test_lock,
     AllocationMap, AllocationStatistics, DropFunction, FinishReport, InvalidFree,
-    ALLOCATION_CHECK_EXIT_STATUS, INVALID_FREE_MESSAGE,
+    ALLOCATION_CHECK_EXIT_STATUS, INVALID_FREE_MESSAGE, TOP_LEVEL_VALUE_DROPPED,
 };
 pub use double::format_double;
 pub use function_value::{prism_rt_empty_environments_equal, Descriptor, FunctionValue};

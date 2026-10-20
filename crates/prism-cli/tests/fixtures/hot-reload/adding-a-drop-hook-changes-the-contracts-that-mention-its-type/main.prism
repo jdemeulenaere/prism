@@ -1,0 +1,8 @@
+import /prism/core
+
+struct T { val id: Int }
+fun show(t: &T) { println(t.id) }
+fun main() { val t = T(1); show(t); show(t) }
+// expect: ok
+// run: 0
+// watch: edits

@@ -74,6 +74,9 @@ pub(crate) mod state {
     pub const UNINITIALIZED: i64 = 0;
     pub const INITIALIZING: i64 = 1;
     pub const INITIALIZED: i64 = 2;
+    /// Dropped by the allocation check after `main` returned (D13 of `drop-and-clone-hooks`),
+    /// written by the runtime.
+    pub const DROPPED: i64 = prism_runtime::TOP_LEVEL_VALUE_DROPPED as i64;
 }
 
 // The state byte is zero-initialized data, which must read as uninitialized.
@@ -458,7 +461,8 @@ impl<'m, M: Module> UnitContext<'m, M> {
 
     /// The generated accessor of the top-level `val` `path` of type `ty` (D18): it returns the
     /// address of the value's storage, running the initializer through its slot on the first
-    /// call, and a null pointer when called again while the initializer runs. A value in memory
+    /// call, a null pointer when called again while the initializer runs, and 1 after the
+    /// allocation check dropped the value (D13 of `drop-and-clone-hooks`). A value in memory
     /// is built in place: the storage's address is the initializer's result address (D17 of
     /// `codegen-aggregates`). A value that owns storage is never dropped, but registered with the
     /// runtime with its drop glue once initialized, so the allocation check can release it before
@@ -521,17 +525,24 @@ impl<'m, M: Module> UnitContext<'m, M> {
                 .ins()
                 .brif(initialized, done, &[], not_initialized, &[]);
 
+            // Initializing, or dropped by the allocation check: the reader raises the error.
             builder.switch_to_block(not_initialized);
-            let initializing = builder
-                .ins()
-                .icmp_imm_s(IntCC::Equal, current, state::INITIALIZING);
+            let uninitialized =
+                builder
+                    .ins()
+                    .icmp_imm_s(IntCC::Equal, current, state::UNINITIALIZED);
             builder
                 .ins()
-                .brif(initializing, reentered, &[], initialize, &[]);
+                .brif(uninitialized, initialize, &[], reentered, &[]);
 
+            // 0 while the initializer runs, 1 once the allocation check dropped the value: never
+            // an address.
             builder.switch_to_block(reentered);
-            let null = builder.ins().iconst(pointer, 0);
-            builder.ins().return_(&[null]);
+            let dropped = builder
+                .ins()
+                .icmp_imm_s(IntCC::Equal, current, state::DROPPED);
+            let unavailable = builder.ins().uextend(pointer, dropped);
+            builder.ins().return_(&[unavailable]);
 
             builder.switch_to_block(initialize);
             let marker = builder.ins().iconst(types::I8, state::INITIALIZING);
@@ -568,7 +579,7 @@ impl<'m, M: Module> UnitContext<'m, M> {
                 let register = self.module.declare_func_in_func(register, builder.func);
                 builder
                     .ins()
-                    .call(register, &[storage_address, glue_address]);
+                    .call(register, &[storage_address, glue_address, state_address]);
             }
             let end_program = self.module.declare_func_in_func(end_program, builder.func);
             builder.ins().call(end_program, &[pushed]);

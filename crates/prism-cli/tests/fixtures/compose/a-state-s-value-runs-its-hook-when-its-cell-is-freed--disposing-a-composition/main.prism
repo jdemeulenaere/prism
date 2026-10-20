@@ -1,0 +1,36 @@
+// expect: ok
+// run: 0
+import /prism/core
+import /prism/composer
+import /prism/compose/runtime
+
+struct Session { val id: Int }
+fun open(): Session = Session(startComposition { k -> })
+operator mut fun Session.drop() { println("dispose session"); disposeComposition(id) }
+val Visible: MutableState<Bool> = mutableStateOf(true)
+val Ref: MutableState<WeakReference<MutableState<Session?>>?> = mutableStateOf(null)
+compose fun Held() {
+    val s = remember { mutableStateOf<Session?>(null) }
+    val weak = s.weak()
+    SideEffect { Ref.value = weak }
+    println("composed")
+}
+fun fill() {
+    val weak = Ref.value ?: return
+    val t = weak.get() ?: return
+    t.value = open()
+}
+fun main() {
+    val c = composition { if (Visible.value) { Held() } }
+    fill()
+    Visible.value = false
+    c.recompose()
+    println("removed")
+    Visible.value = true
+    c.recompose()
+    println("again")
+    fill()
+    Visible.value = false
+    c.recompose()
+    println("done")
+}

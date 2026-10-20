@@ -1,0 +1,7 @@
+import /prism/core
+
+struct Ticket { val id: Int }
+fun main() { val t = Ticket(1); println("made"); println(t.id) }
+// expect: ok
+// run: 0
+// watch: edits

@@ -1,0 +1,2 @@
+panic: top-level value 'A' read after the allocation check dropped it
+  at main.prism:8:42

@@ -301,7 +301,7 @@ pub static RUNTIME_FUNCTIONS: &[RuntimeFunction] = &[
     RuntimeFunction {
         name: "prism_rt_register_top_level_value",
         address: RuntimeAddress(prism_rt_register_top_level_value as *const u8),
-        parameters: &[Pointer, Pointer],
+        parameters: &[Pointer, Pointer, Pointer],
         result: None,
         never_returns: false,
     },

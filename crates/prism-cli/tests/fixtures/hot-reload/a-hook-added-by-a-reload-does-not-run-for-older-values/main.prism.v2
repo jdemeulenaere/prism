@@ -1,0 +1,5 @@
+import /prism/core
+
+struct Ticket { val id: Int }
+operator mut fun Ticket.drop() { println("hook") }
+fun main() { val t = Ticket(1); println("made"); println(t.id) }
