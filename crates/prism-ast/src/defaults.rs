@@ -96,7 +96,9 @@ impl Reader<'_> {
                         .as_ref()
                         .is_none_or(|branch| self.expression(branch))
             }
-            ExprKind::Index { target, index } => self.expression(target) && self.expression(index),
+            ExprKind::Index { target, indices } => {
+                self.expression(target) && indices.iter().all(|index| self.expression(index))
+            }
             ExprKind::Template(parts) => parts.iter().all(|part| match part {
                 TemplatePart::Text(_) => true,
                 TemplatePart::Expression(part) => self.expression(part),

@@ -71,6 +71,10 @@ pub enum BinaryOp {
     Elvis,         // ?:
     Range,         // ..
     HalfOpenRange, // ..<
+    /// `a in b`: membership, `b.contains(a)` (D8 of `operator-conventions`).
+    In,
+    /// `a !in b`: the negated membership test.
+    NotIn,
 }
 
 impl BinaryOp {
@@ -92,6 +96,8 @@ impl BinaryOp {
             BinaryOp::Elvis => "?:",
             BinaryOp::Range => "..",
             BinaryOp::HalfOpenRange => "..<",
+            BinaryOp::In => "in",
+            BinaryOp::NotIn => "!in",
         }
     }
 }
@@ -322,9 +328,11 @@ pub enum ExprKind {
         arrow: Option<Span>,
         body: Block,
     },
+    /// `target[i]` or `target[i, j]`: one or more indices, in order (D9 of
+    /// `operator-conventions`).
     Index {
         target: Box<Expr>,
-        index: Box<Expr>,
+        indices: Vec<Expr>,
     },
     /// A string template, `"Count: $count, ${a + b}"`: its text runs and parts in source order
     /// (D5 of `string-templates`). A `$name` part is an `Ident` (or `This`) spanning the name
@@ -458,8 +466,9 @@ impl fmt::Display for Expr {
                 }
                 write!(f, "{} }}", body.summary())
             }
-            ExprKind::Index { target, index } => {
-                write!(f, "{}[{}]", target, index)
+            ExprKind::Index { target, indices } => {
+                let written: Vec<String> = indices.iter().map(|index| index.to_string()).collect();
+                write!(f, "{}[{}]", target, written.join(", "))
             }
             ExprKind::Template(parts) => {
                 write!(f, "\"")?;

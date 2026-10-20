@@ -1610,3 +1610,109 @@ fn dumps_never_read_the_cache() {
     let instances = workspace.run(&["dump-clif", "--instances", "app/main.prism"]);
     assert_success(&instances);
 }
+
+// --- Operator functions and equality operators (operator-conventions)
+
+const VECTOR_PLUS: &str =
+    "package geometry\npublic struct Vector2 : Copy { val x: Int, val y: Int }\n\
+     public fun Vector2.plus(other: Vector2): Vector2 = Vector2(x + other.x, y + other.y)\n";
+const VECTOR_MAIN: &str = "package app\nimport /geometry/vector\n\
+     fun f(a: Vector2, b: Vector2): Vector2 = a.plus(b)\n";
+
+/// compilation-and-abi: "Marking a function operator changes the hash".
+#[test]
+fn marking_a_function_operator_changes_the_hash() {
+    let workspace = Workspace::new(
+        "operator_flag",
+        &[
+            ("geometry/vector.prism", VECTOR_PLUS),
+            ("app/main.prism", VECTOR_MAIN),
+        ],
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&["checked geometry/vector.prism", "checked app/main.prism"])
+    );
+    workspace.write(
+        "geometry/vector.prism",
+        &VECTOR_PLUS.replace(
+            "public fun Vector2.plus",
+            "public operator fun Vector2.plus",
+        ),
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&["checked geometry/vector.prism", "checked app/main.prism"])
+    );
+}
+
+const USER_MODEL: &str = "package models\npublic struct User { val id: Int, val name: String }\n";
+const USER_EQUALS: &str = "public operator fun User.equals(other: &User): Bool = id == other.id\n";
+const USER_MAIN: &str = "package app\nimport /prism/core\nimport /lib/box\nimport /models/user\n\
+     fun main() { println(keep(User(1, \"a\")).id) }\n";
+
+/// compilation-and-abi: "Adding an equality operator changes the type's definition".
+#[test]
+fn adding_an_equality_operator_changes_the_type_s_definition() {
+    let workspace = Workspace::new(
+        "equality_flag",
+        &[
+            ("lib/box.prism", KEEP),
+            ("models/user.prism", USER_MODEL),
+            ("app/main.prism", USER_MAIN),
+        ],
+    );
+    workspace.run_explain("app/main.prism");
+    workspace.write(
+        "models/user.prism",
+        &format!("{}{}", USER_MODEL, USER_EQUALS),
+    );
+    assert_eq!(
+        workspace.run_explain("app/main.prism"),
+        (
+            "1\n".to_string(),
+            lines(&[
+                "reused lib/box.prism",
+                "checked models/user.prism",
+                "checked app/main.prism",
+                "instantiate lib/box::keep<models/user::User>",
+            ])
+        )
+    );
+}
+
+/// compilation-and-abi: "Editing an operator body recompiles nothing downstream".
+#[test]
+fn editing_an_operator_body_recompiles_nothing_downstream() {
+    let plus = "public operator fun User.plus(other: &User): Int = id + other.id\n";
+    let workspace = Workspace::new(
+        "operator_body",
+        &[
+            ("lib/box.prism", KEEP),
+            (
+                "models/user.prism",
+                &format!("{}{}{}", USER_MODEL, USER_EQUALS, plus),
+            ),
+            ("app/main.prism", USER_MAIN),
+        ],
+    );
+    workspace.run_explain("app/main.prism");
+    workspace.write(
+        "models/user.prism",
+        &format!(
+            "{}{}{}",
+            USER_MODEL,
+            USER_EQUALS.replace("id == other.id", "name == other.name"),
+            plus.replace("id + other.id", "id - other.id")
+        ),
+    );
+    let (output, explained) = workspace.run_explain("app/main.prism");
+    assert_eq!(output, "1\n");
+    assert!(
+        explained.contains(&"checked models/user.prism".to_string())
+            && explained.contains(&"reused app/main.prism".to_string())
+            && explained.contains(&"reused instance lib/box::keep<models/user::User>".to_string()),
+        "{:?}",
+        explained
+    );
+}

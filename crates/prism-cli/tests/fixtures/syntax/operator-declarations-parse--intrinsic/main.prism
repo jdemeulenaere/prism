@@ -1,0 +1,2 @@
+// expect: E3002
+public intrinsic operator fun <T> List<T>.contains(element: &T): Bool

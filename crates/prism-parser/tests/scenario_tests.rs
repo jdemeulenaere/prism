@@ -1689,3 +1689,188 @@ fn misplaced_library_forms_are_rejected() {
         "at the end of the signature"
     );
 }
+
+// --- operator-conventions ---
+
+/// The only function declared by `src`.
+fn function(src: &str) -> FunctionDecl {
+    match parse(src).declarations.into_iter().next() {
+        Some(Declaration::Function(f)) => f,
+        other => panic!("expected a function, got {:?}", other),
+    }
+}
+
+/// Scenario "Operator declarations parse".
+#[test]
+fn operator_declarations_parse() {
+    let plus = function("operator fun Vector2.plus(other: Vector2): Vector2 = other");
+    assert!(plus.is_operator);
+    assert_eq!(plus.visibility, Visibility::Private);
+    assert_eq!(plus.receiver.as_ref().unwrap().mode, ReceiverMode::Shared);
+    let get =
+        function("public operator mut fun Bag.get(index: Int): &mut Item = &mut items[index]");
+    assert!(get.is_operator);
+    assert_eq!(get.visibility, Visibility::Public);
+    assert_eq!(get.receiver.as_ref().unwrap().mode, ReceiverMode::Mutable);
+    let text = function("operator consuming fun Text.plus(other: &Text): Text = this");
+    assert!(text.is_operator);
+    assert_eq!(
+        text.receiver.as_ref().unwrap().mode,
+        ReceiverMode::Consuming
+    );
+    let contains =
+        function("public intrinsic operator fun <T> List<T>.contains(element: &T): Bool");
+    assert!(contains.is_operator && contains.is_intrinsic());
+    assert_eq!(contains.visibility, Visibility::Public);
+    assert!(!function("fun Vector2.plus(other: Vector2): Vector2 = other").is_operator);
+}
+
+/// Scenario "Operator modifiers in the wrong order rejected".
+#[test]
+fn operator_modifiers_in_the_wrong_order_rejected() {
+    for src in [
+        "operator public fun P.plus(o: P): P = o",
+        "mut operator fun P.minus(o: P): P = o",
+        "operator operator fun P.times(o: P): P = o",
+        "operator intrinsic fun P.div(o: P): P",
+    ] {
+        let error = parse_source(src).expect_err(src);
+        assert_eq!(error.code, "E2001", "{}", src);
+    }
+}
+
+/// Scenario "operator as an identifier".
+#[test]
+fn operator_as_an_identifier() {
+    let f = function("fun operator(operator: Int): Int = operator");
+    assert_eq!(f.name, "operator");
+    assert!(!f.is_operator);
+    assert_eq!(f.params[0].name, "operator");
+    let items = block_stmts("fun f() { val operator = 1; g(operator = operator) }");
+    let ExprKind::Call { args, .. } = &expr_of(&items[1]).kind else {
+        panic!("expected a call");
+    };
+    assert_eq!(args[0].name.as_deref(), Some("operator"));
+    assert_eq!(ident(&args[0].value), "operator");
+    let call = expr_body("fun f(): Int = x.operator()");
+    let ExprKind::Call { callee, .. } = &call.kind else {
+        panic!("expected a call");
+    };
+    assert!(matches!(&callee.kind, ExprKind::MemberAccess { member, .. } if member == "operator"));
+}
+
+/// Scenario "Membership precedence".
+#[test]
+fn membership_precedence() {
+    let shape = |body: &str| expr_body(&format!("fun f(): Bool = {}", body)).to_string();
+    assert_eq!(shape("x in xs == true"), "((x in xs) == true)");
+    assert_eq!(shape("a ?: b in xs"), "((a ?: b) in xs)");
+    assert_eq!(shape("n in 0..<k + 1"), "(n in (0 ..< (k + 1)))");
+    assert_eq!(shape("x !in xs || y"), "((x !in xs) || y)");
+    let negated = expr_body("fun f(): Bool = !(x in xs)");
+    let ExprKind::Unary {
+        op: UnaryOp::Not,
+        expr,
+    } = &negated.kind
+    else {
+        panic!("expected a negation, got {}", negated);
+    };
+    assert!(matches!(
+        expr.kind,
+        ExprKind::Binary {
+            op: BinaryOp::In,
+            ..
+        }
+    ));
+}
+
+/// Scenario "Chained membership rejected".
+#[test]
+fn chained_membership_rejected() {
+    for (src, second) in [
+        (
+            "fun f(): Bool = a in b in c",
+            "fun f(): Bool = a in b ".len(),
+        ),
+        (
+            "fun f(): Bool = a !in b in c",
+            "fun f(): Bool = a !in b ".len(),
+        ),
+    ] {
+        let error = parse_source(src).expect_err(src);
+        assert_eq!(error.code, "E2001");
+        assert_eq!(error.span.start, second, "{}", src);
+    }
+    assert_eq!(
+        expr_body("fun f(): Bool = (a in b) in c").to_string(),
+        "((a in b) in c)"
+    );
+}
+
+/// Scenario "Loops and patterns keep their in".
+#[test]
+fn loops_and_patterns_keep_their_in() {
+    let items = block_stmts("fun f() { for (x in xs) {} }");
+    let StatementKind::For {
+        variable, iterable, ..
+    } = &items[0].kind
+    else {
+        panic!("expected a loop");
+    };
+    assert_eq!(variable, "x");
+    assert_eq!(ident(iterable), "xs");
+    let when = expr_body("fun f(n: Int): Int = when (n) { in 0..<10 -> 1; else -> 2 }");
+    let ExprKind::When { branches, .. } = &when.kind else {
+        panic!("expected a when");
+    };
+    assert!(matches!(
+        &branches[0].patterns[0],
+        WhenPattern::Pattern(Pattern {
+            kind: PatternKind::InRange { .. },
+            ..
+        })
+    ));
+}
+
+/// Scenario "Several indices".
+#[test]
+fn several_indices() {
+    let indices = |e: &Expr| match &e.kind {
+        ExprKind::Index { target, indices } => (target.to_string(), indices.len()),
+        _ => panic!("expected an index, got {}", e),
+    };
+    assert_eq!(
+        indices(&expr_body("fun f(): Int = m[1, 2]")),
+        ("m".into(), 2)
+    );
+    assert_eq!(
+        indices(&expr_body("fun f(): Int = m[1, 2,]")),
+        ("m".into(), 2)
+    );
+    let items = block_stmts("fun f() { m[r, c] = 0.0; m[i, i + 1] += 1.0 }");
+    match &items[0].kind {
+        StatementKind::Assign { target, .. } => assert_eq!(indices(target), ("m".into(), 2)),
+        other => panic!("expected an assignment, got {:?}", other),
+    }
+    match &items[1].kind {
+        StatementKind::CompoundAssign { target, .. } => {
+            assert_eq!(indices(target), ("m".into(), 2))
+        }
+        other => panic!("expected a compound assignment, got {:?}", other),
+    }
+    let nested = expr_body("fun f(): Int = grid[0][1]");
+    let ExprKind::Index { target, indices } = &nested.kind else {
+        panic!("expected an index");
+    };
+    assert_eq!(indices.len(), 1);
+    assert!(matches!(target.kind, ExprKind::Index { .. }));
+}
+
+/// Scenario "An empty index list rejected".
+#[test]
+fn an_empty_index_list_rejected() {
+    let src = "fun f(m: M): Int = m[]";
+    let error = parse_source(src).expect_err(src);
+    assert_eq!(error.code, "E2001");
+    assert_eq!(error.span.start, src.len() - 1);
+}

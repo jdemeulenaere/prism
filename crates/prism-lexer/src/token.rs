@@ -60,16 +60,19 @@ pub enum TokenKind {
     PlusPlus,
     /// `--`, reserved: Prism has no decrement operator, and the parser rejects it.
     MinusMinus,
-    Eq,            // =
-    EqEq,          // ==
-    BangEq,        // !=
-    Lt,            // <
-    LtEq,          // <=
-    Gt,            // >
-    GtEq,          // >=
-    AmpAmp,        // &&
-    PipePipe,      // ||
-    Bang,          // !
+    Eq,       // =
+    EqEq,     // ==
+    BangEq,   // !=
+    Lt,       // <
+    LtEq,     // <=
+    Gt,       // >
+    GtEq,     // >=
+    AmpAmp,   // &&
+    PipePipe, // ||
+    Bang,     // !
+    /// `!in`, the negated membership operator, lexed as one token when `in` is not the start of
+    /// a longer name.
+    NotIn,
     Amp,           // &
     Dot,           // .
     DotDot,        // ..
@@ -197,6 +200,7 @@ impl fmt::Display for TokenKind {
             TokenKind::AmpAmp => write!(f, "&&"),
             TokenKind::PipePipe => write!(f, "||"),
             TokenKind::Bang => write!(f, "!"),
+            TokenKind::NotIn => write!(f, "!in"),
             TokenKind::Amp => write!(f, "&"),
             TokenKind::Dot => write!(f, "."),
             TokenKind::DotDot => write!(f, ".."),

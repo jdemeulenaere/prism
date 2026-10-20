@@ -1,0 +1,9 @@
+// expect: ok
+struct Vector2 : Copy { val x: Int, val y: Int }
+struct Item { var count: Int }
+struct Bag { var items: List<Item> }
+struct Text { val s: String }
+
+operator fun Vector2.plus(other: Vector2): Vector2 = other
+public operator mut fun Bag.get(index: Int): &mut Item = &mut items[index]
+operator consuming fun Text.plus(other: &Text): Text = this

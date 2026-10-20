@@ -180,6 +180,9 @@ pub struct FunctionDecl {
     /// given to `attached` parameters use to capture a value of the receiver's type (D12 of
     /// `owned-state`).
     pub is_capture: bool,
+    /// The `operator` modifier (`operator fun Vector2.plus(other: Vector2)`): operator syntax may
+    /// call the function (D1 of `operator-conventions`).
+    pub is_operator: bool,
     /// The receiver of an extension function (`fun T.name()`), the only kind of method; `None`
     /// for a plain function.
     pub receiver: Option<Box<Receiver>>,

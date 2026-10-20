@@ -12,13 +12,14 @@ pub enum Precedence {
     LogicalAnd = 3, // &&
     Equality = 4,   // ==, !=
     Comparison = 5, // <, <=, >, >=
-    Elvis = 6,      // ?:
-    Range = 7,      // ..
-    Sum = 8,        // +, -
-    Product = 9,    // *, /, %
-    Prefix = 10,    // -, !, &, &mut
-    Postfix = 11,   // ., ?.
-    Call = 12,      // ()
+    Membership = 6, // in, !in
+    Elvis = 7,      // ?:
+    Range = 8,      // ..
+    Sum = 9,        // +, -
+    Product = 10,   // *, /, %
+    Prefix = 11,    // -, !, &, &mut
+    Postfix = 12,   // ., ?.
+    Call = 13,      // ()
 }
 
 /// The deepest nesting of expressions and types the parser accepts.
@@ -434,6 +435,10 @@ impl Parser {
         // names everywhere else.
         let library = self.parse_library_modifier()?;
 
+        // The `operator` modifier (D1 of `operator-conventions`), after the library modifier and
+        // before `compose` and the receiver mode.
+        let operator = self.parse_operator_modifier()?;
+
         // The `capture` modifier (`intrinsic capture fun T.weak()`, D12 of `owned-state`),
         // directly before `fun`. Before `compose`, `mut` or `consuming` it is read as the
         // modifier too, since an identifier never starts a declaration, for a better error.
@@ -522,6 +527,7 @@ impl Parser {
             TokenKind::Fun => {
                 let mut func =
                     self.parse_function(visibility, is_compose, mode, library, start_span)?;
+                func.is_operator = operator.is_some();
                 if let Some(span) = capture {
                     if func.receiver.is_none() {
                         return Err(ParseError::new(
@@ -749,6 +755,7 @@ impl Parser {
             visibility,
             is_compose,
             is_capture: false,
+            is_operator: false,
             receiver,
             name,
             type_parameters,
@@ -797,6 +804,29 @@ impl Parser {
             return misplaced(
                 "'capture' comes directly before 'fun', and a capture function is neither 'compose', 'mut' nor 'consuming'",
             );
+        }
+        Ok(Some(span))
+    }
+
+    /// The `operator` modifier at the cursor, if any: its span. At a declaration's start an
+    /// identifier never starts a declaration, so `operator` there is the modifier; it must come
+    /// directly before `compose`, `mut`, `consuming` or `fun` (after the visibility and the
+    /// library modifier), once.
+    fn parse_operator_modifier(&mut self) -> Result<Option<Span>, ParseError> {
+        if !matches!(self.peek_kind(), TokenKind::Ident(word) if word == "operator") {
+            return Ok(None);
+        }
+        let span = self.bump().span;
+        let in_order = match self.peek_kind() {
+            TokenKind::Fun | TokenKind::Compose | TokenKind::Mut => true,
+            TokenKind::Ident(word) => word == "consuming",
+            _ => false,
+        };
+        if !in_order {
+            return Err(ParseError::new(
+                "'operator' is written once, after the visibility and 'external' or 'intrinsic' and before 'compose', 'mut', 'consuming' and 'fun', as in 'public operator mut fun Bag.get(index: Int): &mut Item'",
+                span,
+            ));
         }
         Ok(Some(span))
     }
@@ -928,7 +958,9 @@ impl Parser {
             | TokenKind::Val
             | TokenKind::Var
             | TokenKind::Struct => true,
-            TokenKind::Ident(word) => word == "consuming" || word == "capture",
+            TokenKind::Ident(word) => {
+                word == "consuming" || word == "capture" || word == "operator"
+            }
             _ => false,
         };
         let next = self.peek_ahead(1).clone();
@@ -1911,6 +1943,7 @@ impl Parser {
             TokenKind::Lt | TokenKind::LtEq | TokenKind::Gt | TokenKind::GtEq => {
                 Precedence::Comparison
             }
+            TokenKind::In | TokenKind::NotIn => Precedence::Membership,
             TokenKind::QuestionColon => Precedence::Elvis,
             TokenKind::DotDot | TokenKind::DotDotLess => Precedence::Range,
             TokenKind::Plus | TokenKind::Minus => Precedence::Sum,
@@ -2351,15 +2384,33 @@ impl Parser {
         ))
     }
 
+    /// An index `target[i]` or index list `target[i, j]`, with an optional trailing comma (D9 of
+    /// `operator-conventions`). `target[]` is rejected.
     fn parse_index(&mut self, left: Expr) -> Result<Expr, ParseError> {
         self.expect(TokenKind::LBracket)?;
-        let index = self.with_newlines(false, |p| p.parse_expr(Precedence::Lowest))?;
+        if self.peek_kind() == &TokenKind::RBracket {
+            return Err(ParseError::new(
+                "An index expression needs at least one index, as in 'm[0]' or 'm[row, column]'",
+                self.peek().span,
+            ));
+        }
+        let indices = self.with_newlines(false, |p| {
+            let mut indices = vec![p.parse_expr(Precedence::Lowest)?];
+            while p.peek_kind() == &TokenKind::Comma {
+                p.bump();
+                if p.peek_kind() == &TokenKind::RBracket {
+                    break;
+                }
+                indices.push(p.parse_expr(Precedence::Lowest)?);
+            }
+            Ok(indices)
+        })?;
         let end = self.expect(TokenKind::RBracket)?.span;
         let span = left.span.merge(end);
         Ok(Expr::new(
             ExprKind::Index {
                 target: Box::new(left),
-                index: Box::new(index),
+                indices,
             },
             span,
         ))
@@ -2383,6 +2434,14 @@ impl Parser {
         if prec == Precedence::Comparison && self.current_precedence() == Precedence::Comparison {
             return Err(ParseError::new(
                 "Comparisons cannot be chained; join them with '&&', as in 'a < b && b < c'",
+                self.peek().span,
+            ));
+        }
+        // Membership tests are non-associative too: `a in b in c` would test a `Bool` for
+        // membership (D8 of `operator-conventions`).
+        if prec == Precedence::Membership && self.current_precedence() == Precedence::Membership {
+            return Err(ParseError::new(
+                "Membership tests cannot be chained; parenthesize one, as in '(a in b) in c', or join them with '&&'",
                 self.peek().span,
             ));
         }
@@ -2415,6 +2474,8 @@ impl Parser {
             TokenKind::QuestionColon => Some(BinaryOp::Elvis),
             TokenKind::DotDot => Some(BinaryOp::Range),
             TokenKind::DotDotLess => Some(BinaryOp::HalfOpenRange),
+            TokenKind::In => Some(BinaryOp::In),
+            TokenKind::NotIn => Some(BinaryOp::NotIn),
             _ => None,
         }
     }

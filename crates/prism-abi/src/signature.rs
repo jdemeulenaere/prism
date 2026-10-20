@@ -78,6 +78,9 @@ pub enum ExportedSymbol {
         is_compose: bool,
         /// Whether it is a `capture` function (D12 of `owned-state`).
         is_capture: bool,
+        /// Whether it is an `operator` function, which operator syntax may call (D15 of
+        /// `operator-conventions`).
+        is_operator: bool,
         /// The receiver of an extension function (`fun User.greet()`), `None` for a plain one.
         receiver: Option<AbiReceiver>,
         /// The type of the context parameter (`context(scope: RowScope)`), bound like any
@@ -100,6 +103,9 @@ pub enum ExportedSymbol {
         /// layout the compiler provides and is no part of the ABI (D16 of
         /// `compose-transform`).
         intrinsic: bool,
+        /// Whether its file declares an `equals` operator for it, which `==` calls everywhere
+        /// (D6 and D15 of `operator-conventions`).
+        equality: bool,
     },
     Enum {
         visibility: Visibility,
@@ -109,6 +115,9 @@ pub enum ExportedSymbol {
         /// The type parameters occurring in payload types, which condition the marker.
         marker_parameters: Vec<u32>,
         variants: Vec<(String, Vec<AbiType>)>, // (name, payload types)
+        /// Whether its file declares an `equals` operator for it (D15 of
+        /// `operator-conventions`).
+        equality: bool,
     },
     /// An exported top-level `val` (top-level declarations are always immutable).
     Var {
@@ -139,6 +148,7 @@ impl ExportedSymbol {
                 kind,
                 is_compose,
                 is_capture,
+                is_operator,
                 receiver,
                 context,
                 name,
@@ -158,6 +168,10 @@ impl ExportedSymbol {
                 // A function that is no capture function keeps the bytes it always had.
                 if *is_capture {
                     hasher.write_str("capture");
+                }
+                // So does a function that is no operator.
+                if *is_operator {
+                    hasher.write_str("operator");
                 }
                 match receiver {
                     Some(receiver) => {
@@ -205,6 +219,7 @@ impl ExportedSymbol {
                 marker_parameters,
                 fields,
                 intrinsic,
+                equality,
             } => {
                 // An ordinary struct keeps the tag it always had.
                 hasher.write_str(if *intrinsic {
@@ -223,6 +238,10 @@ impl ExportedSymbol {
                     hasher.write_u8(if *is_var { 1 } else { 0 });
                     fty.hash_into(hasher);
                 }
+                // A type without an equality operator keeps the bytes it always had.
+                if *equality {
+                    hasher.write_str("equals");
+                }
             }
             ExportedSymbol::Enum {
                 visibility,
@@ -231,6 +250,7 @@ impl ExportedSymbol {
                 marker,
                 marker_parameters,
                 variants,
+                equality,
             } => {
                 hasher.write_str("enum");
                 hasher.write_str(visibility.as_str());
@@ -247,6 +267,9 @@ impl ExportedSymbol {
                     for fty in vflds {
                         fty.hash_into(hasher);
                     }
+                }
+                if *equality {
+                    hasher.write_str("equals");
                 }
             }
             ExportedSymbol::Var {
@@ -294,6 +317,7 @@ impl ExportedSymbol {
                 kind,
                 is_compose,
                 is_capture,
+                is_operator,
                 receiver,
                 context,
                 name,
@@ -309,6 +333,9 @@ impl ExportedSymbol {
                 if *kind != FunctionKind::Prism {
                     text.push_str(kind.as_str());
                     text.push(' ');
+                }
+                if *is_operator {
+                    text.push_str("operator ");
                 }
                 if *is_capture {
                     text.push_str("capture ");
@@ -576,6 +603,9 @@ pub struct AbiTypeDefinition {
     pub marker: Option<TypeMarker>,
     pub marker_parameters: Vec<u32>,
     pub members: AbiTypeMembers,
+    /// Whether the defining file declares an `equals` operator for the type, which equality of
+    /// its values calls (D6 and D15 of `operator-conventions`).
+    pub equality: bool,
 }
 
 impl AbiTypeDefinition {
@@ -643,6 +673,10 @@ impl AbiTypeDefinition {
                 }
             }
         }
+        // A type without an equality operator keeps the bytes it always had.
+        if self.equality {
+            hasher.write_str("equals");
+        }
     }
 }
 
@@ -670,6 +704,7 @@ pub fn type_definitions(
     bind_import: &NameBinder,
 ) -> Vec<AbiTypeDefinition> {
     let bind = own_binder(file, module, bind_import);
+    let equality = equality_types(file);
     file.declarations
         .iter()
         .filter_map(|decl| match decl {
@@ -680,6 +715,7 @@ pub fn type_definitions(
                 marker: s.marker,
                 marker_parameters: struct_header(s).marker_parameters,
                 members: AbiTypeMembers::Fields(struct_fields(s, &bind)),
+                equality: equality.contains(s.name.as_str()),
             }),
             Declaration::Enum(e) => Some(AbiTypeDefinition {
                 module: module.to_string(),
@@ -688,7 +724,42 @@ pub fn type_definitions(
                 marker: e.marker,
                 marker_parameters: enum_header(e).marker_parameters,
                 members: AbiTypeMembers::Variants(enum_variants(e, &bind)),
+                equality: equality.contains(e.name.as_str()),
             }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The names of the structs and enums of `file` for which it declares an equality operator,
+/// `operator fun T.equals(...)` on a non-generic struct or enum `T` of the file, by a syntactic
+/// match of the receiver's name (D15 of `operator-conventions`). The type checker checks the
+/// declaration's shape (`E4035`).
+pub fn equality_types(file: &SourceFile) -> std::collections::HashSet<&str> {
+    let types: std::collections::HashSet<&str> = file
+        .declarations
+        .iter()
+        .filter_map(|decl| match decl {
+            Declaration::Struct(s) if s.type_parameters.is_empty() && !s.is_intrinsic() => {
+                Some(s.name.as_str())
+            }
+            Declaration::Enum(e) if e.type_parameters.is_empty() => Some(e.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    file.declarations
+        .iter()
+        .filter_map(|decl| match decl {
+            Declaration::Function(f) if f.is_operator && f.name == "equals" => {
+                match &f.receiver.as_ref()?.ty.kind {
+                    prism_ast::types::TypeKind::Named { name, type_args }
+                        if type_args.is_empty() && types.contains(name.as_str()) =>
+                    {
+                        Some(name.as_str())
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         })
         .collect()
@@ -883,6 +954,7 @@ impl FileAbi {
         let mut symbols = Vec::new();
 
         let bind = own_binder(file, module, bind_import);
+        let equality = equality_types(file);
 
         for decl in &file.declarations {
             // Default visibility is `private`. Private declarations are EXCLUDED from the ABI.
@@ -973,6 +1045,7 @@ impl FileAbi {
                         kind: FunctionKind::of(f),
                         is_compose: f.is_compose,
                         is_capture: f.is_capture,
+                        is_operator: f.is_operator,
                         receiver,
                         context: f.context.as_ref().map(|c| lower(&c.ty)),
                         name: f.name.clone(),
@@ -993,6 +1066,7 @@ impl FileAbi {
                         marker_parameters: struct_header(s).marker_parameters,
                         fields,
                         intrinsic: s.is_intrinsic(),
+                        equality: equality.contains(s.name.as_str()),
                     });
                 }
 
@@ -1006,6 +1080,7 @@ impl FileAbi {
                         marker: e.marker,
                         marker_parameters: enum_header(e).marker_parameters,
                         variants,
+                        equality: equality.contains(e.name.as_str()),
                     });
                 }
 
@@ -1320,10 +1395,13 @@ fn hash_expr_span_free(expr: &Expr, hasher: &mut DeterministicHasher) {
             hasher.write_u8(if *is_safe_nav { 1 } else { 0 });
             hash_expr_span_free(target, hasher);
         }
-        ExprKind::Index { target, index } => {
+        ExprKind::Index { target, indices } => {
             hasher.write_u8(16);
             hash_expr_span_free(target, hasher);
-            hash_expr_span_free(index, hasher);
+            hasher.write_u64(indices.len() as u64);
+            for index in indices {
+                hash_expr_span_free(index, hasher);
+            }
         }
         ExprKind::Block(b) => {
             hasher.write_u8(17);

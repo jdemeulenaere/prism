@@ -443,6 +443,9 @@ pub fn declaration_text(f: &FunctionDecl) -> String {
         text.push_str(library.kind.as_str());
         text.push(' ');
     }
+    if f.is_operator {
+        text.push_str("operator ");
+    }
     if f.is_capture {
         text.push_str("capture ");
     }

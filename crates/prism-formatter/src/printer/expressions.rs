@@ -11,13 +11,20 @@ fn precedence(operator: BinaryOp) -> u8 {
         BinaryOp::Or => 2,
         BinaryOp::And => 3,
         BinaryOp::Eq | BinaryOp::NotEq => 4,
-        BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq => 5,
-        BinaryOp::Elvis => 6,
-        BinaryOp::Range | BinaryOp::HalfOpenRange => 7,
-        BinaryOp::Add | BinaryOp::Sub => 8,
-        BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 9,
+        BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq => COMPARISON,
+        BinaryOp::In | BinaryOp::NotIn => MEMBERSHIP,
+        BinaryOp::Elvis => 7,
+        BinaryOp::Range | BinaryOp::HalfOpenRange => 8,
+        BinaryOp::Add | BinaryOp::Sub => 9,
+        BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 10,
     }
 }
+
+/// The precedence of comparisons, which are non-associative.
+const COMPARISON: u8 = 5;
+
+/// The precedence of `in` and `!in`, which are non-associative like comparisons.
+const MEMBERSHIP: u8 = 6;
 
 /// Which operand of a binary operator an expression is.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -340,7 +347,9 @@ impl<'a> Printer<'a> {
         let needed = match &operand.kind {
             ExprKind::Binary { op, .. } => {
                 let inner = precedence(*op);
-                inner < level || inner == level && (side == Side::Right || level == 5)
+                inner < level
+                    || inner == level
+                        && (side == Side::Right || level == COMPARISON || level == MEMBERSHIP)
             }
             _ => side == Side::Left && is_open_ended(operand),
         };
@@ -429,10 +438,7 @@ impl<'a> Printer<'a> {
                     }
                 }
                 Link::Index(index_expression) => {
-                    let ExprKind::Index { index, .. } = &index_expression.kind else {
-                        unreachable!("an index link is an index expression");
-                    };
-                    let suffix = concat(vec![text("["), self.expression(index), text("]")]);
+                    let suffix = self.index_suffix(index_expression);
                     match segments.last_mut() {
                         Some((_, parts)) => parts.push(suffix),
                         None => head.push(suffix),
@@ -530,6 +536,28 @@ impl<'a> Printer<'a> {
             parts.push(self.expression(&lambda.value));
         }
         concat(parts)
+    }
+
+    /// The `[...]` of an index expression: one index as written, several as an argument list
+    /// (D17 of `operator-conventions`).
+    fn index_suffix(&mut self, index_expression: &Expr) -> Document {
+        let ExprKind::Index { indices, .. } = &index_expression.kind else {
+            unreachable!("an index link is an index expression");
+        };
+        if let [index] = &indices[..] {
+            return concat(vec![text("["), self.expression(index), text("]")]);
+        }
+        self.comma_list(
+            indices,
+            |index| index.span,
+            |printer, index| printer.expression(index),
+            CommaList {
+                open: "[",
+                close: "]",
+                close_offset: index_expression.span.end.saturating_sub(1),
+                trailing_comma: true,
+            },
+        )
     }
 
     fn argument(&mut self, argument: &CallArg) -> Document {

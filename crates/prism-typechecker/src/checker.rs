@@ -322,6 +322,9 @@ pub(crate) struct Extension {
     pub(crate) writable: bool,
     /// The type of the extension's context parameter, if it has one (D8 of `receiver-lambdas`).
     pub(crate) context: Option<Type>,
+    /// Whether the extension is declared `operator`, so operator syntax may call it (D1 of
+    /// `operator-conventions`).
+    pub(crate) is_operator: bool,
 }
 
 /// The extensions of one receiver type constructor and name in one layer (the file's own, the
@@ -1982,6 +1985,7 @@ impl TypeChecker {
                     kind,
                     is_compose,
                     is_capture,
+                    is_operator,
                     receiver,
                     context,
                     name,
@@ -2047,6 +2051,7 @@ impl TypeChecker {
                                 property: false,
                                 writable: false,
                                 context: None,
+                                is_operator: *is_operator,
                             });
                         }
                         // An extension is reached through its receiver, never by its bare name.
@@ -2065,6 +2070,7 @@ impl TypeChecker {
                                 property: false,
                                 writable: false,
                                 context: context_ty,
+                                is_operator: *is_operator,
                             };
                             self.imported_extensions
                                 .entry(key)
@@ -2132,6 +2138,7 @@ impl TypeChecker {
                         property: true,
                         writable: *writable,
                         context: None,
+                        is_operator: false,
                     });
                 }
                 ExportedSymbol::Struct {
@@ -2736,6 +2743,7 @@ impl TypeChecker {
                 property: false,
                 writable: false,
                 context: None,
+                is_operator: f.is_operator,
             },
         );
     }
@@ -2817,6 +2825,7 @@ impl TypeChecker {
                 property: true,
                 writable: p.writable,
                 context: None,
+                is_operator: false,
             },
         );
     }
@@ -3028,6 +3037,7 @@ impl TypeChecker {
             property: false,
             writable: false,
             context,
+            is_operator: f.is_operator,
         };
         let module = self.module_path.clone();
         self.own_extensions
@@ -4311,7 +4321,7 @@ impl TypeChecker {
                 is_safe_nav,
             } => self.infer_member_access(target, member, *is_safe_nav, expr.span),
 
-            ExprKind::Index { target, index } => self.infer_index(target, index, expr.span).0,
+            ExprKind::Index { target, indices } => self.infer_index(target, indices, expr.span).0,
 
             ExprKind::Return(opt_expr) => {
                 if !self.in_function {
@@ -4807,6 +4817,20 @@ impl TypeChecker {
                     fallback: right_id,
                 };
                 self.add(kind, ty, span)
+            }
+
+            BinaryOp::In | BinaryOp::NotIn => {
+                let left_id = self.infer_operand(left);
+                let right_id = self.infer_operand(right);
+                let (left_ty, right_ty) = (self.ty(left_id), self.ty(right_id));
+                self.errors.push(TypeError::OperatorMismatch {
+                    operator: operator_text(op).to_string(),
+                    left: left_ty,
+                    right: right_ty,
+                    span,
+                    help: None,
+                });
+                self.error_node(vec![left_id, right_id], span)
             }
 
             // A half-open range has the same type; whether it excludes its end is a property
@@ -9298,7 +9322,9 @@ impl TypeChecker {
         };
         // An element of a list is taken out by `removeAt` (D7 of `collections`).
         let remove = match &expr.kind {
-            ExprKind::Index { target, index } => Some(format!("{}.removeAt({})", target, index)),
+            ExprKind::Index { target, indices } if indices.len() == 1 => {
+                Some(format!("{}.removeAt({})", target, indices[0]))
+            }
             _ => None,
         };
         self.errors.push(TypeError::CannotMoveOut {
@@ -9991,15 +10017,37 @@ impl TypeChecker {
     /// every layer above it is. A string's character is computed, not stored: `s[i]` is a call
     /// of the built-in `get` with a shared receiver borrow of the string (D5 of
     /// `runtime-strings-and-drops`), never writable. Any other target is `E4002`.
-    fn infer_index(&mut self, target: &Expr, index: &Expr, span: Span) -> (ExpressionId, bool) {
+    fn infer_index(&mut self, target: &Expr, indices: &[Expr], span: Span) -> (ExpressionId, bool) {
         let (target_id, target_writable) = if self.is_place(target) {
             self.infer_place(target)
         } else {
             (self.with_consuming(true, |c| c.infer_expr(target)), true)
         };
-        let index_id = self.with_origin(Origin::Value, |c| c.check_expr(index, &Type::Int));
         let target_ty = self.ty(target_id);
         let base = self.peel_indirection_nodes(target_id);
+        let indexed = self.ty(base);
+        // A list and a string take exactly one index (D9 of `operator-conventions`).
+        if matches!(indexed, Type::List(_) | Type::String) && indices.len() != 1 {
+            let mut children = vec![base];
+            for index in indices {
+                children.push(self.with_origin(Origin::Value, |c| c.check_expr(index, &Type::Int)));
+            }
+            self.errors.push(TypeError::CallSignatureMismatch {
+                message: format!(
+                    "a '{}' takes exactly one index, found {}",
+                    if indexed == Type::String {
+                        "String"
+                    } else {
+                        "List"
+                    },
+                    indices.len()
+                ),
+                span,
+            });
+            return (self.error_node(children, span), false);
+        }
+        let index = &indices[0];
+        let index_id = self.with_origin(Origin::Value, |c| c.check_expr(index, &Type::Int));
         match self.ty(base) {
             Type::List(element) => {
                 let base = self.as_place(base);
@@ -10078,7 +10126,7 @@ impl TypeChecker {
                 };
                 (node, writable)
             }
-            ExprKind::Index { target, index } => self.infer_index(target, index, expr.span),
+            ExprKind::Index { target, indices } => self.infer_index(target, indices, expr.span),
             // Any other root is a temporary, so what its branches and `?:` operands give is
             // consumed (the `ownership` spec, "Consuming Positions").
             _ => (self.infer_read(expr), true),
@@ -10141,6 +10189,8 @@ fn operator_text(op: BinaryOp) -> &'static str {
         BinaryOp::Mul => "*",
         BinaryOp::Div => "/",
         BinaryOp::Mod => "%",
+        BinaryOp::In => "in",
+        BinaryOp::NotIn => "!in",
         _ => unreachable!(
             "only arithmetic, equality and ordering operators are reported by their text"
         ),
@@ -10165,7 +10215,9 @@ fn binary_operator(op: BinaryOp) -> BinaryOperator {
         | BinaryOp::Or
         | BinaryOp::Elvis
         | BinaryOp::Range
-        | BinaryOp::HalfOpenRange => {
+        | BinaryOp::HalfOpenRange
+        | BinaryOp::In
+        | BinaryOp::NotIn => {
             unreachable!(
                 "'{}' is not an arithmetic or comparison operator",
                 op.as_str()
@@ -10830,7 +10882,7 @@ mod tests {
             target: Box::new(expr(ExprKind::Literal(Literal::String(
                 "hello".to_string(),
             )))),
-            index: Box::new(expr(ExprKind::Literal(Literal::Int(0)))),
+            indices: vec![expr(ExprKind::Literal(Literal::Int(0)))],
         });
         assert_eq!(infer(&mut checker, &index_expr), Type::Char);
     }
@@ -11421,6 +11473,7 @@ mod tests {
                     kind: prism_abi::FunctionKind::Prism,
                     is_compose: false,
                     is_capture: false,
+                    is_operator: false,
                     receiver: None,
                     context: None,
                     name: "add".to_string(),
@@ -11448,6 +11501,7 @@ mod tests {
                     kind: prism_abi::FunctionKind::Prism,
                     is_compose: false,
                     is_capture: false,
+                    is_operator: false,
                     receiver: None,
                     context: None,
                     name: "internal_calc".to_string(),
@@ -11906,7 +11960,7 @@ mod tests {
 
         let index_expr = expr(ExprKind::Index {
             target: Box::new(expr(ExprKind::Ident("s".to_string()))),
-            index: Box::new(expr(ExprKind::Literal(Literal::Int(0)))),
+            indices: vec![expr(ExprKind::Literal(Literal::Int(0)))],
         });
         assert_eq!(infer(&mut checker, &index_expr), Type::Char);
         assert!(checker.errors.is_empty());
@@ -11924,7 +11978,7 @@ mod tests {
             .unwrap();
         let bad_index = expr(ExprKind::Index {
             target: Box::new(expr(ExprKind::Ident("h".to_string()))),
-            index: Box::new(expr(ExprKind::Literal(Literal::Int(0)))),
+            indices: vec![expr(ExprKind::Literal(Literal::Int(0)))],
         });
         infer(&mut checker, &bad_index);
         assert!(checker.errors.iter().any(|e| e.code() == "E4002"));

@@ -1,0 +1,3 @@
+// expect: E2001
+struct M { val x: Int }
+fun f(m: M): Int = m[]

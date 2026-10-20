@@ -575,3 +575,24 @@ fn comment_collecting_lexer_inside_templates() {
         "/* why */"
     );
 }
+
+/// Scenario "Not-in tokens" (`syntax`, "Membership Operators", `operator-conventions`).
+#[test]
+fn not_in_tokens() {
+    let ident = |name: &str| TokenKind::Ident(name.to_string());
+    let not_in = vec![ident("x"), TokenKind::NotIn, ident("xs"), TokenKind::Eof];
+    assert_eq!(kinds("x !in xs"), not_in);
+    assert_eq!(kinds("x!in xs"), not_in);
+    assert_eq!(
+        kinds("!inside"),
+        vec![TokenKind::Bang, ident("inside"), TokenKind::Eof]
+    );
+    assert_eq!(
+        kinds("!in_"),
+        vec![TokenKind::Bang, ident("in_"), TokenKind::Eof]
+    );
+    assert_eq!(
+        kinds("!in("),
+        vec![TokenKind::NotIn, TokenKind::LParen, TokenKind::Eof]
+    );
+}

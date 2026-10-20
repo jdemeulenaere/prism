@@ -1,0 +1,3 @@
+// expect: E2001
+struct P : Copy { val x: Int }
+operator intrinsic fun P.div(o: P): P

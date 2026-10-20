@@ -193,6 +193,11 @@ impl<'a> Lexer<'a> {
                 if self.peek_byte() == b'=' {
                     self.bump();
                     TokenKind::BangEq
+                } else if self.at_not_in() {
+                    // `!in` is one token unless `in` starts a longer name (`!inside`).
+                    self.bump();
+                    self.bump();
+                    TokenKind::NotIn
                 } else {
                     TokenKind::Bang
                 }
@@ -798,6 +803,16 @@ impl<'a> Lexer<'a> {
         } else {
             single
         }
+    }
+
+    /// Whether the input continues with `in` not followed by a character that could continue an
+    /// identifier, right after a `!`.
+    fn at_not_in(&self) -> bool {
+        let rest = &self.bytes[self.cursor..];
+        rest.starts_with(b"in")
+            && rest
+                .get(2)
+                .is_none_or(|&b| !(b.is_ascii_alphanumeric() || b == b'_'))
     }
 
     fn peek_byte(&self) -> u8 {

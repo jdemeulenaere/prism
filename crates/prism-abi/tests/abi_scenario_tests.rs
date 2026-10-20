@@ -1173,3 +1173,80 @@ fn adding_a_companion_value_changes_the_abi_hash() {
         "the order of a struct and its companion value",
     );
 }
+
+// --- Operator functions and equality operators (operator-conventions)
+
+const VECTOR: &str = "package geometry\npublic struct Vector2 : Copy { val x: Int, val y: Int }\n";
+const MODELS_USER: &str = "package models\npublic struct User { val id: Int, val name: String }\n";
+
+#[test]
+fn marking_a_function_operator_changes_the_hash() {
+    let plain = format!(
+        "{}public fun Vector2.plus(other: Vector2): Vector2 = other\n",
+        VECTOR
+    );
+    let operator = format!(
+        "{}public operator fun Vector2.plus(other: Vector2): Vector2 = other\n",
+        VECTOR
+    );
+    assert_hash_differs(&plain, &operator, "marking a function operator");
+    let abi = extract(&operator);
+    assert!(abi.symbols.iter().any(|symbol| matches!(
+        symbol,
+        ExportedSymbol::Function { name, is_operator: true, .. } if name == "plus"
+    )));
+    assert!(extract(&plain).symbols.iter().all(|symbol| !matches!(
+        symbol,
+        ExportedSymbol::Function {
+            is_operator: true,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn adding_an_equality_operator_changes_the_type_s_definition() {
+    let with_equals = format!(
+        "{}public operator fun User.equals(other: &User): Bool = id == other.id\n",
+        MODELS_USER
+    );
+    assert_hash_differs(MODELS_USER, &with_equals, "adding an equality operator");
+    let abi = extract(&with_equals);
+    assert!(abi.symbols.iter().any(|symbol| matches!(
+        symbol,
+        ExportedSymbol::Struct { name, equality: true, .. } if name == "User"
+    )));
+    // The definition among the reachable types records it too, so instance keys reaching
+    // `User` change.
+    let definitions = |src: &str| {
+        type_definitions(&parse_source(src).unwrap(), "models/user", &no_imports)
+            .into_iter()
+            .find(|definition| definition.name == "User")
+            .unwrap()
+    };
+    let (before, after) = (definitions(MODELS_USER), definitions(&with_equals));
+    assert!(!before.equality && after.equality);
+    assert_ne!(before.hash(), after.hash());
+    // An unmarked `equals`, or one on a type of another file, is no equality operator.
+    let unmarked = format!(
+        "{}public fun User.equals(other: &User): Bool = id == other.id\n",
+        MODELS_USER
+    );
+    assert!(!definitions(&unmarked).equality);
+}
+
+#[test]
+fn editing_an_operator_body_recompiles_nothing_downstream() {
+    let with = |equals: &str, plus: &str| {
+        format!(
+            "{}public operator fun User.equals(other: &User): Bool = {}\n\
+             public operator fun User.plus(other: &User): Int = {}\n",
+            MODELS_USER, equals, plus
+        )
+    };
+    assert_hash_equal(
+        &with("id == other.id", "id"),
+        &with("name == other.name", "id + other.id"),
+        "editing an operator body",
+    );
+}

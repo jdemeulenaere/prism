@@ -545,6 +545,7 @@ fn run_abi(path: &str) {
                 kind,
                 is_compose,
                 is_capture,
+                is_operator,
                 receiver,
                 context,
                 name,
@@ -556,11 +557,14 @@ fn run_abi(path: &str) {
                     .as_ref()
                     .map_or_else(String::new, |c| format!("context({}) ", c));
                 let capture = if *is_capture { "capture " } else { "" };
+                let operator = if *is_operator { "operator " } else { "" };
                 let comp = match kind.as_str() {
-                    "" if *is_compose => "compose ".to_string(),
-                    "" => String::new(),
-                    library if *is_compose => format!("{} {}compose ", library, capture),
-                    library => format!("{} {}", library, capture),
+                    "" if *is_compose => format!("{}compose ", operator),
+                    "" => operator.to_string(),
+                    library if *is_compose => {
+                        format!("{} {}{}compose ", library, operator, capture)
+                    }
+                    library => format!("{} {}{}", library, operator, capture),
                 };
                 let (mode, receiver) = match receiver {
                     Some(r) if r.mode.as_str().is_empty() => (String::new(), format!("{}.", r.ty)),
@@ -608,6 +612,7 @@ fn run_abi(path: &str) {
                 marker_parameters,
                 fields,
                 intrinsic: true,
+                ..
             } if fields.is_empty() => {
                 println!(
                     "  {} intrinsic struct {}{}{}",
@@ -624,6 +629,7 @@ fn run_abi(path: &str) {
                 marker,
                 marker_parameters,
                 fields,
+                equality,
                 ..
             } => {
                 let f_str = fields
@@ -634,12 +640,13 @@ fn run_abi(path: &str) {
                     .collect::<Vec<_>>()
                     .join(", ");
                 println!(
-                    "  {} struct {}{}{} {{ {} }}",
+                    "  {} struct {}{}{} {{ {} }}{}",
                     visibility,
                     name,
                     type_parameter_list(type_parameters),
                     generic_marker_suffix(*marker, type_parameters, marker_parameters),
-                    f_str
+                    f_str,
+                    equality_suffix(*equality)
                 );
             }
             prism_abi::ExportedSymbol::Enum {
@@ -649,7 +656,7 @@ fn run_abi(path: &str) {
                 marker,
                 marker_parameters,
                 variants,
-                ..
+                equality,
             } => {
                 let v_str = variants
                     .iter()
@@ -664,12 +671,13 @@ fn run_abi(path: &str) {
                     .collect::<Vec<_>>()
                     .join(", ");
                 println!(
-                    "  {} enum {}{}{} {{ {} }}",
+                    "  {} enum {}{}{} {{ {} }}{}",
                     visibility,
                     name,
                     type_parameter_list(type_parameters),
                     generic_marker_suffix(*marker, type_parameters, marker_parameters),
-                    v_str
+                    v_str,
+                    equality_suffix(*equality)
                 );
             }
             prism_abi::ExportedSymbol::Var {
@@ -708,7 +716,7 @@ fn run_abi(path: &str) {
             prism_abi::NominalKind::Enum => "enum",
         };
         println!(
-            "  {} {}::{}{}{} {{ {} }}",
+            "  {} {}::{}{}{} {{ {} }}{}",
             kind,
             definition.module,
             definition.name,
@@ -718,8 +726,18 @@ fn run_abi(path: &str) {
                 &definition.type_parameters,
                 &definition.marker_parameters
             ),
-            members.join(", ")
+            members.join(", "),
+            equality_suffix(definition.equality)
         );
+    }
+}
+
+/// What `prism abi` prints after a struct or enum whose file declares its `equals` operator.
+fn equality_suffix(equality: bool) -> &'static str {
+    if equality {
+        " with operator equals"
+    } else {
+        ""
     }
 }
 

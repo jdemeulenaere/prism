@@ -187,6 +187,9 @@ impl<'a> Printer<'a> {
         if let Some(library) = function.library {
             parts.push(text(format!("{} ", library.kind.as_str())));
         }
+        if function.is_operator {
+            parts.push(text("operator "));
+        }
         if function.is_capture {
             parts.push(text("capture "));
         }

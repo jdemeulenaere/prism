@@ -1,0 +1,2 @@
+// expect: E2001
+fun f(a: Int, b: List<Int>, c: List<Bool>): Bool = a in b in c

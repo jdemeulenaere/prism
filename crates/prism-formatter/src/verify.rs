@@ -326,9 +326,11 @@ fn erase_expression(expression: &mut Expr) {
             }
             erase_block(body);
         }
-        ExprKind::Index { target, index } => {
+        ExprKind::Index { target, indices } => {
             erase_expression(target);
-            erase_expression(index);
+            for index in indices {
+                erase_expression(index);
+            }
         }
         ExprKind::Template(parts) => {
             for part in parts {

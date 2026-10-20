@@ -1,0 +1,8 @@
+public operator mut fun Bag.get(index: Int): &mut Item = &mut items[index]
+
+val c = m[1, 2]
+val b = x !in xs
+val d = (a in b) in c
+val e = !(y in ys)
+
+operator fun Matrix.get(row: Int, column: Int): Double = cells[row * columns + column]

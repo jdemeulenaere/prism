@@ -1,0 +1,9 @@
+// expect: ok
+fun operator(operator: Int): Int = operator
+fun g(operator: Int) {}
+fun f() {
+    val operator = 1
+    g(operator = operator)
+}
+fun Int.operator(): Int = this
+fun h(x: Int): Int = x.operator()

@@ -395,9 +395,10 @@ mod tests {
         if let Declaration::Function(f) = &file.declarations[0] {
             if let Some(FunctionBody::Block(b)) = &f.body {
                 if let ExprKind::Return(Some(val)) = &expr_of(&items(b)[0]).kind {
-                    if let ExprKind::Index { target, index } = &val.kind {
+                    if let ExprKind::Index { target, indices } = &val.kind {
                         assert_eq!(target.to_string(), "list");
-                        assert_eq!(index.to_string(), "0");
+                        assert_eq!(indices.len(), 1);
+                        assert_eq!(indices[0].to_string(), "0");
                     } else {
                         panic!("Expected Index expr");
                     }
