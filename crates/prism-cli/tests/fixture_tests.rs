@@ -608,7 +608,7 @@ const COMPOSED_SCENARIOS: &[&str] = &[
     "dumping-composed-mir",
     "composed-remember-of-a-state",
     "a-toolkit-composable-starts-a-node-group",
-    "the-adapter-of-an-app",
+    "the-composer-read-in-a-composable",
 ];
 
 /// The scenarios of the `code-generation` spec whose cases must hold a `layout.snap`: those of

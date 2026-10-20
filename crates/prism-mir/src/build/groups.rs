@@ -19,7 +19,7 @@
 use super::Builder;
 use crate::mir::{ClosureOrigin, ClosureStep, GroupId, GroupRegion, GroupStep, StatementKind};
 use prism_ast::Span;
-use prism_typed_tree::{ExpressionId, ExpressionKind, StatementId};
+use prism_typed_tree::{BuiltinFunction, ExpressionId, ExpressionKind, StatementId};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -57,6 +57,12 @@ impl ComposableMarks {
         let marked = match &expression.kind {
             // A closure's calls run in its own body, which has its own groups.
             ExpressionKind::Closure { .. } => false,
+            // The composer of the running body is read from its argument: no group (D3 of
+            // `compose-library-in-prism`).
+            ExpressionKind::Call(prism_typed_tree::Call {
+                callee: prism_typed_tree::Callee::Builtin(BuiltinFunction::CurrentComposer),
+                ..
+            }) => self.children(tree, id),
             ExpressionKind::Call(call) if call.is_compose => {
                 // Still mark the children, so that a region inside an argument is known.
                 self.children(tree, id);

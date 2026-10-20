@@ -2,7 +2,8 @@
 //! crates built on it (`prism-ui`). Not for generated code, which builds its own.
 //!
 //! - [`content`] wraps a Rust closure in a `(Int) -> Unit` function value with a boxed
-//!   environment, which the value's drop entry frees, as an owning closure's would be.
+//!   environment, which the value's drop entry frees, as an owning closure's would be, and
+//!   [`composable_content`] in composable root content, `compose () -> Unit`.
 //! - [`inline_function`] builds a function value whose environment is one inline word and
 //!   whose descriptor is static, so building and calling it allocates nothing, as an escaping
 //!   closure over one `Int` does (`escaping-closures` D9).
@@ -47,6 +48,38 @@ pub fn content(body: impl Fn(Composer) + 'static) -> FunctionValue {
         descriptor: &CONTENT_DESCRIPTOR,
         environment: Box::into_raw(Box::new(closure)) as *mut u8,
     }
+}
+
+type ComposableClosure = Box<dyn Fn(Composer, u64)>;
+
+/// The code slot shared by every [`composable_content`] value.
+static COMPOSABLE_SLOT: AtomicUsize = AtomicUsize::new(0);
+
+static COMPOSABLE_DESCRIPTOR: Descriptor = Descriptor {
+    slot: &COMPOSABLE_SLOT,
+    drop_environment: Some(drop_composable),
+    equals_environment: None,
+    duplicate_environment: None,
+};
+
+unsafe extern "C" fn call_composable(environment: *mut u8, composer: u64, changed: u64) {
+    let closure = &*(environment as *const ComposableClosure);
+    closure(Composer(composer), changed)
+}
+
+unsafe extern "C" fn drop_composable(environment: *mut u8) {
+    drop(Box::from_raw(environment as *mut ComposableClosure));
+}
+
+/// A `compose () -> Unit` function value, root content the runtime calls with the composer
+/// and the change word (D4 of `compose-library-in-prism`), which `body` receives.
+pub fn composable_content(body: impl Fn(Composer, u64) + 'static) -> crate::RootContent {
+    COMPOSABLE_SLOT.store(call_composable as *const () as usize, Ordering::Release);
+    let closure: ComposableClosure = Box::new(body);
+    crate::RootContent::Composable(FunctionValue {
+        descriptor: &COMPOSABLE_DESCRIPTOR,
+        environment: Box::into_raw(Box::new(closure)) as *mut u8,
+    })
 }
 
 type Effect = Box<dyn Fn()>;

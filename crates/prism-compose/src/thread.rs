@@ -50,6 +50,10 @@ pub struct CompositionRecord {
     /// Whether a reload was applied since its last pass, whose next pass then compares every
     /// kept argument (`compose-hot-reload`).
     pub reloaded: bool,
+    /// Whether its root content is composable content, called with the composer and the force
+    /// bit, rather than word content, called with the composer alone (D4 of
+    /// `compose-library-in-prism`).
+    pub composable_root: bool,
 }
 
 /// What kind of frame of the composer's stack.

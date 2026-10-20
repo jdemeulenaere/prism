@@ -45,7 +45,7 @@ mod tests;
 
 pub use applier::{Applier, NodeHandle, NodeTree};
 pub use composer::{invalidate, ComposeResult, Composer, Misuse};
-pub use composition::{active_composer, Composition};
+pub use composition::{active_composer, Composition, RootContent};
 pub use functions::{compose_function, COMPOSE_FUNCTIONS};
 pub use group::GroupKind;
 pub use handle::{Arena, Handle};

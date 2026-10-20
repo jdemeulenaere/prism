@@ -9,7 +9,7 @@
 
 use crate::applier::{NodeHandle, NodeTree};
 use crate::composer::{invalidate, ComposeResult, Composer, Misuse};
-use crate::composition::Composition;
+use crate::composition::{Composition, RootContent};
 use crate::group::GroupKind;
 use crate::handle::Handle;
 use crate::slot::SlotType;
@@ -43,6 +43,30 @@ pub unsafe extern "C" fn prism_compose_start(content: *mut u8) -> u64 {
 #[no_mangle]
 pub unsafe extern "C" fn prism_compose_set_content(composition: u64, content: *mut u8) {
     let content = FunctionValue::read_from(content);
+    or_misuse(Composition::set_content(Handle(composition), content))
+}
+
+/// Starts a composition of the composable `content` with the node tree applier and runs its
+/// first pass, which calls the content with the composer and the force bit (D4 of
+/// `compose-library-in-prism`).
+///
+/// # Safety
+///
+/// `content` must point at a `compose () -> Unit` function value the caller gives up.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_start_composable(content: *mut u8) -> u64 {
+    let content = RootContent::Composable(FunctionValue::read_from(content));
+    or_misuse(Composition::start(Box::new(NodeTree::new()), content)).word()
+}
+
+/// Replaces a composition's content by the composable `content` and recomposes its root.
+///
+/// # Safety
+///
+/// `content` must point at a `compose () -> Unit` function value the caller gives up.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_set_composable(composition: u64, content: *mut u8) {
+    let content = RootContent::Composable(FunctionValue::read_from(content));
     or_misuse(Composition::set_content(Handle(composition), content))
 }
 

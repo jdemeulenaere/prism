@@ -29,6 +29,20 @@ pub static COMPOSE_FUNCTIONS: &[RuntimeFunction] = &[
         never_returns: false,
     },
     RuntimeFunction {
+        name: "prism_compose_start_composable",
+        address: address(prism_compose_start_composable as *const ()),
+        parameters: &[Pointer],
+        result: Some(I64),
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_set_composable",
+        address: address(prism_compose_set_composable as *const ()),
+        parameters: &[I64, Pointer],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
         name: "prism_compose_recompose",
         address: address(prism_compose_recompose as *const ()),
         parameters: &[I64],

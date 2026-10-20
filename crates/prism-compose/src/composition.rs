@@ -21,13 +21,54 @@ use crate::thread::{
 };
 use prism_runtime::FunctionValue;
 
+/// The force bit, bit 0 of a composable's first change word: the root content's body runs
+/// whatever its arguments (D4 of `compose-library-in-prism`).
+const FORCE: u64 = 1;
+
+/// The root content of a composition: word content, `(Int) -> Unit`, which the runtime calls
+/// with the composer (the protocol module's `startComposition`), or composable content,
+/// `compose () -> Unit`, which it calls with the composer and the force bit, as Compose's
+/// `invokeComposable` does (D4 of `compose-library-in-prism`).
+#[derive(Debug)]
+pub enum RootContent {
+    Word(FunctionValue),
+    Composable(FunctionValue),
+}
+
+impl RootContent {
+    /// Whether it is composable content.
+    pub fn is_composable(&self) -> bool {
+        matches!(self, RootContent::Composable(_))
+    }
+
+    /// The function value.
+    pub fn into_function(self) -> FunctionValue {
+        match self {
+            RootContent::Word(function) | RootContent::Composable(function) => function,
+        }
+    }
+}
+
+impl From<FunctionValue> for RootContent {
+    /// Word content.
+    fn from(function: FunctionValue) -> Self {
+        RootContent::Word(function)
+    }
+}
+
 /// The lifecycle operations of compositions, which are named by their [`Handle`]s.
 pub struct Composition;
 
 impl Composition {
     /// Creates a composition that owns `content` and `applier`, and runs its first pass,
     /// which composes the content as the body of the root restart group.
-    pub fn start(applier: Box<dyn Applier>, content: FunctionValue) -> ComposeResult<Handle> {
+    pub fn start(
+        applier: Box<dyn Applier>,
+        content: impl Into<RootContent>,
+    ) -> ComposeResult<Handle> {
+        let content = content.into();
+        let composable_root = content.is_composable();
+        let content = content.into_function();
         crate::state::mark_in_use();
         let handle = with_state(|state| {
             if state.active.is_some() {
@@ -40,6 +81,7 @@ impl Composition {
                 disposed: false,
                 effects: Vec::new(),
                 reloaded: false,
+                composable_root,
             });
             let mut root = Group::new(GroupKind::Restart, 0, 0, handle);
             root.restart = Some(content);
@@ -57,9 +99,13 @@ impl Composition {
 
     /// Replaces the composition's content, invalidates its root scope and runs a pass. The old
     /// content is released at the end of that pass.
-    pub fn set_content(composition: Handle, content: FunctionValue) -> ComposeResult<()> {
+    pub fn set_content(composition: Handle, content: impl Into<RootContent>) -> ComposeResult<()> {
+        let content = content.into();
+        let composable_root = content.is_composable();
+        let content = content.into_function();
         with_state(|state| {
             let record = live_record(state, composition)?;
+            record.composable_root = composable_root;
             let root = record.root;
             let old = state.groups.get_mut(root).unwrap().restart.replace(content);
             if let Some(old) = old {
@@ -183,12 +229,18 @@ fn run_pass(composition: Handle) -> ComposeResult<bool> {
     };
     let count = with_state(|state| state.order.len());
     for index in 0..count {
-        let Some(function) = with_state(|state| open_scope(state, index)) else {
+        let Some((function, composable)) = with_state(|state| open_scope(state, index)) else {
             continue;
         };
         // SAFETY: the runtime keeps the function value alive until the end of the pass at
         // least, since a replaced one is released only then.
-        unsafe { function.call_with_word(identifier) };
+        unsafe {
+            if composable {
+                function.call_composable(identifier, FORCE)
+            } else {
+                function.call_with_word(identifier)
+            }
+        };
         with_state(|state| {
             if state.frames.len() != 1 {
                 abort_pass(state);
@@ -282,7 +334,8 @@ fn order_scopes(state: &mut State, composition: Handle) -> bool {
 /// or already composed in this pass, and gives the function to call: the root content for
 /// the root, or the scope's restart function, with a window of exactly the scope's group in
 /// its parent (D8).
-fn open_scope(state: &mut State, index: usize) -> Option<FunctionValue> {
+/// The flag says that the function is composable root content.
+fn open_scope(state: &mut State, index: usize) -> Option<(FunctionValue, bool)> {
     let pass = state.active.unwrap();
     let scope = state.order[index].group;
     if !state.groups.get(scope)?.invalid || inside_removed_group(state, scope) {
@@ -315,12 +368,14 @@ fn open_scope(state: &mut State, index: usize) -> Option<FunctionValue> {
         window_old_last: None,
         replaced_node: None,
     };
+    let mut composable = false;
     match group.parent {
         None => {
             group.invalid = false;
             group.visited = pass.identifier;
-            let applier = &state.compositions.get(pass.composition).unwrap().applier;
-            frame.node_parent = Some(applier.root());
+            let record = state.compositions.get(pass.composition).unwrap();
+            composable = record.composable_root;
+            frame.node_parent = Some(record.applier.root());
         }
         Some(parent) => {
             // A parent that skipped in this pass kept the scope's group and marked it visited
@@ -350,7 +405,7 @@ fn open_scope(state: &mut State, index: usize) -> Option<FunctionValue> {
         }
     }
     state.frames.push(frame);
-    Some(function)
+    Some((function, composable))
 }
 
 /// Whether `group` or one of its ancestors was removed in this pass. Only the top group of a

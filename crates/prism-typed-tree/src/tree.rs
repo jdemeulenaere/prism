@@ -786,6 +786,10 @@ pub enum BuiltinFunction {
     /// `runApp(title, width, height, content)` of `/prism/compose/ui`: runs an app of the
     /// composable `content` until its window closes (D15 of `ui-toolkit`).
     RunApp,
+    /// `currentComposer()` of `/prism/composer`, a composable: the composer word of the body
+    /// running it, which the compose transform reads from the body's `$composer` argument (D3
+    /// of `compose-library-in-prism`). It adds no group.
+    CurrentComposer,
 }
 
 /// The declared signature of a built-in list member (D5 of `collections`), written with the
@@ -838,6 +842,7 @@ impl BuiltinFunction {
             BuiltinFunction::UiNode => "Node",
             BuiltinFunction::UiLeafNode => "LeafNode",
             BuiltinFunction::RunApp => "runApp",
+            BuiltinFunction::CurrentComposer => "currentComposer",
         }
     }
 
@@ -977,6 +982,7 @@ impl BuiltinFunction {
                 | BuiltinFunction::UiNode
                 | BuiltinFunction::UiLeafNode
                 | BuiltinFunction::RunApp
+                | BuiltinFunction::CurrentComposer
         )
     }
 
@@ -997,6 +1003,7 @@ impl BuiltinFunction {
                 | BuiltinFunction::UiNode
                 | BuiltinFunction::UiLeafNode
                 | BuiltinFunction::RunApp
+                | BuiltinFunction::CurrentComposer
         )
     }
 

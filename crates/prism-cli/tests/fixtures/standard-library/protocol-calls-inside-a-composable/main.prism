@@ -1,0 +1,21 @@
+// expect: ok
+// run: 0
+import /prism/composer
+import /prism/compose/runtime
+import /prism/core
+
+compose fun Cell(n: Int) {
+    val k = currentComposer()
+    val v = rememberInt(k, 7) {
+        println("computed")
+        42
+    }
+    println(v)
+}
+
+fun main() {
+    val n = mutableStateOf(1)
+    val c = composition { Cell(n.value) }
+    n.value = 2
+    c.recompose()
+}

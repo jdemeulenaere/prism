@@ -1,0 +1,4 @@
+// expect: ok
+import /prism/composer
+
+compose fun C(): Int = currentComposer()

@@ -47,10 +47,9 @@ use crate::script::{ScriptCommand, ScriptLine, ScriptTarget};
 use crate::statistics::{FrameStatistics, Stage};
 use crate::text::TextMeasurer;
 use crate::thread::{install_tree, release_dropped, with_state, RunningApp, State};
-use prism_compose::{Composition, Handle};
+use prism_compose::{Composition, Handle, RootContent};
 use prism_runtime::allocation_counter::thread_counts;
 use prism_runtime::reload;
-use prism_runtime::FunctionValue;
 use std::time::{Duration, Instant};
 
 /// What an app did, for tests of idling.
@@ -90,14 +89,20 @@ pub struct App {
 
 /// Runs an app titled `title` of `width` × `height` with the configured host, composing
 /// `content`, which it owns, until the host's events end.
-pub fn run_app(title: &str, width: i64, height: i64, content: FunctionValue) -> UiResult<()> {
+pub fn run_app(
+    title: &str,
+    width: i64,
+    height: i64,
+    content: impl Into<RootContent>,
+) -> UiResult<()> {
+    let content = content.into();
     let called = Instant::now();
     if with_state(|state| state.app.is_some()) {
-        release_functions(&mut vec![content]);
+        release_functions(&mut vec![content.into_function()]);
         return Err(APP_RUNNING);
     }
     let Some(host) = configured_host(title, width, height) else {
-        release_functions(&mut vec![content]);
+        release_functions(&mut vec![content.into_function()]);
         return Err(NO_WINDOW_SYSTEM);
     };
     let measurer = host.measurer();
@@ -109,16 +114,16 @@ pub fn run_app(title: &str, width: i64, height: i64, content: FunctionValue) -> 
 pub fn run_app_with(
     host: Box<dyn Host>,
     measurer: Box<dyn TextMeasurer>,
-    content: FunctionValue,
+    content: impl Into<RootContent>,
 ) -> UiResult<Counters> {
-    run_app_from(host, measurer, content, Instant::now())
+    run_app_from(host, measurer, content.into(), Instant::now())
 }
 
 /// [`run_app_with`] of an app whose `runApp` was called at `called`.
 fn run_app_from(
     host: Box<dyn Host>,
     measurer: Box<dyn TextMeasurer>,
-    content: FunctionValue,
+    content: RootContent,
     called: Instant,
 ) -> UiResult<Counters> {
     // Reloads wait for the frame loop's reload point while the app runs, and apply at the
@@ -133,7 +138,7 @@ fn run_app_from(
 fn run_deferring(
     host: Box<dyn Host>,
     measurer: Box<dyn TextMeasurer>,
-    content: FunctionValue,
+    content: RootContent,
     called: Instant,
 ) -> UiResult<Counters> {
     // Recompositions are counted only for a script that dumps them (D14 of
@@ -185,9 +190,9 @@ impl App {
     pub fn start(
         host: Box<dyn Host>,
         measurer: Box<dyn TextMeasurer>,
-        content: FunctionValue,
+        content: impl Into<RootContent>,
     ) -> UiResult<App> {
-        Self::start_at(host, measurer, content, Instant::now())
+        Self::start_at(host, measurer, content.into(), Instant::now())
     }
 
     /// Starts an app whose `runApp` was called at `called`, measuring its frames when frame
@@ -195,11 +200,11 @@ impl App {
     fn start_at(
         host: Box<dyn Host>,
         measurer: Box<dyn TextMeasurer>,
-        content: FunctionValue,
+        content: RootContent,
         called: Instant,
     ) -> UiResult<App> {
         if with_state(|state| state.app.is_some()) {
-            release_functions(&mut vec![content]);
+            release_functions(&mut vec![content.into_function()]);
             return Err(APP_RUNNING);
         }
         let run_started = crate::host::frame_statistics();
@@ -671,6 +676,7 @@ mod tests {
     use crate::text::FixedAdvanceMetrics;
     use prism_compose::test_support::content;
     use prism_compose::{invalidate, Composer};
+    use prism_runtime::FunctionValue;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
@@ -810,6 +816,23 @@ mod tests {
         );
         assert_eq!(presented.get(), 3, "every frame is presented");
         assert_eq!(*log.borrow(), ["compose"]);
+    }
+
+    /// `runApp`'s content is composable root content, called with the composer and the
+    /// force bit (D4 of `compose-library-in-prism`), and released when the app ends.
+    #[test]
+    fn composable_content_runs_as_the_app_root() {
+        let log = log();
+        let seen = log.clone();
+        let (host, _) = scripted(vec![HostEvent::Frame]);
+        let content = prism_compose::test_support::composable_content(move |k, changed| {
+            assert!(k.current_scope().is_ok());
+            push_line(&seen, format!("compose {}", changed));
+        });
+        let counters = run_app_with(host, Box::new(FixedAdvanceMetrics), content).unwrap();
+        assert_eq!(counters.passes, 1);
+        assert_eq!(*log.borrow(), ["compose 1"]);
+        assert_eq!(prism_compose::live_compositions_report(), None);
     }
 
     #[test]

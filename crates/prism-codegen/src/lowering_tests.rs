@@ -1271,3 +1271,32 @@ fn ui_entry_points_resolve() {
         assert!(crate::externals::entry_points().any(|entry| entry.name == function.name));
     }
 }
+
+/// standard-library: "Content given to an external" (D4 of `compose-library-in-prism`): an
+/// external may take composable content, passed by address and moved like any function value,
+/// which matches the compose runtime's entry.
+#[test]
+fn content_given_to_an_external() {
+    let source = "package prism\n\
+        private external fun prism_compose_start_composable(content: attached compose () -> Unit): Int\n\
+        public fun start(content: attached compose () -> Unit): Int = prism_compose_start_composable(content)\n";
+    let file = lower_files(&[("prism/test", source)]).remove(0);
+    check_file(&file).expect("the signature matches the entry point's");
+    let dump = crate::dump::dump_file(&file).expect("it lowers");
+    let start = function_ir(&dump, "prism/test::start");
+    // One address parameter and a 64-bit result: the entry's signature.
+    let entry = start
+        .lines()
+        .find(|line| line.contains("%\"prism_compose_start_composable\""))
+        .unwrap_or_else(|| panic!("no import of the entry in:\n{}", start));
+    let signature = entry.rsplit(' ').next().unwrap();
+    assert!(
+        start.contains(&format!("{} = (i64) -> i64 system_v", signature))
+            || start.contains(&format!("{} = (i64) -> i64 apple_aarch64", signature)),
+        "{}",
+        start
+    );
+    // The content is passed by address, as any function value is.
+    let function = entry.trim().split(" ").next().unwrap();
+    assert!(start.contains(&format!("call {}(", function)), "{}", start);
+}

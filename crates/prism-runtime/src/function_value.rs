@@ -95,6 +95,20 @@ impl FunctionValue {
         code(self.environment, word)
     }
 
+    /// Calls the value as a composable `compose () -> Unit` function, with the composer word
+    /// `composer` and the one change word `changed`, the calling convention of composable
+    /// function values (`code-generation`, composable signatures): what Compose's runtime does
+    /// in `invokeComposable` (D4 of `compose-library-in-prism`).
+    ///
+    /// # Safety
+    ///
+    /// The value must be a live function value of type `compose () -> Unit`.
+    pub unsafe fn call_composable(&self, composer: u64, changed: u64) {
+        let code = (*(*self.descriptor).slot).load(Ordering::Acquire);
+        let code: unsafe extern "C" fn(*mut u8, u64, u64) = std::mem::transmute(code);
+        code(self.environment, composer, changed)
+    }
+
     /// Calls the value as a `() -> Unit` function.
     ///
     /// # Safety

@@ -823,6 +823,7 @@ impl Codec for BuiltinFunction {
             BuiltinFunction::UiLeafNode => 36,
             BuiltinFunction::RunApp => 37,
             BuiltinFunction::RangeContains => 40,
+            BuiltinFunction::CurrentComposer => 41,
         });
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -862,6 +863,7 @@ impl Codec for BuiltinFunction {
             36 => BuiltinFunction::UiLeafNode,
             37 => BuiltinFunction::RunApp,
             40 => BuiltinFunction::RangeContains,
+            41 => BuiltinFunction::CurrentComposer,
             _ => return None,
         })
     }

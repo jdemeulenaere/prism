@@ -128,12 +128,13 @@ pub extern "C" fn prism_ui_modifier_overflow() -> ! {
     raise(&setters::modifier_overflow())
 }
 
-/// Runs an app titled `title` of `width` × `height` composing `content`, the root content
-/// adapter of `runApp`'s content, which it takes over, and returns when its events end.
+/// Runs an app titled `title` of `width` × `height` composing `content`, `runApp`'s
+/// composable content, which it takes over and calls with the composer and the force bit (D4
+/// of `compose-library-in-prism`), and returns when its events end.
 ///
 /// # Safety
 ///
-/// `title` must point at a string, and `content` at a `(Int) -> Unit` function value the
+/// `title` must point at a string, and `content` at a `compose () -> Unit` function value the
 /// caller gives up.
 #[no_mangle]
 pub unsafe extern "C" fn prism_ui_run_app(
@@ -142,7 +143,7 @@ pub unsafe extern "C" fn prism_ui_run_app(
     height: i64,
     content: *mut u8,
 ) {
-    let content = FunctionValue::read_from(content);
+    let content = prism_compose::RootContent::Composable(FunctionValue::read_from(content));
     or_raise(run_app((*title).as_str(), width, height, content))
 }
 
@@ -277,7 +278,12 @@ mod tests {
     fn no_host_in_child() -> ! {
         crate::host::configure(crate::host::HostConfiguration::None);
         let title = PrismString::of_static("Prism");
-        let mut content = std::mem::ManuallyDrop::new(content(|_| {}));
+        let prism_compose::RootContent::Composable(content) =
+            prism_compose::test_support::composable_content(|_, _| {})
+        else {
+            unreachable!()
+        };
+        let mut content = std::mem::ManuallyDrop::new(content);
         unsafe { prism_ui_run_app(&title, 10, 10, (&mut *content as *mut FunctionValue).cast()) };
         unreachable!()
     }

@@ -1792,8 +1792,8 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 let character = self.builder.inst_results(call)[0];
                 self.write_place(destination, Lowered::Scalar(character), false)?;
             }
-            // `runApp(title, width, height, adapter)`: the UI runtime's entry, which takes the
-            // root content adapter by move (D15 of `ui-toolkit`).
+            // `runApp(title, width, height, content)`: the UI runtime's entry, which takes the
+            // composable content by move (D4 of `compose-library-in-prism`).
             Callee::Builtin(BuiltinFunction::RunApp) => {
                 let title = self.operand(&arguments[0], span)?.scalar()?;
                 let width = self.operand(&arguments[1], span)?.scalar()?;

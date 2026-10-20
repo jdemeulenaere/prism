@@ -1,0 +1,16 @@
+module main
+phase composed
+compose composed fun main::C(_1: Int, _2: Int): Int @4:1
+  local _0: Int (return)
+  local _1 $composer: Int (argument)
+  local _2 $changed: Int (argument)
+  local _3: Unit (temporary)
+  bb0:
+    storage_live _3 @4:1
+    _3 = call composer start_group key 0x2e2eed955fc758e4 /* body main::C */(copy _1) -> bb1 @4:1
+  bb1:
+    _0 = copy _1 @4:24
+    _3 = call composer end_group(copy _1) -> bb2 @4:1
+  bb2:
+    storage_dead _3 @4:1
+    return @4:1

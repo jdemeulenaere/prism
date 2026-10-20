@@ -22,7 +22,7 @@ In a library module, an annotation of another name, an annotation on a kind of d
 `/prism/composer` MUST declare `public intrinsic compose fun currentComposer(): Int`, which gives the composer word of the body running it, the word the protocol functions take. Its call MUST add no group and make no region need one.
 
 #### Scenario: Protocol calls inside a composable
-- **WHEN** `compose fun Cell(n: Int) { val k = currentComposer(); val v = rememberInt(k, 7) { println("computed"); 42 }; println(v) }` and `fun main() { val c = composition { Cell(1) }; c.setContent { Cell(2) } }` run with `import /prism/composer`, `import /prism/compose/runtime` and `import /prism/core`, under `--check-allocations`
+- **WHEN** `compose fun Cell(n: Int) { val k = currentComposer(); val v = rememberInt(k, 7) { println("computed"); 42 }; println(v) }` and `fun main() { val n = mutableStateOf(1); val c = composition { Cell(n.value) }; n.value = 2; c.recompose() }` run with `import /prism/composer`, `import /prism/compose/runtime` and `import /prism/core`, under `--check-allocations`
 - **THEN** stdout is `computed`, `42` and `42`, one per line: the word slot was kept in `Cell`'s group across the passes
 
 ### Requirement: Externals Take Composable Content

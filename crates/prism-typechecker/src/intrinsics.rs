@@ -37,6 +37,7 @@ const CORE: &str = "prism/core";
 pub(crate) const MEMBER_MODULE: &str = CORE;
 const COMPOSE_RUNTIME: &str = prism_typed_tree::COMPOSE_RUNTIME_MODULE;
 const COMPOSE_UI: &str = prism_typed_tree::COMPOSE_UI_MODULE;
+const COMPOSER: &str = "prism/composer";
 
 const fn entry(
     module: &'static str,
@@ -316,6 +317,16 @@ pub const CATALOG: &[Intrinsic] = &[
         "runApp",
         BuiltinFunction::RunApp,
         "public intrinsic fun runApp(title: &String, width: Int, height: Int, content: attached compose () -> Unit): Unit",
+        false,
+    ),
+    // `/prism/composer` (D3 of `compose-library-in-prism`): the composer of the running body,
+    // Compose's `currentComposer`, the one composer-access primitive.
+    entry(
+        COMPOSER,
+        None,
+        "currentComposer",
+        BuiltinFunction::CurrentComposer,
+        "public intrinsic compose fun currentComposer(): Int",
         false,
     ),
 ];

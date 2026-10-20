@@ -50,19 +50,19 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 3. The composer primitive (D3, D4)
 
-- [ ] 3.1 `currentComposer`:
+- [x] 3.1 `currentComposer`:
   - catalog entry `public intrinsic compose fun currentComposer(): Int` of `prism/composer`, declared in `library/prism/composer.prism`;
   - `BuiltinFunction::CurrentComposer` with a codec tag and dump name;
   - the transform lowers it to a copy of `$composer`, and treats it as no composable call for regions and call-site groups.
 
   Add fixtures for "Protocol calls inside a composable" (`standard-library/`, executable), "The current composer in the tree" (`typed-tree/`) and "The composer read in a composable" (`mir/`).
-- [ ] 3.2 Runtime entries:
+- [x] 3.2 Runtime entries:
   - `prism-compose` gains `prism_compose_start_composable(content) -> u64` and `prism_compose_set_composable(composition, content)`, listed in `COMPOSE_FUNCTIONS`. A root records whether its content is word content or composable content, and calls composable content through its descriptor with the composer and the force bit (1).
   - `prism_ui_run_app` takes composable content and starts its composition through the same path.
   - Rust tests cover both kinds of root content, disposal and release order.
 
   Verify with `cargo test -p prism-compose -p prism-ui`.
-- [ ] 3.3 Check that externals with composable function parameters pass `E6005`'s signature check (an address), and add the case for "Content given to an external" (a `// library:` case dumping the module's CLIF).
+- [x] 3.3 Check that externals with composable function parameters pass `E6005`'s signature check (an address), and add the case for "Content given to an external" (a `// library:` case dumping the module's CLIF).
 
 ## 4. Composables with explicit groups (D5)
 

@@ -1136,6 +1136,15 @@ impl<'a> Rewriter<'a> {
         } = call;
         let target = target.expect("a compose intrinsic returns");
         match builtin {
+            // The body's own composer (D3 of `compose-library-in-prism`).
+            BuiltinFunction::CurrentComposer => {
+                let composer = self.composer();
+                self.push(
+                    StatementKind::assign(destination, Rvalue::Use(composer)),
+                    span,
+                );
+                self.goto(target, span);
+            }
             BuiltinFunction::Remember => self.remember(
                 arguments,
                 parameters,
@@ -1189,17 +1198,9 @@ impl<'a> Rewriter<'a> {
                 self.operation(operation, arguments, parameters, destination, span);
                 self.goto(target, span);
             }
-            // `runApp` keeps its call, its content wrapped in the body's root content adapter
-            // (D15 of `ui-toolkit`); the backend calls the UI runtime's entry with it.
+            // `runApp` keeps its call and its composable content, which the UI runtime calls
+            // with the composer and the force bit (D4 of `compose-library-in-prism`).
             BuiltinFunction::RunApp => {
-                let content_index = arguments.len() - 1;
-                let content_type = parameters[content_index].clone();
-                let mut arguments = arguments;
-                let content = arguments.pop().expect("the content");
-                let adapter = self.adapter_value(content, content_type, span);
-                arguments.push(Operand::Move(Place::local(adapter), span));
-                let mut parameters = parameters;
-                parameters[content_index] = word_function();
                 self.call(
                     Callee::Builtin(BuiltinFunction::RunApp),
                     arguments,

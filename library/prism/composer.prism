@@ -4,6 +4,10 @@
 // the compose runtime validates: misusing them is the runtime error `composition misuse`.
 package prism
 
+// The composer of the composable body running this call: the word the protocol functions take.
+// Compose's `currentComposer`. It adds no group.
+public intrinsic compose fun currentComposer(): Int
+
 // Starts a composition of `content`, composes it once and gives its handle.
 public fun startComposition(content: escaping (Int) -> Unit): Int = prism_compose_start(content)
 

@@ -1,0 +1,3 @@
+module main
+compose fun main::C(): Int @4:1
+  call compose builtin currentComposer: Int @4:24

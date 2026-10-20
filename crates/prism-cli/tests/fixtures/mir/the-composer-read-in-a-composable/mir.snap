@@ -1,0 +1,7 @@
+module main
+compose fun main::C(): Int @4:1
+  local _0: Int (return)
+  bb0:
+    _0 = call compose builtin currentComposer() -> bb1 @4:24
+  bb1:
+    return @4:1

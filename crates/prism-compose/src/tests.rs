@@ -1834,3 +1834,91 @@ fn the_active_composition_is_the_one_whose_pass_runs() {
     assert_eq!(crate::active_composition(), None, "none after the pass");
     Composition::dispose(composition).unwrap();
 }
+
+/// compose: "Root Content Is Called With the Force Bit" (D4 of `compose-library-in-prism`):
+/// composable root content gets the composer and a change word of the force bit alone, on the
+/// first pass and on a recomposition of the root; word content keeps getting the composer.
+#[test]
+fn composable_root_content_is_called_with_the_force_bit() {
+    let log = log();
+    let seen = log.clone();
+    let marker = Tracked("composable");
+    let c = Composition::start(
+        tree(),
+        composable_content(move |k, changed| {
+            let _ = &marker;
+            assert!(k.current_scope().is_ok(), "called with the pass's composer");
+            push(&seen, format!("composed {}", changed));
+        }),
+    )
+    .unwrap();
+    assert_eq!(*log.borrow(), ["composed 1"]);
+    invalidate(Composition::root_scope(c).unwrap());
+    assert!(Composition::recompose(c).unwrap());
+    assert_eq!(*log.borrow(), ["composed 1", "composed 1"]);
+    // Word content replaces it: called with the composer alone, and the old content is
+    // released at the end of that pass.
+    let words = log.clone();
+    Composition::set_content(
+        c,
+        content(move |k| {
+            assert!(k.current_scope().is_ok());
+            push(&words, "word");
+            assert!(
+                drops().is_empty(),
+                "the old content lives until the pass ends"
+            );
+        }),
+    )
+    .unwrap();
+    assert_eq!(drops(), ["drop composable"]);
+    // And composable content replaces that.
+    let again = log.clone();
+    let marker = Tracked("second");
+    Composition::set_content(
+        c,
+        composable_content(move |_, changed| {
+            let _ = &marker;
+            push(&again, format!("again {}", changed));
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        *log.borrow(),
+        ["composed 1", "composed 1", "word", "again 1"]
+    );
+    // Disposing releases the composable content.
+    Composition::dispose(c).unwrap();
+    assert_eq!(drops(), ["drop composable", "drop second"]);
+    assert_eq!(crate::live_compositions_report(), None);
+}
+
+/// The entry points of composable content (`prism_compose_start_composable`,
+/// `prism_compose_set_composable`) take the content over and run it as the root.
+#[test]
+fn composable_content_through_the_entry_points() {
+    let log = log();
+    let seen = log.clone();
+    let crate::RootContent::Composable(content) =
+        composable_content(move |_, changed| push(&seen, format!("start {}", changed)))
+    else {
+        unreachable!()
+    };
+    let mut content = std::mem::ManuallyDrop::new(content);
+    let c = unsafe {
+        crate::entry::prism_compose_start_composable((&mut *content as *mut FunctionValue).cast())
+    };
+    let seen = log.clone();
+    let crate::RootContent::Composable(next) =
+        composable_content(move |_, changed| push(&seen, format!("set {}", changed)))
+    else {
+        unreachable!()
+    };
+    let mut next = std::mem::ManuallyDrop::new(next);
+    unsafe {
+        crate::entry::prism_compose_set_composable(c, (&mut *next as *mut FunctionValue).cast())
+    };
+    assert_eq!(*log.borrow(), ["start 1", "set 1"]);
+    crate::entry::prism_compose_dispose(c);
+    assert_eq!(crate::live_compositions_report(), None);
+}
