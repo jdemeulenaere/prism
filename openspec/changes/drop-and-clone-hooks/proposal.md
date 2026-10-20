@@ -38,7 +38,7 @@ None: hooks are part of the ownership model and of how values are dropped and cl
 
 - `crates/prism-ast` and `crates/prism-parser`: nothing new (the `operator` modifier is `operator-conventions`').
 - `crates/prism-abi/src/signature.rs`: `drop_hook`/`clone_hook` flags on `ExportedSymbol::{Struct, Enum}` and `AbiTypeDefinition`, set in Phase 1 by a syntactic match of the file's own hook declarations.
-- `crates/prism-typed-tree/src/types.rs`: hook flags in `TypeTable` beside markers; `crates/prism-typechecker` (`operators.rs` hook shapes, `checker.rs` `check_marker_declarations`, `checker/patterns.rs` take-apart check, method-call resolution for `E4036`, `error.rs`).
+- `crates/prism-typed-tree/src/types.rs`: hook flags in `TypeTable` beside markers; `crates/prism-typechecker` (`checker/operators.rs` hook shapes, `checker.rs` `check_marker_declarations`, `checker/patterns.rs` take-apart check, method-call resolution for `E4036`, `error.rs`).
 - `crates/prism-mir/src/summary.rs`: hook instance requests in `FileSummary` and `GenericSummary`.
 - `crates/prism-codegen/src/glue.rs` (`owns_storage` becomes "needs glue", drop and clone glue call hooks), `contract.rs` (fingerprints), `instances.rs` (planning hook instances), `symbols.rs`.
 - `crates/prism-runtime/src/allocation.rs` and the top-level accessors: values dropped by the check are marked released.
