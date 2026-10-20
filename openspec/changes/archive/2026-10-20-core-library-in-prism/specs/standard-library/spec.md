@@ -35,7 +35,7 @@ A library module MUST go through every stage a workspace file does: Phase 1 extr
 - **THEN** its file lines name `prism/core.prism`, `prism/compose/runtime.prism` and `main.prism`, and no other library module
 
 ### Requirement: Intrinsic Extensions Are Members
-An intrinsic extension function or property, and every extension function or property that `/prism/core` declares on a built-in type, MUST be a member of its receiver type wherever it is in scope: in every workspace file for those of `/prism/core`, and where its module is imported for any other. A call or read of that name on that type, through `&`, `&mut` and `Heap<T>`, MUST use it before any extension, after fields and the built-in `clone()` and `unbox()`. A workspace extension of that name on that receiver type constructor, where the member is in scope, MUST be `E4010`.
+An intrinsic extension, and every extension that `/prism/core` declares on a built-in type, function or property, MUST be a member of its receiver type wherever it is in scope: everywhere for `/prism/core`'s, where its module is imported otherwise. A call or read of it, through `&`, `&mut` and `Heap<T>`, MUST use it before any extension, after fields, `clone()` and `unbox()`. A workspace extension of that name on that receiver type, where the member is in scope, MUST be `E4010`.
 
 #### Scenario: A workspace extension named like a member
 - **WHEN** a file declares `fun Int.toString(): String = "x"`, `fun String.length(): Int = 0`, `fun <T> List<T>.add(element: T) {}` and `fun <T> List<T>.isNotEmpty(): Bool = false`
@@ -49,7 +49,7 @@ An intrinsic extension function or property, and every extension function or pro
 `/prism/core` MUST declare `print` and `println` as public intrinsics, and every member of the built-in types:
 - `toString()` of `Int`, `Double`, `Bool` and `Char`, written in Prism;
 - the intrinsic property `val String.length: Int`;
-- the members of `List<T>` (collections, "List Members Are Typed as Extensions", "Size and Indices Are Read Without Parentheses").
+- the members of `List<T>` (collections).
 
 Every extension it declares MUST have a built-in receiver type. Their behavior is that of the type-system, collections and execution requirements for them.
 
@@ -125,7 +125,7 @@ An `intrinsic` declaration MAY carry `operator` when the catalog lists the intri
 
 ### Requirement: The UI Intrinsics
 The intrinsic catalog MUST hold, as intrinsics of `/prism/compose/ui`:
-- the one-word structs `NodeId : Copy`, with `package` visibility, and `HandlerId : Copy`, public, whose equality is the runtime entry `prism_ui_handlers_equal`;
+- the one-word structs `NodeId : Copy`, `package`, and `HandlerId : Copy`, public, whose equality is the runtime entry `prism_ui_handlers_equal`;
 - the `package` composables `Node(kind: Int, update: (NodeId) -> Unit, content: compose () -> Unit)` and `LeafNode(kind: Int, update: (NodeId) -> Unit)`;
 - the function `runApp`.
 

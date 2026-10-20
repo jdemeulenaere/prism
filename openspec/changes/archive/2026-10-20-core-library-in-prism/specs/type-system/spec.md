@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Scalars Have a Built-In toString
-An `Int`, `Double`, `Bool` or `Char`, read through any `&`, `&mut` and `Heap<T>` layers, MUST have the member function `toString()` that `/prism/core` declares in Prism (`public fun Int.toString(): String`), taking no arguments and returning `String`, checked and called as an extension with a shared receiver. `x?.toString()` on a nullable of one of these MUST have type `String?`. Arguments MUST be rejected with `E4004`. On any other type, `toString` MUST be an ordinary name, resolved to a field or an extension like any other member (`E4006` when none exists).
+An `Int`, `Double`, `Bool` or `Char`, read through any `&`, `&mut` and `Heap<T>` layers, MUST have the member `toString()` that `/prism/core` declares in Prism (`public fun Int.toString(): String`), called as an extension with a shared receiver. `x?.toString()` on a nullable of one of these MUST have type `String?`. Arguments MUST be `E4004`. On any other type, `toString` MUST be an ordinary name, resolved to a field or an extension like any other member (`E4006` when none exists).
 
 #### Scenario: Converting scalars to strings
 - **WHEN** `fun f(n: Int, d: &Double, b: Bool, c: Char, m: Int?): String = n.toString() + d.toString() + b.toString() + c.toString() + (m?.toString() ?: "")` is checked

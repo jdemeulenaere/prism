@@ -370,11 +370,19 @@ Each instance MUST be keyed by its symbol, its generic's Monomorphization Hash a
 - **THEN** the next `prism run --explain-cache app/main.prism` prints `  checked lib/text.prism` and `  reused app/main.prism`, and its output follows the new body
 
 ### Requirement: Library Declarations in the ABI
-Phase 1 MUST extract and hash a library module's ABI as a workspace file's, from its syntax tree alone. An exported function's entry MUST record whether it is ordinary, intrinsic or external, and an exported intrinsic extension property MUST be an entry with its type parameters, receiver type, name and type. Both MUST be covered by the ABI hash and shown by `prism abi` with their modifiers (`public intrinsic val <T> List<T>.size: Int`).
+Phase 1 MUST extract and hash a library module's ABI as a workspace file's, from its syntax tree alone. An exported function's entry MUST record whether it is ordinary, intrinsic or external. An exported extension property of any module MUST record its type parameters, receiver type, name, type, writability and whether it is intrinsic. Both MUST be covered by the ABI hash and shown by `prism abi` with their modifiers (`public val Int.dp: Dp`). A getter's body MUST NOT be part of the ABI.
 
 #### Scenario: The ABI of a library module
-- **WHEN** the ABI of `/prism/collections` is extracted
-- **THEN** it holds `public intrinsic mut fun <T> List<T>.add(element: T): Unit`, `public intrinsic val <T> List<T>.size: Int` and the ordinary `public fun <T, R> List<T>.map(transform: (&T) -> R): List<R>`, and changing an entry from intrinsic to ordinary changes the module's ABI hash
+- **WHEN** the ABI of `/prism/core` is extracted
+- **THEN** it holds `public intrinsic mut fun <T> List<T>.add(element: T): Unit`, `public intrinsic val <T> List<T>.size: Int`, the ordinary `public fun <T> List<T>.isEmpty(): Bool` and the property `public val <T> List<T>.indices: Range`, and changing an entry from intrinsic to ordinary changes the module's ABI hash
+
+#### Scenario: Editing a getter recompiles nothing downstream
+- **WHEN** `lib/geo.prism` exports `public struct Box : Copy { val w: Int }` and `public val Box.twice: Int get() = w * 2`, `app/main.prism` imports `/lib/geo` and prints `Box(3).twice`, the program has been run, and the getter's body becomes `w + w + 1`
+- **THEN** the ABI hash of `lib/geo` is unchanged, and the next `prism run --explain-cache app/main.prism` prints `7`, `  checked lib/geo.prism` and `  reused app/main.prism`
+
+#### Scenario: A property's type is part of the ABI
+- **WHEN** the exported `public val Box.twice: Int get() = w * 2` of `lib/geo.prism` becomes `public val Box.twice: Double get() = 2.0`
+- **THEN** the ABI hash of `lib/geo` changes, and a file importing it is checked again
 
 ### Requirement: Receivers and Contexts in the ABI
 Phase 1 MUST record whether a function type in an exported signature has a receiver, and whether that receiver is mutable, as part of its structured type, and MUST record an exported function's context type, bound like any signature type. The ABI hash MUST cover both, and the order of exported symbols MUST take the context into account, so that reordering declarations never changes the hash.
@@ -421,7 +429,7 @@ Phase 1 MUST record whether each parameter of an exported function, and each par
 - **THEN** the file's ABI hash changes, and an importing file is checked again
 
 ### Requirement: Member Modules Are Inputs of Every Workspace File
-Phase 2 of a workspace file MUST see the ABIs of its direct imports and, after them, the members of the built-in types that the member modules `/prism/core` and `/prism/collections` declare (`standard-library`, "Built-In Types and Their Members Need No Import"), and nothing else of the library. Phase 2 of a library file MUST see only the ABIs of its direct imports.
+Phase 2 of a workspace file MUST see the ABIs of its direct imports and, after them, the members of the built-in types that the member module `/prism/core` declares (`standard-library`, "Built-In Types and Their Members Need No Import"), and nothing else of the library. Instances of the generic members it calls MUST be planned for the program as those of an import's generics, whether or not the file imports `/prism/core`. Phase 2 of a library file MUST see only the ABIs of its direct imports.
 
 #### Scenario: Instances of imported library generics
 - **WHEN** `import /prism/collections`, `import /prism/core` and `fun main() { println(listOf(1, 2).map { x -> x + 1 }.size) }` are run
@@ -429,7 +437,11 @@ Phase 2 of a workspace file MUST see the ABIs of its direct imports and, after t
 
 #### Scenario: Member modules give members only
 - **WHEN** a file without imports declares `fun f(xs: &List<Int>): Int = xs.size` and `fun g(): Int = listOf(1).size`
-- **THEN** `f` typechecks, and `g` is rejected with `E4001` for `listOf`, although `/prism/collections` is an input of the file
+- **THEN** `f` typechecks, and `g` is rejected with `E4001` for `listOf`, which `/prism/collections` declares
+
+#### Scenario: Instances of generic members
+- **WHEN** a file importing `/prism/collections` and `/prism/system`, and not `/prism/core`, declares `fun main() { val xs = listOf("a"); exitProcess(if (xs.isNotEmpty()) 3 else 4) }` and runs with `prism run --explain-cache`
+- **THEN** the program's instances include `prism/core::List.isNotEmpty<String>`, and the exit status is 3
 
 ### Requirement: Operator Functions and Equality Operators in the ABI
 Phase 1 MUST record whether an exported function is `operator`, and, in the record of an exported struct or enum and in its definition among the reachable types, whether it has an `equals` operator; the ABI hash and the structural hash of definitions MUST cover both. Editing an operator function's body MUST change neither.
@@ -555,7 +567,7 @@ Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by 
 
 Decisions from `explicit-library` (review item A4, agreed with the user on 2026-10-20; the mechanism decided while proposing and implementing, and logged in `docs/decisions-for-review.md`):
 
-- **Member modules replace the prelude modules as implicit inputs** (D2, D14). With no prelude, a workspace file's Phase 2 sees its direct imports and, after them, only the members of the built-in types that `/prism/core` and `/prism/collections` declare, through one `MemberScope` per graph shared by every checker (one `Arc` copy per file and one lookup per member the file's own and imported members miss). The two member modules are still parsed for every program and counted by check keys, after the direct imports; `/prism/compose/runtime` is an input only of the files that import it. Instances of library generics are planned from imports, as any import's. Library files see neither. Rejected: members typed from the catalog with no module loaded, and a per-file member scope from imports only (`s.length` would need an import).
+- **Member modules replace the prelude modules as implicit inputs** (D2, D14). With no prelude, a workspace file's Phase 2 sees its direct imports and, after them, only the members of the built-in types that `/prism/core` and `/prism/collections` declare (since `core-library-in-prism` D3, below, `/prism/core` alone), through one `MemberScope` per graph shared by every checker (one `Arc` copy per file and one lookup per member the file's own and imported members miss). The two member modules are still parsed for every program and counted by check keys, after the direct imports; `/prism/compose/runtime` is an input only of the files that import it. Instances of library generics are planned from imports, as any import's. Library files see neither. Rejected: members typed from the catalog with no module loaded, and a per-file member scope from imports only (`s.length` would need an import).
 
 Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
 
@@ -569,3 +581,8 @@ Decisions from `drop-and-clone-hooks` (part L2 of the review's agreed item A4, p
 Decisions from `vararg` (part L4 of the review's agreed item A4, user direction 2026-10-20; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the rules themselves are in `vararg-parameters`):
 
 - **Vararg flags in the ABI** (D14). An exported parameter records `is_vararg` with its type as the `List<E>` the body sees, so importers build the function type unchanged and know to pack. The ABI hash covers the flag (the parameter-kind byte's value 3, so existing hashes keep their bytes), since it changes what callers may write; the machine signature does not change, so slot contracts and hot reload are unaffected.
+
+Decisions from `core-library-in-prism` (the core half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over the smallest intrinsic core with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Extension properties in the ABI** (D12). Every `public` and `package` extension property is exported with its kind (plain or intrinsic) and type, covered by the ABI hash; a getter's body is not in the ABI, so editing it recompiles no importer, and changing its type re-checks them. `prism abi` prints `public val Int.dp: Dp`. Ingestion makes a plain property an imported extension, or a member when `/prism/core` declares it on a built-in type. Cost: one flag per exported property in Phase 1.
+- **One member module, and instances of generic members** (D3, D4). A workspace file's key appends `/prism/core`'s ABI hash alone, so a change of `/prism/collections` reaches only its importers. Generic members written in Prism (`isEmpty`, `isNotEmpty`, `indices`) are called by files that never import `/prism/core`; their instances are planned from file summaries and cached like an import's, one per element type and program, shared by every workspace with one compiler and cache, and invalidated with the rest of the cache by the compiler identity, which hashes the executable embedding the library.

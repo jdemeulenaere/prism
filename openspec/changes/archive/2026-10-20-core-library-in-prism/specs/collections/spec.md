@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: List Members Are Typed as Extensions
-The members of a `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST be the public extensions on `List<T>` that `/prism/core` declares (`public intrinsic val <T> List<T>.size: Int`, `public fun <T> List<T>.isEmpty(): Bool`). Each is typed by its declared receiver mode and signature, so receivers, arguments (`E4004`) and safe calls (`xs?.add(1)`) are checked as for an extension. The reading members are `isEmpty(): Bool` and `isNotEmpty(): Bool`, written in Prism over `size`, and the intrinsics `contains(element: &T): Bool` and `indexOf(element: &T): Int`.
+The members of a `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST be the public extensions on `List<T>` that `/prism/core` declares (`public fun <T> List<T>.isEmpty(): Bool`), each typed and checked by its receiver mode and signature as an extension is (`E4004`, `xs?.add(1)`). The reading members are `isEmpty(): Bool` and `isNotEmpty(): Bool`, written in Prism over `size`, and the intrinsics `contains(element: &T): Bool` and `indexOf(element: &T): Int`.
 
 #### Scenario: Wrong element types rejected
 - **WHEN** `fun f() { var xs = listOf(1); xs.add("a"); xs.insert("b", 1) }` is checked

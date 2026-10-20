@@ -63,7 +63,7 @@ The name `List` MUST be built in, like `Heap`: a top-level `struct`, `enum`, `fu
 - **THEN** the type checker emits `E4016` for `A` and accepts `B`
 
 ### Requirement: List Members Are Typed as Extensions
-The members of a `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST be the public intrinsic extensions on `List<T>` of `/prism/collections` (`public intrinsic val <T> List<T>.size: Int`), each typed by its declared receiver mode and signature, so receivers, arguments (`E4004`) and safe calls (`xs?.add(1)`) are checked as for an extension. The reading members are `isEmpty(): Bool`, `isNotEmpty(): Bool`, `contains(element: &T): Bool` and `indexOf(element: &T): Int`.
+The members of a `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST be the public extensions on `List<T>` that `/prism/core` declares (`public fun <T> List<T>.isEmpty(): Bool`), each typed and checked by its receiver mode and signature as an extension is (`E4004`, `xs?.add(1)`). The reading members are `isEmpty(): Bool` and `isNotEmpty(): Bool`, written in Prism over `size`, and the intrinsics `contains(element: &T): Bool` and `indexOf(element: &T): Int`.
 
 #### Scenario: Wrong element types rejected
 - **WHEN** `fun f() { var xs = listOf(1); xs.add("a"); xs.insert("b", 1) }` is checked
@@ -89,7 +89,7 @@ The mutating members MUST be `mut fun add(element: T)`, `mut fun insert(index: I
 - **THEN** the file typechecks successfully, and `first` owns the removed `String`
 
 ### Requirement: Size and Indices Are Read Without Parentheses
-A `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST have the built-in members `size` of type `Int` and `indices` of type `Range` (from 0, end excluded, as `0..<size`), read without parentheses with a shared borrow of the list, as `length` of a `String` is; `xs?.size` on a nullable list MUST have type `Int?`. Calling either (`xs.size()`) MUST be rejected with `E4004`, as calling an `Int` or a `Range`.
+A `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST have the member properties `size` of type `Int`, an intrinsic, and `indices` of type `Range` (from 0, end excluded), written in Prism as `0..<size`. Both are read without parentheses with a shared borrow of the list, as `length` of a `String` is, and `xs?.size` on a nullable list MUST have type `Int?`. Calling either (`xs.size()`) MUST be rejected with `E4004`, as calling an `Int` or a `Range` is.
 
 #### Scenario: Reading the size
 - **WHEN** `fun f(a: List<Int>, b: &List<String>, c: List<Int>?): Int { var n = a.size + b.size + (c?.size ?: 0); for (i in a.indices) n += a[i]; return n }` is checked
@@ -100,11 +100,11 @@ A `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST have the bu
 - **THEN** the type checker emits `E4004`, saying that `Int` cannot be called
 
 ### Requirement: List Members Take Precedence Over Extensions
-A call `xs.name(...)` or read `xs.name` on a `List<T>` MUST use its member of that name (`standard-library`, "Intrinsic Extensions Are Members"), after the built-in `clone()` and before any extension. A workspace extension on `List` named like a member (`size`, `indices`, `isEmpty`, `isNotEmpty`, `contains`, `indexOf`, `add`, `insert`, `removeAt`, `removeLast`, `reverse`, `clear`, or `clone` for a `Clone` element type) could never be called and MUST be rejected with `E4010`.
+A call `xs.name(...)` or read `xs.name` on a `List<T>` MUST use its member of that name (`standard-library`, "Intrinsic Extensions Are Members"), after the built-in `clone()` and before any extension. A workspace extension on `List` named like a member could never be called and MUST be rejected with `E4010`. The members are `size`, `indices`, `isEmpty`, `isNotEmpty`, `contains`, `indexOf`, `add`, `insert`, `removeAt`, `removeLast`, `reverse` and `clear`, plus `clone` for a `Clone` element type.
 
 #### Scenario: Extensions named like built-in members rejected
-- **WHEN** a file declares `fun <T> List<T>.add(element: T) {}` and `fun List<Int>.size(): Int = 0`
-- **THEN** the type checker emits `E4010` for each, saying that the member of `/prism/collections` always takes precedence
+- **WHEN** a file declares `fun <T> List<T>.add(element: T) {}`, `fun List<Int>.size(): Int = 0` and `fun <T> List<T>.isEmpty(): Bool = false`
+- **THEN** the type checker emits `E4010` for each, saying that the member of `/prism/core` always takes precedence
 
 ### Requirement: Extensions on Lists
 Extensions with other names MUST be declarable on `List<T>`, generic or for one element type, keyed by the `List` type constructor like the extensions of a generic struct, and called through any `&`, `&mut` and `Heap<T>` layers. In their bodies, a bare name that is no local or parameter MUST resolve to the built-in member of that name on `this`, read (`size`) or called (`add(x)`), as a receiver's fields and extensions do.
@@ -308,7 +308,7 @@ These helpers MUST visit the elements in order:
 - **THEN** it prints `a, c`, and every string, kept or dropped, is freed exactly once
 
 ### Requirement: Lists Answer Membership Tests
-`x in xs` and `x !in xs` on a `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST call its `contains` member, declared `intrinsic operator` by `/prism/collections`, borrowing `x`; they MUST be accepted exactly when `contains` is (`==` on `T`).
+`x in xs` and `x !in xs` on a `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST call its `contains` member, declared `intrinsic operator` by `/prism/core`, borrowing `x`; they MUST be accepted exactly when `contains` is (`==` on `T`).
 
 #### Scenario: Membership in a list
 - **WHEN** `fun f(names: &List<String>, n: String): Bool = n in names && "x" !in names` is checked
@@ -344,3 +344,7 @@ Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for pa
 Decisions from `vararg` (part L4 of the review's agreed item A4, user direction 2026-10-20; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the rules themselves are in `vararg-parameters`):
 
 - **`listOf` is an ordinary vararg function** (D6, D10; supersedes D4's rule-typed `listOf` and D22's trailing lambda as its last element). `public fun <T> listOf(vararg elements: T): List<T> = elements`, typed as any vararg call with the same inference as before and taking a spread (`listOf(elements = *xs)` gives `xs` back); a trailing lambda never binds to a vararg, so `listOf({ 1 }) { 2 }` is `E4004`, as in Kotlin. The compiler keeps only the list construction (`builtin varargList<E>`), which a Rust-backed `List` needs; each element type adds one small instance of `listOf` and each list one call.
+
+Decisions from `core-library-in-prism` (the core half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over the smallest intrinsic core with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **The list members belong to `/prism/core`** (D3, D4). The members of `List<T>` moved from `/prism/collections` to `/prism/core`, the one member module, which `/prism/collections` imports for its helpers. `isEmpty()`, `isNotEmpty()` (over `size`) and `indices` (`0..<size`, an extension property) are written in Prism, one small instance per element type; `size`, `contains`, `indexOf` and the mutating members stay intrinsics, since they read or move a Rust-backed buffer or need `==` on `T`.

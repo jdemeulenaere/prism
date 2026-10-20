@@ -775,14 +775,14 @@ A `fun` declaration without `external` or `intrinsic` MUST have a body, an `=` e
 - **THEN** the parser reports `E2001` at the end of `a`'s signature
 
 ### Requirement: Intrinsic Extension Properties
-`intrinsic val`, optionally after a visibility modifier, MUST declare an extension property: an optional type parameter list, a receiver type, `.`, the property name, `:` and its type (`public intrinsic val <T> List<T>.size: Int`), with no initializer. A `val` declaration with a receiver and without `intrinsic`, and an intrinsic property with an initializer, MUST be rejected with `E2001`.
+`intrinsic val`, optionally after a visibility modifier, MUST declare an extension property: an optional type parameter list, a receiver type, `.`, the property name, `:` and its type (`public intrinsic val <T> List<T>.size: Int`), with no initializer and no getter. An intrinsic property with an initializer or a getter MUST be rejected with `E2001`. A `val` declaration with a receiver and without `intrinsic` is an extension property with a getter ("Extension Property Getters").
 
 #### Scenario: Intrinsic properties parse
-- **WHEN** parsing `public intrinsic val String.length: Int` and `public intrinsic val <T> List<T>.indices: Range`
+- **WHEN** parsing `public intrinsic val String.length: Int` and `public intrinsic val <T> List<T>.size: Int`
 - **THEN** each parses as an extension property with its receiver type, name and type
 
 #### Scenario: Extension properties outside the library form rejected
-- **WHEN** parsing `val String.twice: Int = 2` or `intrinsic val String.a: Int = 1`
+- **WHEN** parsing `val String.twice: Int = 2`, `intrinsic val String.a: Int = 1` or `intrinsic val String.b: Int get() = 1`
 - **THEN** the parser reports `E2001`
 
 ### Requirement: Receivers of Function Types
@@ -914,6 +914,28 @@ An argument of a call MAY start with `*`, after its name when it is named, marki
 - **WHEN** parsing `sum(*numbers)`, `listOf(elements = *xs)`, `f(1, *a.items())` and `f(a * b, a *b)`
 - **THEN** the first three have one spread argument each, of the expressions `numbers`, `xs` and `a.items()`, and the last has two multiplications as arguments
 
+### Requirement: Extension Property Getters
+A `val` declaration with a receiver and without `intrinsic` MUST declare an extension property with a getter: an optional visibility, `val`, an optional type parameter list, a receiver type, `.`, the name, `:` and its type, then `get`, `(`, `)` and either `=` with an expression or a block. The getter MAY follow the type on the same line or after newlines (`public val Int.dp: Dp get() = Dp(this)`). `get` MUST be a keyword only there, and a name everywhere else.
+
+#### Scenario: Extension property getters parse
+- **WHEN** parsing `public val Int.dp: Dp get() = Dp(this)`, `val <T> List<T>.second: &T` followed by a newline and `get() = &this[1]`, and `private val Box.area: Int get() { return w * h }`
+- **THEN** each parses as an extension property with its visibility, type parameters, receiver type, name, type and getter body, the second with an expression body and the third with a block body
+
+#### Scenario: get as an identifier
+- **WHEN** parsing `fun get(get: Int): Int = get`, `val get = 1`, `fun f(b: Bag) { b.get(0); val x = get }` and `struct S { val get: Int }`
+- **THEN** each `get` parses as a function, parameter, variable, member, field or callee name
+
+### Requirement: Extension Property Declarations Are Restricted
+An extension property without `intrinsic` MUST have a getter, MUST NOT have an initializer, and MUST NOT be `var`. `compose` or a receiver mode before it, a type parameter not occurring in its receiver type, and a `Heap<...>` or type-parameter receiver (as for functions) MUST be rejected. Each violation MUST be `E2001`. The message for an initializer suggests `get() =`, and the one for a missing getter says that an extension property has no stored value.
+
+#### Scenario: Extension properties without a getter rejected
+- **WHEN** parsing `val String.twice: Int` followed by a newline and `fun f() {}`, `val Int.half: Int = 2`, `var Int.twice: Int get() = 2`, `compose val Int.x: Int get() = 1`, and `val <T, R> List<T>.other: Int get() = 0`
+- **THEN** the parser reports `E2001` for each, the second with help suggesting `get() = 2` and the last saying that `R` does not occur in the receiver type
+
+#### Scenario: Property receivers follow extension receivers
+- **WHEN** parsing `val Heap<User>.size: Int get() = 0` and `val <T> T.me: Int get() = 1`
+- **THEN** the parser reports `E2001` for each, the first saying that reads look through `Heap`, so the property is declared on its contents, and the second that a bare type parameter cannot be a receiver
+
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
 
@@ -1018,3 +1040,7 @@ Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for pa
 Decisions from `vararg` (part L4 of the review's agreed item A4, user direction 2026-10-20; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the rules themselves are in `vararg-parameters`):
 
 - **`vararg` and spreads** (D1, D5, D9). `vararg` is a contextual modifier before a parameter's name, on `fun` parameters only, so it stays a name elsewhere; a spread is `*` at an argument's start, after `name =` when named, which was `E2001` before, so neither form changes the meaning of an existing program. Misplaced varargs (a second one, a default, `escaping` or `attached`, struct fields, closure, context and function-type parameters) are `E2001`.
+
+Decisions from `core-library-in-prism` (the core half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over the smallest intrinsic core with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Extension property getters** (D5). After an extension property's type, newlines are skipped and `get` `(` `)` then `=` with an expression or a block is read, `get` being matched as an identifier at that position only, so no program loses a name and the parser tests one token. Without `intrinsic`, a missing getter, an initializer (help `get() = ...`), `var`, `compose`, a receiver mode, a type parameter absent from the receiver type, and a `Heap<...>` or type-parameter receiver are `E2001`; an intrinsic property with a getter or initializer is too. Rejected: an initializer form, inferred property types (Phase 1 would need an inference key), and library-only properties.

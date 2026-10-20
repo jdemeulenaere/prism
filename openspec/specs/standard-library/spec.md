@@ -17,15 +17,15 @@ The `prism` executable MUST contain the source of every library module and MUST 
 - **THEN** the first explanation names no `prism/composer.prism`, and the second names it
 
 ### Requirement: Library Modules Compile Like Workspace Files
-A library module MUST go through every stage a workspace file does: Phase 1 extracts its ABI, Phase 2 checks its bodies, its generics are instantiated per program, and its code is a unit of its own, cached like a workspace file's. A program MUST parse only the library modules it reaches: the member modules (`/prism/core` and `/prism/collections`) and those imported, directly or transitively.
+A library module MUST go through every stage a workspace file does: Phase 1 extracts its ABI, Phase 2 checks its bodies, its generics are instantiated per program, and its code is a unit of its own, cached like a workspace file's. A program MUST parse only the library modules it reaches: the member module `/prism/core`, and the modules imported, directly or transitively.
 
 #### Scenario: Unreached modules are not parsed
 - **WHEN** `prism check --explain-cache main.prism` runs on a file without imports
-- **THEN** its file lines name `prism/core.prism`, `prism/collections.prism` and `main.prism`, and no other library module
+- **THEN** its file lines name `prism/core.prism` and `main.prism`, and no other library module
 
 #### Scenario: An imported module is parsed
 - **WHEN** `prism check --explain-cache main.prism` runs on a file that declares `import /prism/compose/runtime`
-- **THEN** its file lines name `prism/core.prism`, `prism/collections.prism`, `prism/compose/runtime.prism` and `main.prism`, and no other library module
+- **THEN** its file lines name `prism/core.prism`, `prism/compose/runtime.prism` and `main.prism`, and no other library module
 
 ### Requirement: Library Files Import What They Use
 A library file MUST NOT see any library module implicitly, the member modules included: the names and members it uses from another library module come from an explicit import of that module.
@@ -67,8 +67,8 @@ An `intrinsic fun` or `intrinsic val` MUST declare, without a body, a function o
 - **THEN** the type checker emits `E4029`, saying that the compiler provides no intrinsic `squared` on `Int`
 
 #### Scenario: An intrinsic with another signature is rejected
-- **WHEN** a library test module declares `public intrinsic fun Int.toString(radix: Int): String`
-- **THEN** the type checker emits `E4029`, showing the signature the compiler provides, `fun Int.toString(): String`
+- **WHEN** a library test module declares `public intrinsic mut fun <T> List<T>.removeLast(count: Int): T`
+- **THEN** the type checker emits `E4029`, showing the signature the compiler provides, `public intrinsic mut fun <T> List<T>.removeLast(): T`
 
 ### Requirement: Intrinsic Calls Are Typed by Their Signatures
 A call of an intrinsic MUST be checked as a call of its declared signature, except for those the catalog types by a rule:
@@ -77,8 +77,8 @@ A call of an intrinsic MUST be checked as a call of its declared signature, exce
 - `remember` also takes keys ("Remember Takes Up to Three Keys").
 
 #### Scenario: A signature-typed intrinsic
-- **WHEN** `fun f(xs: &List<Int>): Bool = xs.isEmpty(1)` is checked
-- **THEN** the type checker emits `E4004`, since `isEmpty` is declared with no parameter
+- **WHEN** `fun f(xs: &mut List<Int>): Int = xs.removeLast(1)` is checked
+- **THEN** the type checker emits `E4004`, since `removeLast` is declared with no parameter
 
 #### Scenario: A rule-typed intrinsic
 - **WHEN** `fun f() { println(); println(1) }` is checked
@@ -92,11 +92,11 @@ A call of `remember` (`fun <T> remember(calculation: () -> T): T`, whose result 
 - **THEN** the type checker accepts the first call and reports an argument count error (`E4004`) for the second, which has four keys
 
 ### Requirement: Intrinsic Extensions Are Members
-An intrinsic extension function or property MUST be a member of its receiver type wherever it is in scope: in every workspace file for those of the member modules, where its module is imported for any other. A call or read of that name on that type, through `&`, `&mut` and `Heap<T>`, MUST use it before any extension, after fields and the built-in `clone()` and `unbox()`. A workspace extension of that name on that receiver type constructor where the member is in scope MUST be `E4010`.
+An intrinsic extension, and every extension that `/prism/core` declares on a built-in type, function or property, MUST be a member of its receiver type wherever it is in scope: everywhere for `/prism/core`'s, where its module is imported otherwise. A call or read of it, through `&`, `&mut` and `Heap<T>`, MUST use it before any extension, after fields, `clone()` and `unbox()`. A workspace extension of that name on that receiver type, where the member is in scope, MUST be `E4010`.
 
 #### Scenario: A workspace extension named like a member
-- **WHEN** a file declares `fun Int.toString(): String = "x"`, `fun String.length(): Int = 0` and `fun <T> List<T>.add(element: T) {}`
-- **THEN** the type checker emits `E4010` for each, saying that the member of `/prism/core` or `/prism/collections` always takes precedence
+- **WHEN** a file declares `fun Int.toString(): String = "x"`, `fun String.length(): Int = 0`, `fun <T> List<T>.add(element: T) {}` and `fun <T> List<T>.isNotEmpty(): Bool = false`
+- **THEN** the type checker emits `E4010` for each, saying that the member of `/prism/core` always takes precedence
 
 #### Scenario: A workspace extension named like a helper
 - **WHEN** a file declares `fun <T> List<T>.map(f: (&T) -> Int): Int = 0` and `fun f(xs: &List<Int>): Int = xs.map { x -> x }`
@@ -110,7 +110,12 @@ A workspace file declaring anything `external` or `intrinsic` MUST be rejected i
 - **THEN** `prism check` reports `E3002` at `external`, and at `intrinsic`
 
 ### Requirement: The Core Module
-`/prism/core` MUST declare, as public intrinsics, `print` and `println`, `toString()` of `Int`, `Double`, `Bool` and `Char` (`fun Int.toString(): String`, ...), and the property `val String.length: Int`. Their behavior is that of the type-system and execution requirements for them.
+`/prism/core` MUST declare `print` and `println` as public intrinsics, and every member of the built-in types:
+- `toString()` of `Int`, `Double`, `Bool` and `Char`, written in Prism;
+- the intrinsic property `val String.length: Int`;
+- the members of `List<T>` (collections).
+
+Every extension it declares MUST have a built-in receiver type. Their behavior is that of the type-system, collections and execution requirements for them.
 
 #### Scenario: Core names need no import
 - **WHEN** a file without imports declares `fun f(): Int { val s = 42.toString(); return s.length }`
@@ -119,6 +124,10 @@ A workspace file declaring anything `external` or `intrinsic` MUST be rejected i
 #### Scenario: Core functions are imported
 - **WHEN** `import /prism/core` and `fun main() { val s = 42.toString(); println(s.length) }` run, and the same `main` is checked without the import
 - **THEN** the first prints `2`, and the second is rejected with `E4001` for `println` alone
+
+#### Scenario: Declarations of the core module
+- **WHEN** `prism abi` prints the ABI of `/prism/core`
+- **THEN** it holds `public fun Int.toString(): String`, `public intrinsic val String.length: Int`, `public intrinsic val <T> List<T>.size: Int`, `public fun <T> List<T>.isEmpty(): Bool`, `public val <T> List<T>.indices: Range` and `public intrinsic mut fun <T> List<T>.add(element: T)`, and no external
 
 ### Requirement: Ending the Process
 `/prism/system` MUST declare `public fun exitProcess(status: Int): Nothing`. A call MUST flush the program's output and end the process with exit status `status & 255`. No further code of the program MUST run, no drop MUST run, and the check of `--check-allocations` MUST NOT run, as for a runtime error. Under `prism run --watch`, it MUST end the program's run as `main` returning with that status does.
@@ -190,11 +199,16 @@ The compiler MUST ship `/prism/compose/ui`, `/prism/compose/foundation`, `/prism
 - **THEN** the first lists no file of `prism/compose/`, and the second lists `prism/compose/ui.prism`, `prism/compose/foundation.prism`, `prism/compose/layout.prism` and `prism/compose/material3.prism`, and not `prism/compose/runtime.prism`
 
 ### Requirement: The UI Intrinsics
-The intrinsic catalog MUST hold, as intrinsics of `/prism/compose/ui`: the one-word structs `NodeId : Copy`, with `package` visibility, and `HandlerId : Copy`, public, whose equality is the runtime entry `prism_ui_handlers_equal`; the `package` composables `Node(kind: Int, update: (NodeId) -> Unit, content: compose () -> Unit)` and `LeafNode(kind: Int, update: (NodeId) -> Unit)`; and the function `runApp`. A declaration of one of them with another signature or in another module MUST be `E4029`.
+The intrinsic catalog MUST hold, as intrinsics of `/prism/compose/ui`:
+- the one-word structs `NodeId : Copy`, `package`, and `HandlerId : Copy`, public, whose equality is the runtime entry `prism_ui_handlers_equal`;
+- the `package` composables `Node(kind: Int, update: (NodeId) -> Unit, content: compose () -> Unit)` and `LeafNode(kind: Int, update: (NodeId) -> Unit)`;
+- the function `runApp`.
+
+A declaration of one of them with another signature or in another module MUST be `E4029`.
 
 #### Scenario: The public signature of runApp
 - **WHEN** `prism abi` prints the ABI of `/prism/compose/ui`
-- **THEN** it holds the public intrinsic function `runApp` with the parameters `title: &String`, `width: Int` and `height: Int`, each with a default, and `content: escaping compose () -> Unit`, the public intrinsic struct `HandlerId : Copy`, and the public intrinsic properties `Int.dp` and `Int.sp`, and none of `NodeId`, `Node` and `LeafNode`, which are not public
+- **THEN** it holds the public intrinsic function `runApp` with the parameters `title: &String`, `width: Int` and `height: Int`, each with a default, and `content: escaping compose () -> Unit`, the public intrinsic struct `HandlerId : Copy`, and the public extension properties `val Int.dp: Dp` and `val Int.sp: TextUnit`, and none of `NodeId`, `Node` and `LeafNode`, which are not public
 
 #### Scenario: A UI intrinsic in another library module
 - **WHEN** a library test module declares `private intrinsic compose fun LeafNode(kind: Int, update: (Int) -> Unit)`
@@ -203,13 +217,6 @@ The intrinsic catalog MUST hold, as intrinsics of `/prism/compose/ui`: the one-w
 #### Scenario: Calling runApp with its defaults
 - **WHEN** `fun main() { runApp { } }` runs with `import /prism/compose/ui` under `prism run --headless` with the script `dump`
 - **THEN** stdout is `window 800x600`: `width` and `height` took their defaults
-
-### Requirement: The Unit Properties
-The catalog MUST hold the public intrinsic properties `val Int.dp: Dp` and `val Int.sp: TextUnit` of `/prism/compose/ui`, lowered as the constructions `Dp(n)` and `TextUnit(n)`, and members of `Int` wherever that module is imported.
-
-#### Scenario: Unit properties are members of Int
-- **WHEN** a file declares `import /prism/compose/ui` and `fun Int.dp(): Int = 0`
-- **THEN** the type checker emits `E4010`, saying that the member of `/prism/compose/ui` always takes precedence
 
 ### Requirement: Intrinsic Struct Markers Are Unconditional
 The markers the catalog gives a generic intrinsic struct MUST hold for every type argument, unlike the conditional markers of declared generic structs: `WeakReference<MutableState<String>>` is `Copy`, and `MutableState<Int>` is not, although `Int` is.
@@ -264,10 +271,10 @@ A library name a file imports MUST behave as a name of any imported module: a to
 - **THEN** the first typechecks, the call resolving to `lib/util`'s extension, and the second is rejected with `E4012` naming `lib/util` and `prism/collections`
 
 ### Requirement: Built-In Types and Their Members Need No Import
-The built-in types `Int`, `Double`, `Bool`, `Char`, `String`, `Unit`, `Nothing`, `List`, `Heap` and `Range`, and their members, MUST be in scope in every workspace file without an import. A built-in type's members MUST be the compiler's built-in members (`clone()`, `unbox()`) and the intrinsic extensions declared on it by its member module: `/prism/core` for the scalars and `String`, `/prism/collections` for `List`.
+The built-in types `Int`, `Double`, `Bool`, `Char`, `String`, `Unit`, `Nothing`, `List`, `Heap` and `Range`, and their members, MUST be in scope in every workspace file without an import. A built-in type's members MUST be the compiler's built-in members (`clone()`, `unbox()`) and the extensions that the member module `/prism/core` declares on it, intrinsic or written in Prism.
 
 #### Scenario: Members need no import
-- **WHEN** a file without imports declares `fun f(xs: &mut List<Int>, s: &String): Int { xs.add(1); return xs.size + s.length + 42.toString().length + xs.indexOf(1) }`
+- **WHEN** a file without imports declares `fun f(xs: &mut List<Int>, s: &String): Int { xs.add(1); if (xs.isEmpty()) return 0; return xs.size + s.length + 42.toString().length + xs.indexOf(1) + xs.indices.end }`
 - **THEN** the file typechecks
 
 #### Scenario: An extension of a built-in type from another module is imported
@@ -289,7 +296,7 @@ A scenario of these specifications whose program uses a library function, extens
 - **THEN** its fixture declares `import /prism/collections` and `import /prism/core`, and prints `2`
 
 ### Requirement: The Collections Module Declares Lists and Their Helpers
-`/prism/collections` MUST declare, as public intrinsics, the members of `List<T>` (collections, "List Members Are Typed as Extensions", "Mutating Members", "Size and Indices Are Read Without Parentheses"), and, as public Prism functions, `listOf` (collections, "Lists Are Built With listOf") and the higher-order helpers (collections, "Higher-Order Helpers").
+`/prism/collections` MUST declare `listOf` (collections, "Lists Are Built With listOf") and the higher-order helpers (collections, "Higher-Order Helpers") as public Prism functions. It MUST declare no member of `List<T>`: `/prism/core` declares those, and `/prism/collections` imports `/prism/core` to use them. It is an ordinary module, which a file uses only through an import.
 
 #### Scenario: Helpers are imported
 - **WHEN** `import /prism/collections`, `import /prism/core` and `fun main() { val xs = listOf(1, 2, 3); println(xs.map { x -> x * 2 }.sumOf { x -> x }) }` run
@@ -311,7 +318,7 @@ A scenario of these specifications whose program uses a library function, extens
 - **THEN** it typechecks, and `prism abi` writes the signature of `counter` as `public fun counter(): MutableState<Int>`
 
 ### Requirement: Intrinsic Operators
-An `intrinsic` declaration MAY carry `operator` when the catalog lists the intrinsic as an operator: `List<T>.contains` of `/prism/collections` is declared `public intrinsic operator fun <T> List<T>.contains(element: &T): Bool`. A declaration whose `operator` flag differs from the catalog's MUST be rejected with `E4029`, as any other signature difference.
+An `intrinsic` declaration MAY carry `operator` when the catalog lists the intrinsic as an operator: `List<T>.contains` of `/prism/core` is declared `public intrinsic operator fun <T> List<T>.contains(element: &T): Bool`. A declaration whose `operator` flag differs from the catalog's MUST be rejected with `E4029`, as any other signature difference.
 
 #### Scenario: The list membership operator
 - **WHEN** a file declares `fun f(xs: &List<Int>): Bool = 3 in xs`
@@ -320,6 +327,27 @@ An `intrinsic` declaration MAY carry `operator` when the catalog lists the intri
 #### Scenario: An intrinsic's operator flag must match the catalog
 - **WHEN** a library test module declares `public intrinsic fun <T> List<T>.contains(element: &T): Bool` without `operator`, or `public intrinsic operator fun <T> List<T>.indexOf(element: &T): Int`
 - **THEN** the type checker emits `E4029` for each, showing the signature the compiler provides
+
+### Requirement: Members Written in Prism
+The members of the built-in types that `/prism/core` writes in Prism MUST behave as the built-ins they replace, and a use of one MUST be a call of its declaration, never a built-in call:
+- `toString()` of an `Int`, `Double`, `Bool` or `Char` gives the text `print` writes, through the runtime's `prism_rt_*_to_string` entries, declared as private externals;
+- `isEmpty()` and `isNotEmpty()` compare `size` with `0`;
+- `indices` is `0..<size`.
+
+#### Scenario: Members written in Prism run
+- **WHEN** `fun main() { val n: Int? = -3; println(n?.toString() ?: ""); println(1.5.toString() + true.toString() + 'c'.toString()); val xs = listOf(4, 5); println(xs.isEmpty()); println(xs.isNotEmpty()); for (i in xs.indices) print(i); println() }` runs with `--check-allocations`
+- **THEN** stdout is `-3`, `1.5truec`, `false`, `true` and `01`, one per line, and the exit status is 0
+
+#### Scenario: Members written in Prism are calls of their declarations
+- **WHEN** `prism dump-typed-tree` runs on `fun f(n: Int, xs: &List<Int>): Bool = n.toString().length > 0 && xs.isEmpty() && xs.indices.start == 0`
+- **THEN** the body calls `prism/core::Int.toString` with a shared receiver borrow of the binding `n`, `prism/core::List<T>.isEmpty` and `prism/core::List<T>.indices`, each with the type argument `Int` and a shared receiver borrow of the dereferenced binding `xs`, and no `builtin toString`, `builtin isEmpty` or `builtin indices`
+
+### Requirement: Unit Properties Are Written in Prism
+`/prism/compose/ui` MUST declare `public val Int.dp: Dp get() = Dp(this)` and `public val Int.sp: TextUnit get() = TextUnit(this)`, ordinary extension properties written in Prism and used where that module is imported. A file's own extension property `dp` or `sp` on `Int` MUST shadow them, as for any imported extension.
+
+#### Scenario: A file's own unit property shadows the import
+- **WHEN** a file declares `import /prism/compose/ui`, `import /prism/core`, `val Int.dp: Int get() = this * 2` and `fun main() { println(3.dp); println(4.sp.value) }`, and runs with `--check-allocations`
+- **THEN** stdout is `6` then `4`, and the exit status is 0
 
 ## Design Rationale
 
@@ -330,7 +358,7 @@ Decisions from `standard-library` (planned autonomously on 2026-10-18, implement
 - **Ordinary units, no precompiled ABI** (D3). Library files go through Phase 1, Phase 2, instance planning and code generation like any file, keyed by the same inputs (module path, source text, imports' ABI hashes, compiler identity), so their entries are shared by every workspace using one compiler and cache. Only the reached modules are parsed: about 300 lines, a few hundred microseconds per process. An embedded serialized ABI was rejected: a second codec and a second source of truth for well under a millisecond.
 - **A prelude found last, as one shared scope** (D4; superseded by `explicit-library` D1, below, which removed the prelude). `/prism/core` and `/prism/collections` are implicit imports of every workspace file, after its explicit imports, as Kotlin's default imports are. Their ABIs become one `PreludeScope` per graph, shared by every checker through an `Arc`, so a file pays a lookup on a miss rather than an ingestion of the prelude (measured at about 13 us per file whatever the workspace's size, against 28 us when each checker ingested it). A local, parameter, declaration or import shadows a prelude name without `E4010` or `E4012`, so adding a library function never breaks a program that declares that name. Library files import what they use, so the library's own dependency order is explicit. Prelude modules count as direct imports for check keys and instance planning. Rejected: per-file ingestion, a re-exporting `prism/prelude` module (Prism has no re-exports), and unshadowable prelude names.
 - **`external fun` is a C symbol with Prism's own calling convention** (D5). An external is named by its symbol and called directly, with no slot and no reload, as runtime functions already were. Its machine signature is the one a Prism function of that signature has (scalars by value, everything in memory and every reference by address, a result held in memory through an address passed first), so there is one convention, and the backend compares it with the runtime's table (`E6005`); the library test compiles every external, so a mismatch fails `cargo test`. Externals are not public, generic, extensions, `compose`, defaulted or returning references (`E4029`): a Prism wrapper does each, and keeps runtime symbols out of the library's API. Rejected: symbols derived from module paths (a rename silently breaks the link), annotations (none exist yet), and a separate C-only convention.
-- **`intrinsic` declarations checked against a catalog** (D6). An intrinsic declares the signature of a call the compiler lowers itself (`Callee::Builtin`), and the type checker's catalog holds each intrinsic's canonical signature text, so the declaration, its typing and its lowering cannot drift apart (`E4029`). Most intrinsics are typed by their declared signatures through the ordinary paths. `print`/`println` (a text-form argument, or none), `listOf` (any number of elements) and `contains`/`indexOf` (`==` on `T`) are typed by rules until overloading, `vararg` and traits exist; their declarations have the shape their future ones will. `intrinsic val` is the one new declaration form, for `length`, `size` and `indices`; ordinary extension properties stay a separate decision. Defaults on intrinsics are allowed and not compared, since a default is a generator of the declaring file (R8).
+- **`intrinsic` declarations checked against a catalog** (D6). An intrinsic declares the signature of a call the compiler lowers itself (`Callee::Builtin`), and the type checker's catalog holds each intrinsic's canonical signature text, so the declaration, its typing and its lowering cannot drift apart (`E4029`). Most intrinsics are typed by their declared signatures through the ordinary paths. `print`/`println` (a text-form argument, or none), `listOf` (any number of elements) and `contains`/`indexOf` (`==` on `T`) are typed by rules until overloading, `vararg` and traits exist; their declarations have the shape their future ones will. `intrinsic val` is the one new declaration form, for `length`, `size` and `indices`; ordinary extension properties stay a separate decision (made by `core-library-in-prism` D5, below). Defaults on intrinsics are allowed and not compared, since a default is a generator of the declaring file (R8).
 - **Intrinsic extensions are members; other library extensions are ordinary** (D7, R1). An intrinsic extension is found before every extension, after fields and the built-in `clone()` and `unbox()`, and a workspace extension of its name on its receiver is `E4010`: members belong to the type's representation, as in Kotlin where a member beats an extension. The helpers (`map`, `forEach`, ...) are ordinary extensions, imported with `/prism/collections` since `explicit-library` (they were prelude extensions before). `List` itself stays a reserved built-in type; only its members are declarations.
 - **What moved, and what stays** (D8). `print`, `println`, the scalars' `toString()`, `String.length`, `listOf` and the list members moved as declarations. The built-in types, `Range`, `clone()` (defined by the `Clone` marker, not per type), `Heap(...)` and `unbox()` (the parser rejects `Heap` receivers), indexing, operators, `==` and templates stay in the compiler until a later change gives them declarations. Math (`abs`, `min`, `max`) waits for a decision on serving `Int` and `Double` without overloading.
 - **`print` prints anything a template part can** (D9). `print(x)` and `println(x)` accept exactly what `"$x"` accepts and print what it would: a `String` borrowed, a scalar copied out, any other type through the `toString()` that `x.toString()` resolves, called on a shared borrow into a statement temporary, so MIR and the backend see a print of a `&String`. Nullables, `Unit`, function values and type parameters are `E4026`, as in templates, so the two never disagree; printing nullables is a follow-up for both.
@@ -356,7 +384,7 @@ Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled w
 Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by user direction to follow Jetpack Compose's APIs and modules, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
 
 - **The toolkit modules** (D21, user direction). `/prism/compose/ui`, `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3` are files of the package directory `prism/compose/` beside `/prism/compose/runtime`, imported explicitly, importing each other with sibling imports (`import ui`) in one direction, as Compose's artifacts depend: `ui` on nothing of the toolkit, `foundation` and `layout` on `ui`, `material3` on all three. A program that imports none pays nothing; one importing `material3` loads four cached ABIs. Rejected: one `/prism/ui`, toolkit modules in the prelude.
-- **The UI intrinsics** (D3, D7, D15, D23). `NodeId` (`package`) and `HandlerId` (public, whose catalog equality entry is `prism_ui_handlers_equal`) are one-word intrinsic structs; `Node` and `LeafNode` are `package` intrinsic composables; `runApp` is an intrinsic so that `E4030` names it and its call builds a root content adapter, its defaults being ordinary generators in `/prism/compose/ui` that `BuiltinFunction::declaration_with_defaults` names; `Int.dp` and `Int.sp` are intrinsic properties lowered as constructions. Setters are `package` externals, so only the toolkit's files reach them. `ModifierElement` and `HandlerId` stay public because programs read chains, until fields have visibility.
+- **The UI intrinsics** (D3, D7, D15, D23). `NodeId` (`package`) and `HandlerId` (public, whose catalog equality entry is `prism_ui_handlers_equal`) are one-word intrinsic structs; `Node` and `LeafNode` are `package` intrinsic composables; `runApp` is an intrinsic so that `E4030` names it and its call builds a root content adapter, its defaults being ordinary generators in `/prism/compose/ui` that `BuiltinFunction::declaration_with_defaults` names; `Int.dp` and `Int.sp` are intrinsic properties lowered as constructions (since `core-library-in-prism` D7, below, Prism extension properties with getters). Setters are `package` externals, so only the toolkit's files reach them. `ModifierElement` and `HandlerId` stay public because programs read chains, until fields have visibility.
 
 Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
@@ -365,7 +393,7 @@ Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed wit
 Decisions from `explicit-library` (review item A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: the library's sources in a visible top-level directory, imported from any workspace as `/prism/...`, explicit imports everywhere and no prelude, to be revisited after seeing the result, built-in types and their members everywhere; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **No prelude** (D1, user direction). Every library function, extension, struct, enum and value is seen only through an import of its module, which behaves as a workspace module's import. The examples gained 14 library imports over 8 of their 15 files, and 635 of about 2,300 fixture cases gained imports, most of them `import /prism/core` for `println`: the evidence for the user's review. A file pays for each library module it imports by ingesting its ABI, about 35 us for `/prism/collections`, where the prelude shared one conversion between files; a file importing nothing pays less than before. Sharing converted ABIs between files is a follow-up for every import. Rejected: a prelude of a few functions, an umbrella `prism/prelude` module (Prism has no re-exports).
-- **Built-in types and their members are everywhere, through the member modules** (D2, user direction for the rule). The ten built-in types need no import, nor do their members: the compiler's (`clone()`, `unbox()`, indexing, operators, `for`) and the intrinsic extensions of the member modules `/prism/core` (scalars, `String`) and `/prism/collections` (`List`). Those two modules stay implicit inputs of every workspace file, contributing only a shared `MemberScope` of about twenty entries; their other names stay out of scope. The helpers, `Int.dp` and `Int.sp` are extensions, imported like Compose's `dp`. Rejected: members typed from the catalog with no module loaded (`library-in-prism` writes members with bodies), every intrinsic extension a member everywhere (no program could declare its own `dp`), and helpers as members.
+- **Built-in types and their members are everywhere, through the member modules** (D2, user direction for the rule). The ten built-in types need no import, nor do their members: the compiler's (`clone()`, `unbox()`, indexing, operators, `for`) and the intrinsic extensions of the member modules `/prism/core` (scalars, `String`) and `/prism/collections` (`List`). Those two modules stay implicit inputs of every workspace file, contributing only a shared `MemberScope` of about twenty entries; their other names stay out of scope. The helpers, `Int.dp` and `Int.sp` are extensions, imported like Compose's `dp`. Rejected: members typed from the catalog with no module loaded (`library-in-prism` writes members with bodies), every intrinsic extension a member everywhere (no program could declare its own `dp`), and helpers as members. Since `core-library-in-prism` D3, below, `/prism/core` is the one member module.
 - **Members of library types come with their module** (D3). `Composition.recompose` or `MutableState.value` is a member where the runtime module is imported; a value received through another module's signature without the import gets `E4014`, which names the import. Rejected: members of every library type found everywhere (a prelude for members).
 - **Imported library names follow the rules of imports** (D4). A file's own declaration shadows an imported library name, as for every import (user decision of `shadowing-and-import-paths`; the packet first said `E4010`); two imports exporting a name or extension are `E4012` at use; a file that does not import a module may declare any of its names. Adding a library function can now change only files that import its module and the same name from elsewhere, which see `E4012`.
 - **The sources live in `library/`, embedded from there** (D5, user direction for the location). The module `prism/<name>` is the file `library/prism/<name>.prism`, laid out as a workspace whose root holds the package `prism`; `crates/prism-library` embeds them with `include_str!`, rustc's dep-info rebuilds it when one changes, nothing is read from disk at run time, and the compiler identity, which hashes the executable, covers them, so a library edit invalidates the build cache. Rejected: a path relative to the executable (an install could pair one compiler with another library, and the identity would have to hash a directory), a build script, moving the crate into `library/`, and `PRISM_LIBRARY_DIR`. A published `prism-library` would need a build script copying `library/` in (a follow-up).
@@ -383,3 +411,14 @@ Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for pa
 Decisions from `vararg` (part L4 of the review's agreed item A4, user direction 2026-10-20; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the rules themselves are in `vararg-parameters`):
 
 - **`listOf` leaves the catalog** (D10, D11). `/prism/collections` declares `listOf` in Prism with a `vararg`, so its typing rule and catalog entry are gone. `print`, `println`, `remember` and `key` stay rule-typed: they take arguments of different types (Kotlin's `Any?`), which a homogeneous vararg cannot type.
+
+Decisions from `core-library-in-prism` (the core half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over the smallest intrinsic core with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the extension property rules themselves are in `extension-functions`):
+
+- **Split in two** (D1). The core, collections and unit-property layer needed one language feature (extension properties) and one rule (members written in Prism); the compose runtime and toolkit handles need field visibility, the composer primitive in both directions, markers for composables that run in their caller's group or never skip, and declared replacements for the name tests on `Composition` and the state types. So `library-in-prism` became `core-library-in-prism`, then `field-visibility` and `compose-library-in-prism`, each with its own review. Rejected: one change of about four designs and a dozen subsystems, and the compose half first (it builds on the member and property rules).
+- **What stays in the compiler** (D2, user direction for no `unsafe`; the criteria autonomous). A declaration stays an intrinsic, or a built-in with no declaration, only when it reads or changes the representation of a Rust-backed type (`String`, `List`, `Heap`; externals are not generic, and a list operation depends on the element's size and glue), when its typing needs a feature Prism lacks (`print`'s any-type argument, `==` on `T` for `contains` and `indexOf`), or when it is syntax or an operator of a built-in type (`+` on `Int`, `s[i]`, `==`, templates, `..`, and so `Range`, whose `for` is a counted loop). Rejected: library `operator fun`s on built-in types and `Range` as a library struct, each a call or three per use in Tier 1.
+- **`/prism/core` is the one member module** (D3). Every extension, function or property, that `/prism/core` declares on a built-in type is a member, intrinsic or written in Prism: in scope in every workspace file without an import and found before extensions (`E4010` for a workspace extension of its name). `/prism/core` declares nothing else but `print` and `println`, so the rule catches nothing else; the `List<T>` members moved there, and `/prism/collections` became an ordinary module of `listOf` and the helpers, importing `core`, so a program importing nothing parses one library module instead of two. Rejected: a `member` modifier, "only intrinsic extensions are members" (no member could be written in Prism), a new `/prism/builtins` module, and "extensions declared beside their type are members" for every type.
+- **Members written in Prism** (D4). The scalars' `toString()` (over the runtime's `prism_rt_*_to_string` entries, declared as private externals), `List<T>.isEmpty()`, `isNotEmpty()` and `indices` are Prism; `String.length` and `List.size` stay inline loads (two calls per read in Tier 1 otherwise), the mutating list members stay intrinsics, and `removeLast` and `clear` are not written over `removeAt` (another error location, another drop order). Each use is a call through the function table, and a generic member an instance per element type, until Tier 2 inlines them; cold runs pay `/prism/core`'s small unit (about 0.3 ms of code generation, compiled once per cache).
+- **Unit properties are ordinary imported extensions** (D7). `public val Int.dp: Dp get() = Dp(this)` and `Int.sp` in `/prism/compose/ui`, like Compose's `dp`: not members, so a file's own `Int.dp` shadows the import, and a read is a getter call where it was an inline construction, with no measurable effect on frames. Rejected: keeping them intrinsic for speed, and member status outside `/prism/core`.
+- **`print` and `println` stay rule-typed intrinsics** (D8; settles `vararg` D11 for them). Kotlin's `println(message: Any?)` needs `Any`, traits or overloading. Rejected: `println(message: &String)` (`println(1)` would stop compiling), a Prism `print` the rule calls with a template (an allocation per printed scalar), and a homogeneous `vararg`.
+- **The catalog's core part has twelve entries** (D9): `print`, `println`, `String.length`, and `size`, `contains`, `indexOf`, `add`, `insert`, `removeAt`, `removeLast`, `reverse` and `clear` of `List<T>`, all of `/prism/core`. No type-checker path tests a member's spelling to decide that a call is built in, apart from the built-in members of every type (`clone()`, `unbox()`), the conventions (operator names, `toString()` for text forms) and the compose names.
+- **The compose half's starting point** (D10). The change's design records a classification of every compose intrinsic, with a recommendation and what each needs (field visibility, the composer primitive, call-site groups for `remember` and `key`, state flags as catalog data rather than names); `compose-library-in-prism` starts from it.

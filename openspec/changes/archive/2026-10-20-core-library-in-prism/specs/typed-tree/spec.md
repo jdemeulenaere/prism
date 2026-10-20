@@ -21,7 +21,7 @@ A string's `length` MUST be a call of the built-in length function, and a string
 - **THEN** the body of `f` is a call of `prism/core::Int.toString` with a shared receiver borrow of the dereferenced binding `h`, and the body of `g` calls the built-in length function with a shared receiver borrow of the dereferenced binding `s`
 
 ### Requirement: List Operations Are Identified
-`listOf(...)` MUST be a call of `prism/collections::listOf`, whose vararg argument is a built-in list construction (vararg-parameters). A list's `size` and its intrinsic member calls MUST be calls of the member's built-in function, with the list as receiver, borrowed as the member's mode says, then the arguments. `isEmpty()`, `isNotEmpty()` and `indices` MUST be calls of their declarations in `/prism/core`, with the element type as type argument and a shared receiver borrow. An element `xs[i]` MUST be an index node over the list place, read through any dereferences, and the index, read, copied, borrowed or written like any place.
+`listOf(...)` MUST call `prism/collections::listOf` with a built-in list construction. A list's `size` and intrinsic member calls MUST be calls of the member's built-in, the list a receiver borrowed as the member's mode says, then the arguments. `isEmpty()`, `isNotEmpty()` and `indices` MUST be calls of their declarations in `/prism/core`, with the element type argument and a shared receiver borrow. An element `xs[i]` MUST be an index node over the list place and the index, used like any place.
 
 #### Scenario: Built-in list calls and element places
 - **WHEN** `fun f(xs: &List<Int>, i: Int): Int { var ys = listOf(1, 2); ys.add(xs[i]); if (ys.isEmpty()) return 0; return ys.size + xs[0] }` is checked

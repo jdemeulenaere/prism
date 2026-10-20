@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Library Declarations in the ABI
-Phase 1 MUST extract and hash a library module's ABI as a workspace file's, from its syntax tree alone. An exported function's entry MUST record whether it is ordinary, intrinsic or external. An exported extension property, intrinsic or with a getter, of any module, MUST be an entry with its type parameters, receiver type, name, type, writability and whether it is intrinsic. Both MUST be covered by the ABI hash and shown by `prism abi` with their modifiers (`public intrinsic val <T> List<T>.size: Int`, `public val Int.dp: Dp`). A getter's body MUST NOT be part of the ABI.
+Phase 1 MUST extract and hash a library module's ABI as a workspace file's, from its syntax tree alone. An exported function's entry MUST record whether it is ordinary, intrinsic or external. An exported extension property of any module MUST record its type parameters, receiver type, name, type, writability and whether it is intrinsic. Both MUST be covered by the ABI hash and shown by `prism abi` with their modifiers (`public val Int.dp: Dp`). A getter's body MUST NOT be part of the ABI.
 
 #### Scenario: The ABI of a library module
 - **WHEN** the ABI of `/prism/core` is extracted

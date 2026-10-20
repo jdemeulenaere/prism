@@ -40,7 +40,7 @@ The first operand of a call of an extension, of an extension property getter, or
 - **THEN** the MIR of `f` calls `builtin Heap<Int>` with the value of `n`, which is not a receiver, into `h`, then `builtin unbox` with a move of `h` as its receiver
 
 ### Requirement: List Operations Are Built-In Calls
-A vararg's list, `size` and each intrinsic list member MUST be `Call` terminators of a built-in callee, printed `builtin varargList`, `builtin size`, `builtin add` and so on, with the list's receiver borrow first (when it has one) and then the arguments, in the order `Calls Name Their Callee` and `Receivers Lead the Operands of Calls` give. `isEmpty`, `isNotEmpty` and `indices` MUST be calls of their declarations in `/prism/core`. `removeAt` and `removeLast` MUST write the removed element to their destination as a value the caller owns.
+A vararg's list, `size` and each intrinsic list member MUST be `Call` terminators of a built-in callee, printed `builtin varargList`, `builtin size`, `builtin add` and so on, with the list's receiver borrow first (when it has one), then the arguments, as for every call. `isEmpty`, `isNotEmpty` and `indices` MUST be calls of their declarations in `/prism/core`. `removeAt` and `removeLast` MUST write the removed element to their destination as a value the caller owns.
 
 #### Scenario: Built-in list calls
 - **WHEN** `fun f(): Int { var xs = listOf(1, 2); xs.add(3); if (xs.isNotEmpty()) return xs.removeAt(0); return 0 }` is lowered

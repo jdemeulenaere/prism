@@ -316,6 +316,17 @@ The formatter MUST print `vararg` and one space before a vararg parameter's name
 - **WHEN** formatting `fun f( vararg   xs:Int,last:Int=0):Int=g(  *  xs)+h(items= * xs)`
 - **THEN** the result is `fun f(vararg xs: Int, last: Int = 0): Int = g(*xs) + h(items = *xs)`
 
+### Requirement: Extension Property Getters Are Printed
+The formatter MUST print an extension property's header (`val`, type parameters, receiver, `.`, name, `: ` and type) and then its getter. An expression getter MUST follow on the header's line, as ` get() = ` and the expression, when the whole declaration fits the line width, and otherwise start the next line, indented one level. A block getter MUST follow on the header's line as ` get() ` and the block, broken as any function's.
+
+#### Scenario: Getters formatted
+- **WHEN** formatting `public  val   Int.dp :Dp\n  get( )=Dp( this )` and `val <T> List<T>.someVeryLongPropertyName: Range get() = computeTheRangeOfThisListFromItsElements(this, 0)`
+- **THEN** the first becomes `public val Int.dp: Dp get() = Dp(this)`, and the second, which does not fit in 100 columns on one line, becomes `val <T> List<T>.someVeryLongPropertyName: Range` followed by a line `    get() = computeTheRangeOfThisListFromItsElements(this, 0)`
+
+#### Scenario: A getter with a block formatted
+- **WHEN** formatting `val Box.area:Int get(){ return w*h }`
+- **THEN** the result is `val Box.area: Int get() {`, then `    return w * h` and `}`, each on its own line
+
 ## Design Rationale
 
 Decisions from `prism-fmt` (planned autonomously on 2026-10-17, reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):
@@ -361,3 +372,7 @@ Decisions from `explicit-library` (planned and implemented on 2026-10-20, and lo
 Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
 
 - **Operator syntax is printed, with no new layout rule** (D17): `operator` in the canonical modifier order, index lists like argument lists, `in` and `!in` spaced.
+
+Decisions from `core-library-in-prism` (the core half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over the smallest intrinsic core with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Getters print as Kotlin writes them** (D13). An expression getter stays on the header's line when the whole declaration fits in 100 columns and otherwise moves to the next line, indented one level; a block getter opens `get() {` on the header's line. The verifier compares the getter, and no other layout rule changes.

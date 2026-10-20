@@ -37,7 +37,7 @@ A method MUST be declared as an extension function `fun T.name(...)` on a struct
 - **THEN** the type checker emits `E4006`, with help suggesting the call `u.greet()`
 
 ### Requirement: Members Take Precedence Over Extensions
-A call `value.name(...)` MUST invoke a field `name` of the receiver's struct, else the built-in `clone()` of a `Clone` receiver or `unbox()` of a `Heap<T>` behind its references, else an intrinsic extension `name` on its type (`standard-library`), such as a scalar's `toString()` or a `List<T>` member, whatever extensions are visible; an intrinsic property (`length`, `size`, `indices`) counts as a field. Then it MUST call a receiver function value `name`, and only then an extension.
+A call `value.name(...)` MUST invoke a field `name` of the receiver's struct. Failing that, the built-in `clone()` of a `Clone` receiver or `unbox()` of a `Heap<T>` behind its references. Failing that, a member `name` of its type (`standard-library`, "Intrinsic Extensions Are Members"), such as a scalar's `toString()`, whatever extensions are visible; a member property (`length`, `size`, `indices`) counts as a field. Then a receiver function value `name`, and only then an extension.
 
 #### Scenario: A field wins over an extension
 - **WHEN** a file declares `struct Button { val onClick: () -> String }` and `fun Button.onClick(): Int = 1`, and `fun f(b: Button) { val s: String = b.onClick() }`
@@ -45,7 +45,7 @@ A call `value.name(...)` MUST invoke a field `name` of the receiver's struct, el
 
 #### Scenario: A built-in toString wins over an extension
 - **WHEN** a file declares `fun Int.toString(): String = "x"` and `fun f(n: Int): String = n.toString()`
-- **THEN** the type checker emits `E4010` for the extension and nothing for `f`, whose call is the intrinsic `toString()` of `/prism/core`
+- **THEN** the type checker emits `E4010` for the extension and nothing for `f`, whose call is the member `toString()` of `/prism/core`, `prism/core::Int.toString`
 
 #### Scenario: The built-in unbox wins over an extension on the contents
 - **WHEN** a file declares `struct Gift { val n: Int }`, `fun Gift.unbox(): Int = n`, `fun f(h: Heap<Gift>): Gift = h.unbox()` and `fun g(h: Heap<Gift>): Int { val r: &Gift = &h; return r.unbox() }`
@@ -97,7 +97,7 @@ Inside a lambda with a receiver, `this` MUST be the lambda's receiver (`type-sys
 - **THEN** the file typechecks successfully: `add("a")` calls `this.add("a")` with a mutable reborrow of the lambda's receiver, and `items` reads `this.items`
 
 ### Requirement: Extension Declarations Are Checked
-Two extensions in one file with the same receiver type constructor (`Box` for `Box<Int>` and `Box<T>`), name and context MUST be rejected with `E4010`, as MUST an extension that could never be called: one named like a field of its receiver struct, named `clone` on a `Clone` type, named `toString` on `Int`, `Double`, `Bool` or `Char`, or named `length` on `String`. Extensions on different receivers or with different contexts, and an extension and a top-level function, MAY share a name.
+Two extensions in one file with the same receiver type constructor (`Box` for `Box<Int>` and `Box<T>`), name and context MUST be rejected with `E4010`. So MUST an extension that could never be called: one named like a field of its receiver struct, `clone` on a `Clone` type, or a member of its receiver type (`toString` on `Int`, `isEmpty` on `List`; `standard-library`). Extensions on different receivers or with different contexts, and an extension and a top-level function, MAY share a name.
 
 #### Scenario: Duplicate extension rejected
 - **WHEN** a file declares `fun User.greet(): String = "a"` and `fun User.greet(x: Int): String = "b"`
@@ -112,8 +112,8 @@ Two extensions in one file with the same receiver type constructor (`Box` for `B
 - **THEN** the type checker emits `E4010` for each, saying that the built-in `clone()` always takes precedence
 
 #### Scenario: Extensions named like built-in members rejected
-- **WHEN** a file declares `fun Int.toString(): String = "x"`, `fun Char.toString(): String = "c"` and `fun String.length(): Int = 0`
-- **THEN** the type checker emits `E4010` for each, saying that the built-in member always takes precedence
+- **WHEN** a file declares `fun Int.toString(): String = "x"`, `fun Char.toString(): String = "c"`, `fun String.length(): Int = 0` and `fun <T> List<T>.isEmpty(): Bool = true`
+- **THEN** the type checker emits `E4010` for each, saying that the member of `/prism/core` always takes precedence
 
 #### Scenario: Use before an inferred extension declaration
 - **WHEN** `fun g(u: User): String { val s: String = u.size(); return s }` precedes `fun User.size() = 42`
@@ -247,6 +247,85 @@ A call `value.name(...)` MUST resolve to an extension `name` on the value's type
 - **WHEN** a file declaring `import /prism/collections` declares `fun f(xs: &List<Int>): Bool = xs.any { x -> x > 2 }`, and the same declaration is checked in a file without imports
 - **THEN** the first typechecks, the call resolving to the extension `any` of `/prism/collections`, and the second is rejected with `E4006` for `any`, with help naming `import /prism/collections`
 
+### Requirement: Extension Properties Are Read Like Fields
+A read `value.name`, without a call, whose receiver's type after its `&`, `&mut` and `Heap<T>` layers has no field `name` MUST read a property: a member property of the type (`standard-library`, "Intrinsic Extensions Are Members"), else an extension property `name` of the file or of a direct import, found by receiver type constructor and name as an extension function is. The file's own MUST shadow imported ones; several imported MUST be `E4012`, and none `E4006`.
+
+#### Scenario: Reading an extension property
+- **WHEN** `struct Box : Copy { val w: Int, val h: Int }`, `val Box.area: Int get() = w * h` and `fun main() { val b = Box(2, 3); val r: &Box = &b; val none: Box? = null; println(b.area + r.area); println(none?.area ?: -1) }` run with `--check-allocations`
+- **THEN** stdout is `12` then `-1`, and the exit status is 0
+
+#### Scenario: An imported extension property
+- **WHEN** `geo/shapes.prism` declares `package geo`, `public struct Box : Copy { val w: Int, val h: Int }` and `public val Box.area: Int get() = w * h`; a file importing `/geo/shapes` declares `fun f(b: Box): Int = b.area`; and a file importing it declares its own `val Box.area: Int get() = 0` and `fun g(b: Box): Int = b.area`
+- **THEN** both files typecheck, the read in `f` calling `geo/shapes::Box.area` and the read in `g` the file's own property
+
+#### Scenario: An unknown property
+- **WHEN** a file declares `struct Box : Copy { val w: Int }` and `fun f(b: Box): Int = b.area`
+- **THEN** the type checker emits `E4006` for `area`
+
+### Requirement: An Extension Property Read Calls Its Getter
+A read of an extension property MUST call its getter with a shared borrow of the receiver, as a method call with a shared receiver does, and have the getter's result as its value; `value?.name` MUST have type `R?`. The getter's type parameters MUST be solved from the receiver's type arguments alone. Assigning a property MUST be `E4003` (it has no setter), and calling it with parentheses MUST call the value read, as for a field.
+
+#### Scenario: A generic extension property
+- **WHEN** `struct Pair<T> { val a: T, val b: T }`, `val <T> Pair<T>.first: &T get() = &a` and `fun f(p: &Pair<String>): Int = p.first.length` are checked
+- **THEN** the file typechecks, `p.first` having type `&String`, tied to `p` by the elision rules of a getter's shared receiver
+
+#### Scenario: A property's value is the getter's result
+- **WHEN** `struct Team { val members: List<String> }`, `val Team.first: String get() = members[0].clone()` and `val Team.names: List<String> get() = members.map { it.clone() }` are declared, with `import /prism/collections`, and `fun main() { val t = Team(listOf("ann", "bo")); val s = t.first; t.names.add("cy"); println(s + t.first); println(listOf(t).map { it.first }.size) }` runs with `--check-allocations`
+- **THEN** stdout is `annann` then `1`, and the exit status is 0: each read is a temporary the caller owns, moved or changed without touching `t`
+
+#### Scenario: Assigning an extension property rejected
+- **WHEN** `struct Box : Copy { val w: Int }`, `val Box.twice: Int get() = w * 2` and `fun f() { var b = Box(1); b.twice = 4 }` are checked
+- **THEN** the type checker emits `E4003` for the assignment, saying that `twice` has no setter
+
+#### Scenario: Calling an extension property
+- **WHEN** `struct Box : Copy { val w: Int }`, `val Box.twice: Int get() = w * 2` and `fun f(b: Box): Int = b.twice()` are checked
+- **THEN** the type checker emits `E4004`, saying that `Int` cannot be called
+
+### Requirement: Getter Bodies Are Extension Bodies
+A getter's body MUST be checked as the body of an extension function with a shared receiver, the property's type parameters and no parameters, returning the property's type. `this`, a bare name reading the receiver's fields, members and extensions, `return`, and the elision rules for borrows a body returns apply as in such a function. A getter is not a composable context, and a reload swaps an edited getter's body at its next read, as a function's.
+
+#### Scenario: A getter with a block body
+- **WHEN** `struct Team { val members: List<String> }` and `val Team.label: String get() { if (members.isEmpty()) return "empty"; return members[0].clone() }` are declared and `fun main() { println(Team(listOf("ann", "bo")).label); println(Team(listOf()).label) }` runs with `--check-allocations`
+- **THEN** stdout is `ann` then `empty`, and the exit status is 0
+
+#### Scenario: A bare name reads an extension property
+- **WHEN** `struct Box : Copy { val w: Int, val h: Int }`, `val Box.area: Int get() = w * h`, `val Box.double: Int get() = area * 2` and `fun Box.triple(): Int = area * 3` are declared and `fun main() { println(Box(2, 3).double); println(Box(2, 3).triple()) }` runs with `--check-allocations`
+- **THEN** stdout is `12` then `18`, and the exit status is 0: in an extension or getter body, `area` reads `this.area`
+
+#### Scenario: A getter calling a composable rejected
+- **WHEN** `compose fun Leaf() {}`, `struct Box : Copy { val w: Int }` and `val Box.leaf: Int get() { Leaf(); return 1 }` are checked
+- **THEN** the type checker emits `E4008` for the call of `Leaf`
+
+#### Scenario: A getter edit reaches the next read
+- **WHEN** `struct Box : Copy { val w: Int }`, `val Box.twice: Int get() = w * 2` and `fun main() { var i = 0; while (i < 4) { println(Box(i).twice); i += 1 } }` run under the script `after line 2: edit main.prism main.prism.v2`, where `main.prism.v2` declares the getter `get() = w * 10` and the same `main`
+- **THEN** stdout holds `0`, `2`, `20` and `30`, and the exit status is 0: a getter is a function with a slot, swapped at its next call
+
+### Requirement: Extension Property Declarations Are Checked
+An extension property MUST be rejected with `E4010` when the file declares another extension property or extension function of the same name on the same receiver type constructor, when it is named like a field of its receiver struct or a variant of its receiver enum, or when it is named like a member of its receiver type (a member of a built-in type, or an intrinsic extension of a library type). An extension property and a top-level function or value MAY share a name.
+
+#### Scenario: A property and a function of one name rejected
+- **WHEN** a file declares `struct Box : Copy { val w: Int }`, `val Box.size: Int get() = w` and `fun Box.size(): Int = w`
+- **THEN** the type checker emits `E4010` for the second declaration
+
+#### Scenario: A property named like a field rejected
+- **WHEN** a file declares `struct Box : Copy { val w: Int }` and `val Box.w: Int get() = 0`
+- **THEN** the type checker emits `E4010`, saying that the field `w` always takes precedence
+
+#### Scenario: A property named like a variant rejected
+- **WHEN** a file declares `enum Color : Copy { Red, Green }` and `val Color.Red: Int get() = 1`
+- **THEN** the type checker emits `E4010`, saying that the variant `Red` always takes precedence
+
+#### Scenario: A property named like a member rejected
+- **WHEN** a file declares `val String.length: Int get() = 0` and `val <T> List<T>.indices: Range get() = 0..<1`
+- **THEN** the type checker emits `E4010` for each, saying that the member of `/prism/core` always takes precedence
+
+### Requirement: Extension Property Reads Cost a Lookup Each
+Checking a read of an extension property MUST cost what checking a method call with no arguments costs, at most two table lookups beyond the field and member tests, with no analysis of the getter's body at the read. Checking a file MUST grow near-linearly with its number of property reads and declarations.
+
+#### Scenario: Many property reads check in linear time
+- **WHEN** the `extension-properties` shape of `crates/prism-cli/tests/compile_timing.rs` checks files of 256, 1,024 and 4,096 functions, each reading a generic and a non-generic extension property of user types and a member property of `/prism/core`, with one declaration of each property per file, under `PRISM_ASSERT_TIMING=1`
+- **THEN** each stage grows by at most ×4.6 per ×4 in size
+
 ## Design Rationale
 Decisions from `extension-methods` (the core agreed with the user in the borrow-checker roadmap exploration, 2026-10-17; the rest decided while proposing the change and logged in `docs/decisions-for-review.md`):
 
@@ -262,7 +341,7 @@ Decisions from `extension-methods` (the core agreed with the user in the borrow-
 
 Decisions from `runtime-strings-and-drops` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
-- **Built-in members win over extensions** (D6). `length` counts as a field of `String` and `toString()` is a member of `Int`, `Double`, `Bool` and `Char`, so, like `clone()` on a `Clone` type, they win over extensions, and an extension named `length` on `String` or `toString` on those four types could never be called and is `E4010`. On every other type `toString` is an ordinary extension name. Since `standard-library` these members, and the list members, are the `intrinsic` extensions of `/prism/core` and `/prism/collections`, read from their declarations rather than a hand-written list.
+- **Built-in members win over extensions** (D6). `length` counts as a field of `String` and `toString()` is a member of `Int`, `Double`, `Bool` and `Char`, so, like `clone()` on a `Clone` type, they win over extensions, and an extension named `length` on `String` or `toString` on those four types could never be called and is `E4010`. On every other type `toString` is an ordinary extension name. Since `standard-library` these members, and the list members, are the `intrinsic` extensions of `/prism/core` and `/prism/collections`, read from their declarations rather than a hand-written list; since `core-library-in-prism`, `/prism/core` alone declares them, intrinsic or written in Prism.
 
 Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-toolkit`'s Compose-like layout scopes, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
@@ -271,3 +350,9 @@ Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-to
 - **Context parameters are not receivers** (D6). Inside the body and the defaults the parameter is a `val` of type `&T`, passed as the function's first parameter, before the receiver, as a shared borrow (a scope may one day hold state, and a shared borrow is what a `fun` receiver gets). Rejected: Kotlin's withdrawn context receivers, which put two implicit receivers at every position, and passing the context by value.
 - **Extensions may differ only by context, resolved layer by layer** (D8). Each extension table key (receiver constructor and name) holds at most one context-free extension and one per context type, indexed by that type, so resolving among many contexts is a lookup, not a scan. A call picks, within the first layer (own, imports; a prelude layer until `explicit-library`) that has the key, the extension whose context matches a candidate, else the context-free one, else `E4034` naming the contexts that layer declares. Rejected: choosing across layers (the file's own declaration would no longer shadow imports), preferring the context-free extension (a scoped `weight` could never be called beside a plain one), and overloading plain functions by context (the name scopes hold one value per name; a follow-up).
 - **A missing context is its own error, `E4034`** (D10). It names the context the function needs, the one the call has (the innermost receiver lambda's `this`, the enclosing extension's receiver, or none) and, when there are several, the contexts the extension is declared for, with help to call it inside a matching receiver lambda or declare the enclosing function `context(...)`. Naming a plain context function as a value is `E4034` too, since its value would need its context. Rejected: `E4006`, which hides that the extension exists and what it needs. The code follows those `compose-transform` and `state-handles` reserve (`E4030` to `E4033`), so the packets keep their codes in any order.
+
+Decisions from `core-library-in-prism` (the core half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over the smallest intrinsic core with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Read-only extension properties with a getter, Kotlin's form, in every file** (D5). `val Receiver.name: Type get() = expression` or `get() { ... }`, the getter on the header's line or the next, `get` a keyword only there. The type is always written, so Phase 1 needs nothing new; type parameters must occur in the receiver, so a read solves them from it alone; an initializer, `var`, `compose`, a receiver mode, and (found at review) a `Heap<...>` or bare type-parameter receiver are `E2001`. Setters, `compose` and context-parameter properties are deferred. Rejected: keeping `intrinsic val` as the only form, unit functions (`16.dp()`), an initializer form (it reads as a value computed once), and library-only properties.
+- **An extension property is an extension function read without parentheses** (D6). Properties share the extension table with functions (one entry per receiver constructor, name and context), so a property and a function of one name in one file are `E4010`, as are properties named like a field or a member and, found at review, like a variant of the receiver enum, which `c.Red` on a value always names. A read looks up a field, then a member property, then the file's own extension properties, then its imports' (`E4012`, `E4006`); `x.p()` calls the value read; an assignment is `E4003`, saying that the property has no setter. The getter is a function `<module>::<Receiver>.<name>` with a shared receiver, checked as an extension body, so the typed tree, MIR, the borrow checker, code generation and hot reload see an ordinary extension call and nothing after the type checker knows properties. Cost: a failed field test, one member lookup and at most two extension-table lookups per read (shape `extension-properties`, near-linear). Rejected: a separate property namespace (two lookups per read and call for a confusing surface), and a property node in the typed tree.
+- **Reads behave as Kotlin's: temporaries, and bare names through the receiver** (D16). A read is a temporary the caller owns: `val s = t.first` moves the getter's result, not a field, and `t.names.add(x)` changes the temporary list, while a getter returning `&T` gives a read-only borrow tied to the receiver. A bare name in an extension or getter body reads a property of the innermost receiver, as it reads a field. In a composable, a borrowed argument built from a property read is a call's result, so it has no identity (version `0`, `compose`) and runs its callee in a replaceable group, never skipped, as any call's result does; `Copy` results compare by `==` as usual, and the examples read fields or `Copy` units only. Rejected: treating a read as a field for moves and writes (`xs.map { it.first }` would be `E4017`), and requiring `this.` before a property.

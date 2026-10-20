@@ -82,7 +82,7 @@ Checking a read of an extension property MUST cost what checking a method call w
 ## MODIFIED Requirements
 
 ### Requirement: Members Take Precedence Over Extensions
-A call `value.name(...)` MUST invoke a field `name` of the receiver's struct. Failing that, it MUST invoke the built-in `clone()` of a `Clone` receiver or `unbox()` of a `Heap<T>` behind its references. Failing that, it MUST invoke a member `name` of its type (`standard-library`, "Intrinsic Extensions Are Members"), such as a scalar's `toString()` or a `List<T>` member, intrinsic or written in Prism, whatever extensions are visible. A member property (`length`, `size`, `indices`) counts as a field. Then it MUST call a receiver function value `name`, and only then an extension.
+A call `value.name(...)` MUST invoke a field `name` of the receiver's struct. Failing that, the built-in `clone()` of a `Clone` receiver or `unbox()` of a `Heap<T>` behind its references. Failing that, a member `name` of its type (`standard-library`, "Intrinsic Extensions Are Members"), such as a scalar's `toString()`, whatever extensions are visible; a member property (`length`, `size`, `indices`) counts as a field. Then a receiver function value `name`, and only then an extension.
 
 #### Scenario: A field wins over an extension
 - **WHEN** a file declares `struct Button { val onClick: () -> String }` and `fun Button.onClick(): Int = 1`, and `fun f(b: Button) { val s: String = b.onClick() }`
@@ -97,7 +97,7 @@ A call `value.name(...)` MUST invoke a field `name` of the receiver's struct. Fa
 - **THEN** the file typechecks: the call in `f` is the built-in `unbox()` of the box, and the call in `g` is the extension, on the borrowed contents
 
 ### Requirement: Extension Declarations Are Checked
-Two extensions in one file with the same receiver type constructor (`Box` for `Box<Int>` and `Box<T>`), name and context MUST be rejected with `E4010`. So MUST an extension that could never be called: one named like a field of its receiver struct, one named `clone` on a `Clone` type, or one named like a member of its receiver type (`standard-library`, "Intrinsic Extensions Are Members"), such as `toString` on `Int`, `Double`, `Bool` or `Char`, `length` on `String`, or `isEmpty` on `List`. Extensions on different receivers or with different contexts, and an extension and a top-level function, MAY share a name.
+Two extensions in one file with the same receiver type constructor (`Box` for `Box<Int>` and `Box<T>`), name and context MUST be rejected with `E4010`. So MUST an extension that could never be called: one named like a field of its receiver struct, `clone` on a `Clone` type, or a member of its receiver type (`toString` on `Int`, `isEmpty` on `List`; `standard-library`). Extensions on different receivers or with different contexts, and an extension and a top-level function, MAY share a name.
 
 #### Scenario: Duplicate extension rejected
 - **WHEN** a file declares `fun User.greet(): String = "a"` and `fun User.greet(x: Int): String = "b"`

@@ -164,15 +164,15 @@ The built-in `clone()` MUST be a call of the built-in clone function with a shar
 - **THEN** the body calls the built-in print-line function with a copy-out of the binding `r`, then the built-in print function with a shared argument borrow of the binding `s`
 
 ### Requirement: Built-In String and Scalar Members Are Identified
-A string's `length` MUST be a call of the built-in length function, and a string's character `s[i]` a call of the built-in string-character function, each with a shared receiver borrow of the string, the latter also with the index. A scalar's `toString()` MUST be a call of the built-in to-string function with the receiver copied out of any reference or box.
+A string's `length` MUST be a call of the built-in length function, and a string's character `s[i]` a call of the built-in string-character function, each with a shared receiver borrow of the string, the latter also with the index. A scalar's `toString()` MUST be a call of its declaration in `/prism/core` (`prism/core::Int.toString`) with a shared receiver borrow, as any extension call with a shared receiver.
 
 #### Scenario: Built-in string members
 - **WHEN** `fun f(s: &String, n: Int): Char = s[n + s.length]` and `fun g(n: &Int): String = n.toString()` are checked
-- **THEN** the body of `f` is a call of the built-in string-character function whose receiver is a shared receiver borrow of the dereferenced binding `s` and whose index adds `n` to a call of the built-in length function with a shared receiver borrow of the same place, and the body of `g` is a call of the built-in to-string function with a copy-out of the binding `n`
+- **THEN** the body of `f` is a call of the built-in string-character function whose receiver is a shared receiver borrow of the dereferenced binding `s` and whose index adds `n` to a call of the built-in length function with a shared receiver borrow of the same place, and the body of `g` is a call of `prism/core::Int.toString` with a shared receiver borrow of the dereferenced binding `n`
 
 #### Scenario: Built-in members through a box
 - **WHEN** `fun f(h: Heap<Int>): String = h.toString()` and `fun g(s: Heap<String>) { println(s.length) }` are checked
-- **THEN** the body of `f` is a call of the built-in to-string function with a copy of the dereferenced binding `h`, and the body of `g` calls the built-in length function with a shared receiver borrow of the dereferenced binding `s`
+- **THEN** the body of `f` is a call of `prism/core::Int.toString` with a shared receiver borrow of the dereferenced binding `h`, and the body of `g` calls the built-in length function with a shared receiver borrow of the dereferenced binding `s`
 
 ### Requirement: Ranges Are Range Nodes
 A range `a..b` or `a..<b` MUST be a range node of the built-in `Range` type that records whether its end is included.
@@ -362,11 +362,11 @@ A computed `String` part, including the result of the `toString()` call that giv
 - **THEN** the template's first value part is a temporary holding a call of `Point.toString` with a shared receiver borrow of the binding `p`, and its second a temporary holding the concatenation of `a` and `b`
 
 ### Requirement: List Operations Are Identified
-`listOf(...)` MUST be a call of the built-in list-construction function, with the element type as its type argument and each element consumed. A list's `size`, `indices` and built-in member calls MUST be calls of the member's built-in function with the list as receiver, borrowed as the member's mode says, then the arguments. An element `xs[i]` MUST be an index node over the list place, read through any dereferences, and the index, read, copied, borrowed or written like any place.
+`listOf(...)` MUST call `prism/collections::listOf` with a built-in list construction. A list's `size` and intrinsic member calls MUST be calls of the member's built-in, the list a receiver borrowed as the member's mode says, then the arguments. `isEmpty()`, `isNotEmpty()` and `indices` MUST be calls of their declarations in `/prism/core`, with the element type argument and a shared receiver borrow. An element `xs[i]` MUST be an index node over the list place and the index, used like any place.
 
 #### Scenario: Built-in list calls and element places
-- **WHEN** `fun f(xs: &List<Int>, i: Int): Int { var ys = listOf(1, 2); ys.add(xs[i]); return ys.size + xs[0] }` is checked
-- **THEN** `listOf(1, 2)` is a call of the built-in list-construction function with type argument `Int`; `ys.add(...)` is a call of the built-in `add` with a mutable receiver borrow of the binding `ys` and a copy of the index node of the dereferenced binding `xs` by the binding `i`; `ys.size` is a call of the built-in `size` with a shared receiver borrow of `ys`; and `xs[0]`, an operand read in place, is an index node of the dereferenced binding `xs` by the literal `0`
+- **WHEN** `fun f(xs: &List<Int>, i: Int): Int { var ys = listOf(1, 2); ys.add(xs[i]); if (ys.isEmpty()) return 0; return ys.size + xs[0] }` is checked
+- **THEN** `listOf(1, 2)` is a call of `prism/collections::listOf` with type argument `Int`; `ys.add(...)` is a call of the built-in `add` with a mutable receiver borrow of the binding `ys` and a copy of the index node of the dereferenced binding `xs` by the binding `i`; `ys.isEmpty()` is a call of `prism/core::List<T>.isEmpty` with type argument `Int` and a shared receiver borrow of `ys`; `ys.size` is a call of the built-in `size` with a shared receiver borrow of `ys`; and `xs[0]`, an operand read in place, is an index node of the dereferenced binding `xs` by the literal `0`
 
 ### Requirement: Implicit Closure Parameters Are Locals
 A closure's implicit `it` MUST be recorded as the closure's one parameter: a binding named `it`, of the expected parameter's type, marked as an implicit closure parameter, declared at the closure's `{`. Its uses MUST be ordinary uses of that binding, and nothing else in the tree MUST differ from the closure `{ it -> ... }`.
@@ -471,6 +471,13 @@ A call's argument for a vararg parameter MUST be a call of the built-in `varargL
 - **WHEN** `fun sum(vararg xs: Int): Int = xs.size` is declared and `prism dump-typed-tree` runs on `fun f(ys: List<Int>): Int = sum(1, 2) + sum() + sum(*ys)`
 - **THEN** the first call of `main::sum` has one argument, `call builtin varargList<Int>: List<Int>` with the literals `1` and `2`; the second has a `varargList` call with no argument; and the third has the move of `ys`
 
+### Requirement: Extension Property Reads Are Calls
+A read of an extension property written in Prism MUST be a call of its getter's declaration path, which names the receiver type and the property (`main::Box.area`), with the getter's type arguments solved from the receiver and one argument, the receiver borrowed shared as a method receiver is. `prism dump-typed-tree` MUST print it as any extension call.
+
+#### Scenario: An extension property read in the typed tree
+- **WHEN** `struct Box : Copy { val w: Int, val h: Int }` and `val Box.area: Int get() = w * h` are declared and `prism dump-typed-tree` runs on `fun f(b: &Box): Int = b.area`
+- **THEN** the body of `f` is a call of `main::Box.area` whose receiver is a shared receiver borrow of the dereferenced binding `b`, and the body of the getter `main::Box.area` multiplies the fields `w` and `h` of `this`
+
 ## Design Rationale
 Decisions from `typed-tree` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-typed-tree` crate produced by the type checker, with resolved bindings, a type on every node, normalized calls and explicit adjustments; the rest decided while proposing and implementing the change and logged in `docs/decisions-for-review.md`):
 
@@ -504,7 +511,7 @@ Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while
 
 Decisions from `runtime-strings-and-drops` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
-- **String members are built-in calls** (D5, D6). `BuiltinFunction::StringLength`, `StringCharacter` and `ToString`, named `length`, `get` (Kotlin's name for the `[]` operator) and `toString` in dumps, are calls with a receiver, so `s.length`, `s[i]` and `x.toString()` need no new expression node. `ExpressionKind::Index` stays defined, unused, for collections whose elements are places.
+- **String members are built-in calls** (D5, D6; `ToString` removed by `core-library-in-prism` D11: a scalar's `toString()` is a call of `prism/core::Int.toString` and its siblings, as `isEmpty`, `isNotEmpty`, `indices` and extension property reads are calls of their declarations). `BuiltinFunction::StringLength`, `StringCharacter` and `ToString`, named `length`, `get` (Kotlin's name for the `[]` operator) and `toString` in dumps, are calls with a receiver, so `s.length`, `s[i]` and `x.toString()` need no new expression node. `ExpressionKind::Index` stays defined, unused, for collections whose elements are places.
 
 Decisions from `payload-patterns` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 

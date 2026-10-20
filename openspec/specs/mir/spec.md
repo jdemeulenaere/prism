@@ -215,7 +215,7 @@ Code after an expression of type `Nothing` MUST NOT be lowered, and every block 
 - **THEN** the body of `f` has no call of `g`
 
 ### Requirement: Calls Name Their Callee
-A call MUST name its callee (a declaration path for an own or imported function or extension, the built-in `clone`, `length`, `get` (a string's character), `toString`, `Heap` (constructing a box), `unbox`, `print` or `println`, a function-typed place, or a default value's generator), pass one operand per parameter in parameter order, the receiver first, and be marked composable when its callee is composable.
+A call MUST name its callee: a declaration path for an own or imported function, extension or extension property getter, the built-in `clone`, `length`, `get` (a string's character), `Heap` (constructing a box), `unbox`, `print` or `println`, a function-typed place, or a default value's generator. It MUST pass one operand per parameter in parameter order, the receiver first, and be marked composable when its callee is composable.
 
 #### Scenario: Imported function named by its module
 - **WHEN** `models/user.prism` declares `public fun greet(n: Int): Int = n`, and a file importing `/models/user` declares `fun hello(): Int = greet(1)`
@@ -226,7 +226,7 @@ A call MUST name its callee (a declaration path for an own or imported function 
 - **THEN** the body of `Screen` is composable, its call of `Label` is marked composable, and its call of `log` is not
 
 ### Requirement: Receivers Lead the Operands of Calls
-The first operand of a call of an extension or of `clone`, `length`, `get`, `toString` or `unbox`, and the first argument of an extension's body, MUST be the receiver, whose type the path or the built-in names; no other call has one.
+The first operand of a call of an extension, of an extension property getter, or of `clone`, `length`, `get` or `unbox` MUST be the receiver, whose type the path or the built-in names. So MUST the first argument of an extension's or getter's body. No other call has one.
 
 #### Scenario: An extension call names its receiver
 - **WHEN** `lib/team.prism` declares `public struct Team { var lead: String }` and `public fun Team.captain(o: &String): &String = &lead`, and a file importing `/lib/team` declares `fun f(t: Team, s: String): Int { val c = t.captain(&s); return 1 }`
@@ -238,7 +238,7 @@ The first operand of a call of an extension or of `clone`, `length`, `get`, `toS
 
 #### Scenario: String members are built-in calls
 - **WHEN** `fun f(s: String, i: Int): Char = s[i]` and `fun g(s: &String): String = s.length.toString()` are lowered
-- **THEN** the MIR of `f` calls `builtin get` with a shared receiver borrow of `s` and a copy of `i`, and no place of `f` has an index projection; the MIR of `g` calls `builtin length` with a receiver borrow of the referent of `s`, then `builtin toString` with a copy of its result
+- **THEN** the MIR of `f` calls `builtin get` with a shared receiver borrow of `s` and a copy of `i`, and no place of `f` has an index projection; the MIR of `g` calls `builtin length` with a receiver borrow of the referent of `s` into a temporary, then `prism/core::Int.toString` with a shared receiver borrow of that temporary
 
 #### Scenario: Box built-ins are calls
 - **WHEN** `fun f(n: Int): Int { val h = Heap(n); return h.unbox() }` is lowered
@@ -555,11 +555,11 @@ A `for` loop over a list MUST evaluate its iterable once into a hidden local hol
 - **THEN** the MIR borrows `_1` once into a local, calls `builtin size` once, branches past the loop when the size is 0, and in each iteration binds `x` to a shared borrow of the borrowed list's dereference indexed by the counter, calls `g`, then compares the incremented counter with the size
 
 ### Requirement: List Operations Are Built-In Calls
-A vararg's list, `size`, `indices` and each built-in list member MUST be `Call` terminators of a built-in callee, printed `builtin varargList`, `builtin size`, `builtin add` and so on, with the list's receiver borrow first (when it has one) and then the arguments, in the order `Calls Name Their Callee` and `Receivers Lead the Operands of Calls` give. `removeAt` and `removeLast` MUST write the removed element to their destination as a value the caller owns.
+A vararg's list, `size` and each intrinsic list member MUST be `Call` terminators of a built-in callee, printed `builtin varargList`, `builtin size`, `builtin add` and so on, with the list's receiver borrow first (when it has one), then the arguments, as for every call. `isEmpty`, `isNotEmpty` and `indices` MUST be calls of their declarations in `/prism/core`. `removeAt` and `removeLast` MUST write the removed element to their destination as a value the caller owns.
 
 #### Scenario: Built-in list calls
-- **WHEN** `fun f(): Int { var xs = listOf(1, 2); xs.add(3); return xs.removeAt(0) }` is lowered
-- **THEN** the MIR calls `builtin varargList` with `1` and `2` into a temporary and `prism/collections::listOf` with a move of that temporary into `xs`, then `builtin add` with a mutable borrow of `xs` and `3`, and `builtin removeAt` with a mutable borrow of `xs` and `0` into the return place
+- **WHEN** `fun f(): Int { var xs = listOf(1, 2); xs.add(3); if (xs.isNotEmpty()) return xs.removeAt(0); return 0 }` is lowered
+- **THEN** the MIR calls `builtin varargList` with `1` and `2` into a temporary and `prism/collections::listOf` with a move of that temporary into `xs`, then `builtin add` with a mutable borrow of `xs` and `3`, `prism/core::List<T>.isNotEmpty<Int>` with a shared borrow of `xs`, and `builtin removeAt` with a mutable borrow of `xs` and `0` into the return place
 
 ### Requirement: Context Arguments Lead the Operands of Calls
 A call of a function with a context parameter MUST pass the context argument as its first operand, before the receiver and the other arguments. A lambda with a receiver MUST lower like any closure, its receiver being its first parameter.
@@ -658,13 +658,6 @@ A body that calls `runApp` MUST have one root content adapter closure, `<symbol>
 - **WHEN** `prism dump-mir --composed` runs on `fun main() { runApp { } }` with `import /prism/compose/ui`
 - **THEN** `main` builds the closure value `main::main#root-content` from the content lambda, moved, and passes it to the call that runs the app
 
-### Requirement: Unit Properties Lower to Constructions
-A read of the intrinsic property `n.dp` or `n.sp` MUST lower to the construction of `Dp` or `TextUnit` from `n`, with no call.
-
-#### Scenario: A unit in MIR
-- **WHEN** `prism dump-mir` runs on `fun f(n: Int): Dp = n.dp` with `import /prism/compose/ui`
-- **THEN** the body of `f` builds the aggregate `Dp` from `n` and calls nothing
-
 ### Requirement: Flags Outside Composition End With Their Scope
 A borrow of a state's value that holds the state's flag (compose, "Borrows of a State's Value Outside Composition Hold Its Flag") MUST lower to a call taking the flag, shared or exclusive, before the borrow, and a call ending it where the temporary scope of its statement ends, or where the block of the binding it initializes ends, on every path out of that scope.
 
@@ -725,6 +718,13 @@ A vararg's elements MUST be evaluated into operands in order, then passed to a `
 #### Scenario: A vararg call in MIR
 - **WHEN** `fun sum(vararg xs: Int): Int = xs.size` is declared and `fun f(a: Int, ys: List<Int>): Int = sum(a, 2) + sum(*ys)` is lowered
 - **THEN** the MIR calls `builtin varargList<Int>` with a copy of `_1` (through a temporary) and the constant `2` into a temporary, calls `main::sum` with a move of that temporary, and calls `main::sum` again with a move of `_2`
+
+### Requirement: Extension Property Reads Lower to Calls
+A read of an extension property written in Prism MUST lower to a `Call` terminator of its getter's declaration path, whose first operand is the receiver's shared borrow, as for an extension call with a shared receiver, writing the property's value to the call's destination. A getter's body MUST lower as the body of an extension function with no parameter.
+
+#### Scenario: A unit property in MIR
+- **WHEN** `prism dump-mir` runs on `fun f(n: Int): Dp = n.dp` with `import /prism/compose/ui`
+- **THEN** the body of `f` calls `prism/compose/ui::Int.dp` with a shared receiver borrow of `n` into the return place, and builds no aggregate `Dp`
 
 ## Design Rationale
 Decisions from `mir-lowering` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with `prism dump-mir` for snapshot tests; the rest decided while proposing, implementing and reviewing the change and logged in `docs/decisions-for-review.md`). The consumers are the borrow checker (`borrowck-moves`, `borrowck-exclusivity`, `borrowck-elision`), drop elaboration, closure conversion, the Cranelift backend, `hot-reload` and `compose-transform`.
@@ -845,7 +845,7 @@ Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by 
 
 - **Node calls start node groups** (D3). `Node(kind, update, content)` lowers in the transform to `start_node_group` with a key chained from the parent region's key and the call's ordinal among the region's node calls, a call of `update` with the returned node, a call of `content`, and `end_group`; `LeafNode` passes no content lambda, which would cost a group per leaf per pass. Two intrinsics replace Compose's two `ComposeNode` overloads, since Prism has no overloading. Cost: constant per call, one key hash.
 - **`runApp` gets a root content adapter** (D15), built from the content where it is called, as `composition` does.
-- **Unit properties are constructions** (D7). `n.dp` and `n.sp` lower to the aggregates `Dp(n)` and `TextUnit(n)`, so a unit costs a constructor and no call.
+- **Unit properties are constructions** (D7; superseded by `core-library-in-prism` D7: `n.dp` and `n.sp` are calls of Prism getters, as every extension property read is). `n.dp` and `n.sp` lower to the aggregates `Dp(n)` and `TextUnit(n)`, so a unit costs a constructor and no call.
 - **Default generators borrow only what their default reads** (D26, review). A generator used to borrow the context, the receiver and every earlier argument, so `Modifier.padding(16.dp)` borrowed 27 arguments for its six defaults and the borrow check of a screen of toolkit calls cost about 0.17 ms per call. Its inputs are now decided syntactically (`prism_ast::default_inputs`): an earlier parameter or the context when its name appears, the receiver and the context when `this` or another name appears (a member of the implicit receiver, or a call needing the context), and every input for blocks, closures, `when` and jumps, which bind names or hold statements; a parameter whose type may hold a borrow (a reference, a function type, a type parameter) still takes every input, so the elision rules tie its result as before. Phase 1 stores the answer in the ABI and the checker computes it for the file's own functions, so both sides of a call agree. No program is accepted or rejected differently and no diagnostic changes; the borrow check fell to 0.07 ms per call. Rejected: resolving reads from the typed tree (another file sees only the ABI), skipping loans in the borrow checker alone (every later stage would keep the arguments), inlining constant defaults (a default may call the callee's private declarations).
 - **One capture local per captured path** (D7 of `path-captures`). A closure's capture local has the path's type and is named by its path (`p.x`), a place chain in its body maps onto the captured prefix's local and the rest of the chain in one walk, and the enclosing body builds the closure value from each path's place: a borrow of a borrowed path, a copy of a copied one, a move only of a whole binding. The borrow checker needs no new rule, since loans, overlap and capture-mode inference already work on places. Rejected: one capture local per binding with a partial environment, which MIR's types cannot express.
 
