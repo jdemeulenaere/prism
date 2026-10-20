@@ -138,8 +138,10 @@ compose fun main::Counter(): Unit @10:1
         argument modifier: call prism/compose/layout::Modifier.padding: Modifier @12:23
           receiver: borrow (receiver): &Modifier @12:23
             value prism/compose/ui::Modifier: Modifier @12:23
-          argument all: call builtin dp: Dp @12:40
-            receiver: literal 16: Int @12:40
+          argument all: call prism/compose/ui::Int.dp: Dp @12:40
+            receiver: borrow (receiver): &Int @12:40
+              temporary: Int @12:40
+                literal 16: Int @12:40
           argument horizontal: default
           argument vertical: default
           argument start: default
@@ -149,8 +151,10 @@ compose fun main::Counter(): Unit @10:1
         argument verticalArrangement: call prism/compose/layout::Arrangements.spacedBy: Arrangement @12:70
           receiver: borrow (receiver): &Arrangements @12:70
             value prism/compose/layout::Arrangement: Arrangements @12:70
-          argument space: call builtin dp: Dp @12:91
-            receiver: literal 8: Int @12:91
+          argument space: call prism/compose/ui::Int.dp: Dp @12:91
+            receiver: borrow (receiver): &Int @12:91
+              temporary: Int @12:91
+                literal 8: Int @12:91
         argument horizontalAlignment: default
         argument content: closure compose (%1 this) captures [borrow %0 *c]: compose ColumnScope.() -> Unit @12:98
           block: Unit @13:9

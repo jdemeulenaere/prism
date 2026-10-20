@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+import /prism/compose/ui
+import /prism/core
+
+val Int.dp: Int get() = this * 2
+
+fun main() {
+    println(3.dp)
+    println(4.sp.value)
+}
