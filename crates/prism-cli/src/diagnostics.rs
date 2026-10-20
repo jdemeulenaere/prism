@@ -474,6 +474,23 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         TypeError::CannotTakeApart { help, .. } => {
             out.push_str(&format!("   = help: {}\n", help));
         }
+        TypeError::CompoundAssignmentOfStateValue {
+            handle,
+            operator,
+            value,
+            ..
+        } => {
+            out.push_str(&format!(
+                "   = help: assign the result, which reads the value in place: '{h}.value = {h}.value {o} {v}'\n",
+                h = handle,
+                o = operator,
+                v = value
+            ));
+            out.push_str(&format!(
+                "   = help: or transform the value: '{}.update {{ it {} {} }}'\n",
+                handle, operator, value
+            ));
+        }
         TypeError::MoveInGuard { name, .. } => {
             out.push_str(&format!(
                 "   = help: read or borrow '{}' in the guard, and move it in the branch body\n",

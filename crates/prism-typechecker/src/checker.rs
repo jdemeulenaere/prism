@@ -5288,6 +5288,9 @@ impl TypeChecker {
                 }
             }
         };
+        if fits && checked {
+            self.check_state_compound_value(target_id, operator.as_str(), value, span);
+        }
         let value_id = if fits {
             value_id
         } else {

@@ -1,0 +1,6 @@
+// expect: E4017
+// run: 1
+fun main() {
+    val s = mutableStateOf("a")
+    s.value += "x"
+}

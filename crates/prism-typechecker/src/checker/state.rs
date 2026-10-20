@@ -147,12 +147,11 @@ impl TypeChecker {
 
     /// Reports the write of a state's value that `statement` is (`E4031` in a composable
     /// context), for an assignment or, when `compound`, a compound assignment of the state
-    /// place `target`; a compound assignment of a value that is not `Copy` would move it out,
-    /// `E4017` with help naming `update`.
+    /// place `target`.
     pub(super) fn check_state_write(&mut self, target: ExpressionId, compound: bool, span: Span) {
-        let ExpressionKind::StatePlace { handle } = self.builder.kind(target).clone() else {
+        if !matches!(self.builder.kind(target), ExpressionKind::StatePlace { .. }) {
             return;
-        };
+        }
         if self.is_in_compose() {
             let what = if compound {
                 "a compound assignment of a state's value"
@@ -163,23 +162,35 @@ impl TypeChecker {
                 what: what.to_string(),
                 span,
             });
+        }
+    }
+
+    /// `E4017` for the compound assignment `target op= value` of a state place whose value is
+    /// not `Copy`, once the operator is known to apply: it would read the value out by copy.
+    /// The help shows the forms that work, assigning the result (whose operands are read in
+    /// place) or transforming the value with `update`. A composable context already reported
+    /// `E4031`.
+    pub(super) fn check_state_compound_value(
+        &mut self,
+        target: ExpressionId,
+        operator: &str,
+        value: &Expr,
+        span: Span,
+    ) {
+        let ExpressionKind::StatePlace { handle } = self.builder.kind(target).clone() else {
+            return;
+        };
+        let ty = self.ty(target);
+        if self.is_in_compose() || self.is_copy(&ty) {
             return;
         }
-        let value = self.ty(target);
-        if compound && !self.is_copy(&value) {
-            let handle = self.describe_handle(handle);
-            self.errors.push(TypeError::CannotMoveOut {
-                source: format!("the value of the state '{}'", handle),
-                ty: value,
-                borrow: None,
-                clone: None,
-                destructure: None,
-                unbox: None,
-                remove: None,
-                captured: false,
-                span,
-            });
-        }
+        self.errors.push(TypeError::CompoundAssignmentOfStateValue {
+            handle: self.describe_handle(handle),
+            ty,
+            operator: operator.to_string(),
+            value: value.to_string(),
+            span,
+        });
     }
 
     /// The `s.value` node a place is rooted at, through fields, elements and the temporary

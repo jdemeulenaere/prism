@@ -246,6 +246,18 @@ pub enum TypeError {
         span: Span,
     },
 
+    /// E4017: A compound assignment of a state's value whose type is not `Copy`
+    /// (`s.value += "x"` for a `MutableState<String>`), which would read the value out by copy
+    /// (`owned-state`). `handle` describes the state, `operator` is the compound operator
+    /// (`+=`) and `value` the right-hand side, for the help.
+    CompoundAssignmentOfStateValue {
+        handle: String,
+        ty: Type,
+        operator: String,
+        value: String,
+        span: Span,
+    },
+
     /// E4017: A pattern or destructuring declaration would take apart a value that is not a whole
     /// owned value (D6 of `payload-patterns`). `source` describes it, `help` the fix.
     CannotTakeApart {
@@ -588,6 +600,7 @@ impl TypeError {
             TypeError::BreakOutsideLoop { .. } => "E4015",
             TypeError::InvalidMarkerDeclaration { .. } => "E4016",
             TypeError::CannotMoveOut { .. } => "E4017",
+            TypeError::CompoundAssignmentOfStateValue { .. } => "E4017",
             TypeError::CannotTakeApart { .. } => "E4017",
             TypeError::MoveInGuard { .. } => "E4017",
             TypeError::NotCloneable { .. } => "E4018",
@@ -645,6 +658,7 @@ impl TypeError {
             TypeError::InvalidMarkerDeclaration { span, .. } => *span,
             TypeError::NotCloneable { span, .. } => *span,
             TypeError::CannotMoveOut { span, .. } => *span,
+            TypeError::CompoundAssignmentOfStateValue { span, .. } => *span,
             TypeError::NotAReference { span, .. } => *span,
             TypeError::WrongTypeArgumentCount { span, .. } => *span,
             TypeError::UnsatisfiedBound { span, .. } => *span,
@@ -955,6 +969,15 @@ impl TypeError {
             TypeError::CannotMoveOut { source, ty, .. } => format!(
                 "cannot move out of {}: its type '{}' is not 'Copy', and a move takes a whole value",
                 source, ty
+            ),
+            TypeError::CompoundAssignmentOfStateValue {
+                handle,
+                ty,
+                operator,
+                ..
+            } => format!(
+                "cannot use '{}=' on the value of the state '{}': its type '{}' is not 'Copy', so it cannot be read out of the state",
+                operator, handle, ty
             ),
             TypeError::NotAReference { ty, .. } => format!(
                 "cannot write through a value of type '{}': '*' needs a reference or a 'Heap'",

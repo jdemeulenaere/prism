@@ -204,6 +204,10 @@ The bundled module `/prism/compose/runtime` MUST be a prelude module. It MUST de
 - **WHEN** `fun reset(s: &MutableState<Int>) { s.value = 0 }` is declared and `fun main() { val count = mutableStateOf(5); reset(count); println(count.value) }` runs
 - **THEN** stdout is `0`
 
+#### Scenario: Compound assignment of a String state rejected
+- **WHEN** `fun main() { val s = mutableStateOf("a"); s.value += "x" }` is checked
+- **THEN** the type checker emits `E4017`, saying that `+=` cannot be used on the value of the state `s` because `String` is not `Copy`, with help suggesting `s.value = s.value + "x"` and `s.update { it + "x" }`
+
 ### Requirement: Conflicting Accesses to a Borrowed Cell
 While a flag holds a state shared, a write of it, `update` of it or an exclusive flag on it MUST end the program with the runtime error `state accessed while borrowed`. While `update` or an exclusive flag holds a state, any access to it MUST end the program with that error.
 
