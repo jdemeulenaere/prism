@@ -1,0 +1,5 @@
+// expect: E4004
+import /prism/collections
+
+// `transform` has no default, so the separator alone leaves it missing.
+fun f(xs: &List<String>): String = xs.joinToString(",")

@@ -9740,6 +9740,20 @@ impl TypeChecker {
                     .push(TypeError::CallSignatureMismatch { message: msg, span });
                 return Err(CheckedArguments(Vec::new()));
             }
+            // Positional arguments fill the first parameters, so a parameter without a default
+            // after a defaulted one may still be missing (`f(1)` of `f(a: Int = 0, b: Int)`).
+            if let Some(missing) = (args.len()..n_params)
+                .find(|&index| defaults.get(index).is_some_and(|default| default.is_none()))
+            {
+                self.errors.push(TypeError::CallSignatureMismatch {
+                    message: format!(
+                        "missing required argument {}",
+                        describe_parameter(param_names, missing)
+                    ),
+                    span,
+                });
+                return Err(CheckedArguments(Vec::new()));
+            }
 
             for (index, arg) in args.iter().enumerate() {
                 if let Some(value) = check(self, index, &arg.value) {
