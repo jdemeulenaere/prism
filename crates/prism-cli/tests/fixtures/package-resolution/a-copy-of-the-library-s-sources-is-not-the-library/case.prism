@@ -1,0 +1,4 @@
+// expect: E1008
+// entry: library/prism/core.prism
+// The header of this case: its entry is a copy of the library's `library/prism/core.prism`,
+// which is not the library, since the library is only ever the embedded one.

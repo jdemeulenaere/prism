@@ -8,8 +8,10 @@ use prism_library::{Library, MODULES, PRELUDE};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+/// The library's sources: the top-level `library/prism` of the repository (D5 of
+/// `explicit-library`).
 fn library_directory() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../prism-library/prism")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../library/prism")
 }
 
 /// standard-library: "The library is checked by the compiler's tests".
@@ -31,7 +33,7 @@ fn every_module_is_formatted() {
             .unwrap_or_else(|error| panic!("{} does not format: {:?}", path, error));
         assert_eq!(
             &formatted, source,
-            "{} is not formatted: run `prism fmt crates/prism-library/prism`",
+            "{} is not formatted: run `prism fmt library/prism`",
             path
         );
     }
@@ -157,7 +159,7 @@ fn the_embedded_modules_are_the_library_directory() {
     assert_eq!(
         embedded.keys().collect::<Vec<_>>(),
         on_disk.keys().collect::<Vec<_>>(),
-        "MODULES must list every file of crates/prism-library/prism"
+        "MODULES must list every file of library/prism"
     );
     assert_eq!(embedded, on_disk);
     for module in PRELUDE {

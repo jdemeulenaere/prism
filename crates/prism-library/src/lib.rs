@@ -1,16 +1,17 @@
 //! `prism-library`: the bundled standard library (D1 of `standard-library`).
 //!
-//! The library's `.prism` files live in `prism/` beside this crate and are embedded in the
-//! `prism` executable with `include_str!`, so the compiler is one self-contained file that never
-//! reads its library from disk. Every module is a file of the reserved root package `prism`, or
-//! of a package below it, whose module path is `prism/<name>` (`prism/compose/runtime` for the
-//! file `compose/runtime.prism` of the package `prism.compose`) and which a root-anchored import
-//! `/prism/<name>` reaches.
+//! The library's `.prism` files live in the repository's top-level `library/prism/` (D5 of
+//! `explicit-library`), laid out as a workspace whose root holds the package `prism`, and this
+//! crate embeds them in the `prism` executable with `include_str!`, so the compiler is one
+//! self-contained file that never reads its library from disk. Every module is a file of the
+//! reserved root package `prism`, or of a package below it, whose module path is `prism/<name>`
+//! (`prism/compose/runtime` for the file `compose/runtime.prism` of the package `prism.compose`)
+//! and which a root-anchored import `/prism/<name>` reaches.
 //! The prelude modules' public names are in scope in every workspace file without an import
 //! (D4).
 //!
 //! The crate has no dependencies, and no build script: `library_tests.rs` checks that
-//! [`MODULES`] lists exactly the files of `prism/` and its subdirectories.
+//! [`MODULES`] lists exactly the files of `library/prism/` and its subdirectories.
 
 use std::sync::{Arc, OnceLock};
 
@@ -23,33 +24,42 @@ pub struct LibraryModule {
 
 /// The module path and the embedded source of every bundled module.
 pub const MODULES: &[(&str, &str)] = &[
-    ("prism/core", include_str!("../prism/core.prism")),
+    (
+        "prism/core",
+        include_str!("../../../library/prism/core.prism"),
+    ),
     (
         "prism/collections",
-        include_str!("../prism/collections.prism"),
+        include_str!("../../../library/prism/collections.prism"),
     ),
     (
         "prism/compose/runtime",
-        include_str!("../prism/compose/runtime.prism"),
+        include_str!("../../../library/prism/compose/runtime.prism"),
     ),
     (
         "prism/compose/ui",
-        include_str!("../prism/compose/ui.prism"),
+        include_str!("../../../library/prism/compose/ui.prism"),
     ),
     (
         "prism/compose/foundation",
-        include_str!("../prism/compose/foundation.prism"),
+        include_str!("../../../library/prism/compose/foundation.prism"),
     ),
     (
         "prism/compose/layout",
-        include_str!("../prism/compose/layout.prism"),
+        include_str!("../../../library/prism/compose/layout.prism"),
     ),
     (
         "prism/compose/material3",
-        include_str!("../prism/compose/material3.prism"),
+        include_str!("../../../library/prism/compose/material3.prism"),
     ),
-    ("prism/system", include_str!("../prism/system.prism")),
-    ("prism/composer", include_str!("../prism/composer.prism")),
+    (
+        "prism/system",
+        include_str!("../../../library/prism/system.prism"),
+    ),
+    (
+        "prism/composer",
+        include_str!("../../../library/prism/composer.prism"),
+    ),
 ];
 
 /// The prelude modules, in the order a workspace file sees them after its explicit imports.
