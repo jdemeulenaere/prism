@@ -10,7 +10,7 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement la
 
 ## 1. Reconcile and baseline
 
-- [ ] 1.1 Check that `vararg`, `core-library-in-prism`, `field-visibility` and `compose-library-in-prism` are archived, and stop if one is not.
+- [x] 1.1 Check that `vararg`, `core-library-in-prism`, `field-visibility` and `compose-library-in-prism` are archived, and stop if one is not.
   - Re-read the main `ui`, `compose`, `standard-library`, `execution`, `example-apps`, `references` and `extension-functions` specs.
   - Rebase every MODIFIED block on the current main text, keeping every scenario of the main requirement. Turn ADDED blocks whose requirement exists by then into MODIFIED.
   - Check the names the tasks use:
@@ -21,22 +21,22 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement la
     - how `compose-library-in-prism` landed `Node`, `LeafNode`, `NodeId`, the registration externals and `@ExplicitGroupsComposable` in `library/prism/compose/ui.prism`.
   - Get `openspec validate layout-primitive --strict` clean with no INFO lines.
   - Record the reconciliation as a "Baseline update" paragraph in `design.md`.
-- [ ] 1.2 On an idle machine and a release build, before any code change, record in `design.md` (D18) the medians and 99th percentiles of:
+- [x] 1.2 On an idle machine and a release build, before any code change, record in `design.md` (D18) the medians and 99th percentiles of:
   - `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-ui --test ui_timing -- --ignored --nocapture`;
   - `cargo test --release -p prism-cli --test app_frame_timing -- --ignored --nocapture`;
   - `--test ui_run_timing -- --ignored --nocapture`;
-  - the native full relayout of `examples/apps/todo/large.prism`: `cargo run --release -q -p prism-cli -- run --frame-stats --headless --events <script> examples/apps/todo/large.prism` with a first `frame` and fifty rounds of `resize 800 601`, `frame`, `resize 800 600` and `frame`, recording the `layout` median and 99th percentile and the allocations per frame;
+  - the native full relayout of `examples/apps/todo/large.prism`: `cargo run --release -q -p prism-cli -- run --frame-stats --headless --events <script> examples/apps/todo/large.prism` with a first `frame` and fifty rounds of `resize 800 601`, `frame`, `resize 800 600` and `frame` (and the same with `resize 801 600`, the full relayout: D18's correction), recording the `layout` median and 99th percentile and the allocations per frame;
   - the `ui-calls` and `nested-compose-ui` shapes of `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture`.
 
   This is the baseline task 8.3 compares with. Verify that the numbers are in `design.md`.
 
 ## 2. Int and Double conversions (D15)
 
-- [ ] 2.1 Declare `public intrinsic fun Int.toDouble(): Double` and `public intrinsic fun Double.toInt(): Int` in `library/prism/core.prism`, with comments.
+- [x] 2.1 Declare `public intrinsic fun Int.toDouble(): Double` and `public intrinsic fun Double.toInt(): Int` in `library/prism/core.prism`, with comments.
   - Add their catalog entries in `crates/prism-typechecker/src/intrinsics.rs` beside `toString`, as `BuiltinFunction::IntToDouble` and `BuiltinFunction::DoubleToInt` (`crates/prism-typed-tree/src/tree.rs`, with their names in the typed-tree printer).
   - Add the MIR codec tags, in sequence, never reusing a retired tag.
   - Lower them in `crates/prism-codegen` to `fcvt_from_sint` and `fcvt_to_sint_sat` (NaN gives 0).
-- [ ] 2.2 Add fixtures for `standard-library` "Conversions need no import" and "Conversions in the ABI of the core module", and for `execution` "Converting numbers". Verify with `cargo test -p prism-typechecker -p prism-codegen -p prism-cli --test fixture_tests --test library_tests`.
+- [x] 2.2 Add fixtures for `standard-library` "Conversions need no import" and "Conversions in the ABI of the core module", and for `execution` "Converting numbers". Verify with `cargo test -p prism-typechecker -p prism-codegen -p prism-cli --test fixture_tests --test library_tests`.
 
 ## 3. The native measurement protocol (D4, D6, D8, D10, D13, D14)
 

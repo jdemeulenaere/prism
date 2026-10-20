@@ -1,0 +1,12 @@
+// expect: ok
+// run: 0
+import /prism/core
+
+fun main() {
+    println(7.toDouble() / 2.0)
+    println((3.9).toInt())
+    println((-3.9).toInt())
+    println((0.0 / 0.0).toInt())
+    println((1.0 / 0.0).toInt())
+    println((-1.0 / 0.0).toInt())
+}

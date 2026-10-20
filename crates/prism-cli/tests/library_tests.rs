@@ -132,8 +132,8 @@ fn the_member_modules_declare_members_of_built_in_types() {
     }
 }
 
-/// standard-library: "Declarations of the core module", and compilation-and-abi: "The ABI of
-/// a library module": `/prism/core` exports intrinsic and ordinary members, each entry with its
+/// standard-library: "Declarations of the core module" and "Conversions in the ABI of the core
+/// module", and compilation-and-abi: "The ABI of a library module": `/prism/core` exports intrinsic and ordinary members, each entry with its
 /// kind, and no external; changing an entry from intrinsic to ordinary changes its ABI hash.
 #[test]
 fn declarations_of_the_core_module() {
@@ -167,6 +167,9 @@ fn declarations_of_the_core_module() {
         "public fun <T> List<T>.isEmpty(): Bool",
         "public val <T> List<T>.indices: Range",
         "public intrinsic mut fun <T> List<T>.add(element: T): Unit",
+        // standard-library: "Conversions in the ABI of the core module".
+        "public intrinsic fun Int.toDouble(): Double",
+        "public intrinsic fun Double.toInt(): Int",
     ] {
         assert!(
             texts.contains(expected),

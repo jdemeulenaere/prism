@@ -75,6 +75,23 @@ pub const CATALOG: &[Intrinsic] = &[
         "public intrinsic fun <T> println(value: &T): Unit",
         true,
     ),
+    // Kotlin's conversions between the two number types (D15 of `layout-primitive`).
+    entry(
+        CORE,
+        Some("Int"),
+        "toDouble",
+        BuiltinFunction::IntToDouble,
+        "public intrinsic fun Int.toDouble(): Double",
+        false,
+    ),
+    entry(
+        CORE,
+        Some("Double"),
+        "toInt",
+        BuiltinFunction::DoubleToInt,
+        "public intrinsic fun Double.toInt(): Int",
+        false,
+    ),
     entry(
         CORE,
         Some("String"),

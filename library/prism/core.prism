@@ -26,6 +26,13 @@ public fun Bool.toString(): String = prism_rt_bool_to_string(this)
 // The one-character text of this `Char`.
 public fun Char.toString(): String = prism_rt_char_to_string(this)
 
+// The `Double` nearest to this `Int`, ties to even.
+public intrinsic fun Int.toDouble(): Double
+
+// This `Double` truncated toward zero: 0 for NaN, and `Int`'s largest or smallest value for
+// values beyond them, infinities included.
+public intrinsic fun Double.toInt(): Int
+
 // The number of characters of this `String`.
 public intrinsic val String.length: Int
 

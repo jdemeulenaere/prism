@@ -699,6 +699,11 @@ pub enum BuiltinFunction {
     /// `a in r` on a `Range`, called with the range by value and the `Int`: whether `a` is in
     /// it (D8 of `operator-conventions`). MIR lowering expands it into comparisons.
     RangeContains,
+    /// `n.toDouble()` of an `Int`: the nearest `Double` (D15 of `layout-primitive`).
+    IntToDouble,
+    /// `d.toInt()` of a `Double`: truncated toward zero, 0 for NaN, saturated at `Int`'s
+    /// bounds, as Kotlin's.
+    DoubleToInt,
     /// `s.length` of a `String`, called with a shared receiver borrow: its number of characters
     /// (D6 of `runtime-strings-and-drops`).
     StringLength,
@@ -789,6 +794,8 @@ impl BuiltinFunction {
             BuiltinFunction::Print => "print",
             BuiltinFunction::PrintLine => "println",
             BuiltinFunction::StringLength => "length",
+            BuiltinFunction::IntToDouble => "toDouble",
+            BuiltinFunction::DoubleToInt => "toInt",
             BuiltinFunction::RangeContains => "contains",
             // The name Kotlin gives the `[]` operator.
             BuiltinFunction::StringCharacter => "get",

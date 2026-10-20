@@ -816,6 +816,8 @@ impl Codec for BuiltinFunction {
             BuiltinFunction::WeakGet => 33,
             BuiltinFunction::RangeContains => 40,
             BuiltinFunction::CurrentComposer => 41,
+            BuiltinFunction::IntToDouble => 42,
+            BuiltinFunction::DoubleToInt => 43,
         });
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -846,6 +848,8 @@ impl Codec for BuiltinFunction {
             33 => BuiltinFunction::WeakGet,
             40 => BuiltinFunction::RangeContains,
             41 => BuiltinFunction::CurrentComposer,
+            42 => BuiltinFunction::IntToDouble,
+            43 => BuiltinFunction::DoubleToInt,
             _ => return None,
         })
     }

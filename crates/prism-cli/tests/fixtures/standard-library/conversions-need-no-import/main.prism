@@ -1,0 +1,4 @@
+// expect: ok
+fun half(n: Int): Double = n.toDouble() / 2.0
+
+fun whole(d: Double): Int = d.toInt()
