@@ -1,0 +1,2 @@
+// expect: E2001
+val <T> T.me: Int get() = 1

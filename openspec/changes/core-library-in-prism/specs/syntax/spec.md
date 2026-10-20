@@ -12,11 +12,15 @@ A `val` declaration with a receiver and without `intrinsic` MUST declare an exte
 - **THEN** each `get` parses as a function, parameter, variable, member, field or callee name
 
 ### Requirement: Extension Property Declarations Are Restricted
-An extension property without `intrinsic` MUST have a getter, MUST NOT have an initializer, and MUST NOT be `var`. `compose` or a receiver mode before it MUST be rejected, and every type parameter it declares MUST occur in its receiver type. Each violation MUST be rejected with `E2001`. The message for an initializer suggests `get() =`, and the message for a missing getter says that an extension property has no stored value.
+An extension property without `intrinsic` MUST have a getter, MUST NOT have an initializer, and MUST NOT be `var`. `compose` or a receiver mode before it, a type parameter not occurring in its receiver type, and a `Heap<...>` or type-parameter receiver (as for functions) MUST be rejected. Each violation MUST be `E2001`. The message for an initializer suggests `get() =`, and the one for a missing getter says that an extension property has no stored value.
 
 #### Scenario: Extension properties without a getter rejected
 - **WHEN** parsing `val String.twice: Int` followed by a newline and `fun f() {}`, `val Int.half: Int = 2`, `var Int.twice: Int get() = 2`, `compose val Int.x: Int get() = 1`, and `val <T, R> List<T>.other: Int get() = 0`
 - **THEN** the parser reports `E2001` for each, the second with help suggesting `get() = 2` and the last saying that `R` does not occur in the receiver type
+
+#### Scenario: Property receivers follow extension receivers
+- **WHEN** parsing `val Heap<User>.size: Int get() = 0` and `val <T> T.me: Int get() = 1`
+- **THEN** the parser reports `E2001` for each, the first saying that reads look through `Heap`, so the property is declared on its contents, and the second that a bare type parameter cannot be a receiver
 
 ## MODIFIED Requirements
 

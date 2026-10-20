@@ -1080,6 +1080,23 @@ impl Parser {
             ));
         }
         let receiver_span = receiver_span.merge(receiver_end);
+        // A property's receiver follows an extension function's rules: reads look through
+        // `Heap` layers, and a bare type parameter would make every lookup generic.
+        if receiver_name == "Heap" && !receiver_arguments.is_empty() {
+            return Err(ParseError::new(
+                "An extension property's receiver cannot be a 'Heap<...>': reads look through 'Heap', so declare the property on its contents, as in 'val User.size: Int get() = ...'",
+                receiver_span,
+            ));
+        }
+        if type_parameters.iter().any(|p| p.name == receiver_name) {
+            return Err(ParseError::new(
+                format!(
+                    "A bare type parameter cannot be a receiver: '{}' is a type parameter of this property; declare the property on a named type, as in 'val <T> Box<T>.first: &T get() = &a'",
+                    receiver_name
+                ),
+                receiver_span,
+            ));
+        }
         let receiver = if receiver_arguments.is_empty() {
             Type::named(receiver_name, receiver_span)
         } else {

@@ -1,0 +1,3 @@
+// expect: E2001
+struct User : Copy { val n: Int }
+val Heap<User>.size: Int get() = 0
