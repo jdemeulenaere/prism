@@ -1,0 +1,7 @@
+package teams
+
+import /models/user
+
+public struct Team { val lead: User, val size: Int }
+
+public fun team(name: String): Team = Team(User(1, name), 3)

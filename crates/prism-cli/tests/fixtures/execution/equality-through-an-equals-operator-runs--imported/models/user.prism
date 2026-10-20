@@ -1,0 +1,5 @@
+package models
+
+public struct User { val id: Int, val name: String }
+
+public operator fun User.equals(other: &User): Bool = id == other.id

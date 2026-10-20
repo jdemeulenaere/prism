@@ -1996,16 +1996,23 @@ impl TypeChecker {
                 name,
                 marker,
                 marker_parameters,
+                equality,
                 ..
             }
             | ExportedSymbol::Enum {
                 name,
                 marker,
                 marker_parameters,
+                equality,
                 ..
             } = sym
             {
                 let id = NominalId::new(abi.module.clone(), name.clone());
+                // An exported type's `equals` operator is part of its definition, which every
+                // `==` of it calls (D6 of `operator-conventions`).
+                if *equality {
+                    self.types.insert_equality_operator(id.clone());
+                }
                 self.types
                     .insert_marker(id.clone(), *marker, marker_parameters.clone());
                 self.exported_nominals.insert(id);

@@ -1,0 +1,19 @@
+// expect: ok
+// run: 0
+// entry: app/main.prism
+package app
+
+import /models/user
+import /prism/collections
+import /prism/core
+import /teams/team
+
+// `User`'s `equals` comes with its definition, from another module: every `==` of it calls
+// that function, here directly, in list searches and inside a `Team` this file only receives.
+fun main() {
+    println(User(1, "a") == User(1, "b"))
+    println(User(1, "a") != User(2, "a"))
+    println(listOf(User(1, "a")).contains(User(1, "b")))
+    println(listOf(User(1, "a"), User(2, "b")).indexOf(User(2, "x")))
+    println(team("a") == team("b"))
+}
