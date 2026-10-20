@@ -140,7 +140,7 @@ A skippable composable MUST be a restart scope, except in a call that runs it in
 - **THEN** stdout is `screen`, `a`, `screen`, `a` and `true`
 
 ### Requirement: Callers Say What They Know of Each Argument
-A call of a composable MUST tell the callee, for each argument, that it is static (a constant, a value read from a top-level `val`, or a borrow of one or of a field of one, but not of an element chosen by an index), that it forwards a parameter of the caller with what the caller knows of it (static, the same or different, as the caller was told or found by comparing), a borrow of a borrowed parameter's whole referent included, or that it is uncertain. A callee MUST trust static and same arguments without comparing them.
+A call of a composable MUST tell the callee, for each argument, that it is static (a constant, a value read from a top-level `val`, or a borrow of one or of its fields), that it forwards a parameter of the caller with what the caller knows of it (static, the same or different, as the caller was told or found by comparing), a borrow of a borrowed parameter's whole referent included, or that it is uncertain. A callee MUST trust static and same arguments without comparing them.
 
 #### Scenario: A forwarded unchanged parameter is not compared again
 - **WHEN** `compose fun Inner(n: Int) { println("inner") }`, `compose fun Outer(n: Int, s: String) { Inner(n) }`, `fun screen(s: String): compose () -> Unit = { Outer(5, s.clone()) }` and `fun main() { val c = composition(screen("a")); c.setContent(screen("b")) }` run

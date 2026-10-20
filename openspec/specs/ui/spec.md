@@ -390,7 +390,7 @@ After layout, when anything drawn or laid out changed, the toolkit MUST build a 
 - **THEN** stdout is the lines `clear 400x300 #FFFFFFFF`, `border 0,0 16x20 width 1 #FF000000` and `text 0,0 size 16 #FF000000 "ab"`
 
 ### Requirement: Headless Runs Follow an Event Script
-A headless run MUST read its event script's commands in order and end the app after the last one: `click`, `press` and `release` at a text target, at a kind target ("Script Targets by Kind") or at `<x> <y>`, `type "<text>"`, `key backspace`, `key enter`, `resize <width> <height>`, `frame`, `dump`, `dump tree` and `dump draw`, and, under `--watch`, `edit <target> <replacement>` and `wait reload`. Blank lines and `#` comments MUST be ignored.
+A headless run MUST read its event script's commands in order and end the app after the last one: `click`, `press` and `release` at a text target, at a kind target ("Script Targets by Kind") or at `<x> <y>`, `type "<text>"`, `key backspace`, `key enter`, `resize <width> <height>`, `frame`, `pause <milliseconds>`, `dump`, `dump tree`, `dump draw` and `dump recompositions`, and, under `--watch`, `edit <target> <replacement>` and `wait reload`. Blank lines and `#` comments MUST be ignored.
 
 #### Scenario: Scripted counter session
 - **WHEN** the counter program runs headless with the script `# two clicks`, `click "+"`, `click "+"` and `dump`
@@ -617,6 +617,28 @@ When a pass removes the groups of an item whose handlers captured the item's sta
 - **WHEN** the app of "A row's checkbox writes its item's own state" also composes `Button(onClick = { items.value.removeAt(0) }) { Text("remove first") }` below its rows, runs under `--check-allocations`, and its script is `click checkbox 1`, `click "remove first"`, `click checkbox 1` and `dump`
 - **THEN** stderr is empty, the exit status is 0, and the dump shows one row, `b`, with its checkbox checked
 
+### Requirement: Dumping Recompositions
+An event script's `dump recompositions` MUST print `recompositions`, then one line per composable function of the program's own files, not of the bundled library, whose body ran or was skipped since the run started or the previous `dump recompositions`: two spaces, its declaration path as `prism dump-mir` names its body, ` ran <n> skipped <m>`, sorted by path. Composable lambdas MUST NOT be counted. Without this command in the script, nothing MUST be counted.
+
+#### Scenario: Counting a click's recompositions
+- **WHEN** a headless app composes `compose fun Badge(n: Int) { Text("$n") }` and `compose fun Screen() { val c = remember { mutableStateOf(0) }; Column { Text("${c.value}"); Badge(1); Button(onClick = { c.value += 1 }) { Text("+") } } }` through `runApp { Screen() }`, and its script is `dump recompositions`, `click "+"` and `dump recompositions`
+- **THEN** stdout is the lines `recompositions`, `  main::Badge ran 1 skipped 0`, `  main::Screen ran 1 skipped 0`, `recompositions`, `  main::Badge ran 0 skipped 1` and `  main::Screen ran 1 skipped 0`
+
+#### Scenario: A misspelled dump kind
+- **WHEN** `prism run --headless --events script main.prism` runs an app whose `script` holds `dump recomposition`
+- **THEN** stderr is `Error: script:1: expected 'tree', 'draw' or 'recompositions' after 'dump'`, the exit status is 1, and the program does not run
+
+### Requirement: Pausing an Event Script
+An event script's `pause <milliseconds>` MUST sleep the program thread for that many milliseconds before the next command. A pause MUST count as waiting: its time MUST be part of no frame.
+
+#### Scenario: Paced clicks
+- **WHEN** a test of `run_cli_tests.rs` runs the counter screen headless with `--frame-stats` and the script `click "+"`, `frame`, `pause 50`, `click "+"` and `frame`
+- **THEN** the run takes at least 50 ms longer than the same script without the pause, the report's first line starts with `frame stats: frames 2, events 4, passes 3, `, and its frame maximum is under 50 ms
+
+#### Scenario: A pause without a duration
+- **WHEN** `prism run --headless --events script main.prism` runs an app whose `script` holds `pause`
+- **THEN** stderr is `Error: script:1: expected a number of milliseconds after 'pause'`, the exit status is 1, and the program does not run
+
 ## Design Rationale
 
 Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by user direction to follow Jetpack Compose's APIs and modules, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
@@ -653,3 +675,8 @@ Decisions from `reactive-app-verification` (planned autonomously on 2026-10-18 a
 Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **The toolkit's handlers are `attached`** (D9). `onClick` of `Button` and `clickable`, `onCheckedChange`, `onValueChange` of `toggleable`, `TextField` and `BasicTextField`, `runApp`'s content and the registration externals; content lambdas stay unmarked (they borrow). With R1 and R2, a removed item's handlers are released before its states are freed, so UI code never reaches a stale state.
+
+Decisions from `strong-skipping` (review item A1 and option (b) of review finding F4, in `docs/milestone-2-review-notes.md`; the commands decided while proposing the change and logged in `docs/decisions-for-review.md`):
+
+- **`dump recompositions`** (D14). Proving that a toggle reruns one of 1,000 rows needs a count, not 1,000 lines of output: per composable function of the program's own files, how often its body ran and was skipped since the previous dump, as Compose's Layout Inspector counts them, sorted by declaration path. Counting is switched on only when the script holds the command, so other runs pay one predictable branch per body group; `FileSummary::composable_functions` names each body key, so hot reload's use of `composable_bodies` is unchanged. Library composables and lambdas are not counted, so snapshots stay stable while the toolkit is rewritten. Rejected: `println` in examples, counts in composition dumps, counts in `--frame-stats`.
+- **`pause <milliseconds>`** (D15). A person's inputs come about 100 ms apart, and a burst after an idle wait runs on a clocked-down, cache-cold core (F4); a pause sleeps the program thread outside every frame, so a paced script measures a frame as a person's input meets it. Rejected: sleeping in the benchmark harness (the app reads its whole script at start), a `--pace` option, keeping a core busy.

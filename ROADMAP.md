@@ -429,6 +429,15 @@ Follow-ups of `owned-state`:
 - [ ] A handler registered by `Modifier.clickable` or `toggleable` outside composition and kept in a stored `Modifier` can outlive the states it captured weakly; the generational check reports it (D24, the run-time safety net).
 - [ ] The borrow check of bodies keeping many heavy items live grows a little faster than linearly (x4.6 to x4.8 per x4 at 256 to 4,096 items for `guarded-state-accesses` and plain borrows of the same weight): memory effects of large bodies and per-statement allocations; cheaper types (interned `NominalId`s, so a `Type` clone allocates nothing) and fewer allocations per statement would help (found while speeding up guarded accesses at review).
 
+Follow-ups of `strong-skipping`:
+- [ ] Per-element versions of lists (a `mutableStateListOf`-like list stamping each element), so appending or removing an item reruns its row rather than every row once; a structural change of a list gives its whole state a new version today (D3, open for the user in review item A1; see `state-handles`' `mutableStateListOf` above).
+- [ ] The paced frame targets of the 1,000-item todo screen missed on the clocked-down core of review finding F4: a toggle's frame p99 6.0 ms (target 4 ms), typing's recomposition median 2.2 ms (target 2 ms, the screen's loop of 1,000 keyed calls that each skip) and its frame p99 5.9 ms (target 4 ms), while back to back the same frames take 0.17 and 0.24 ms (D16). Less work per input outside recomposition (the event dispatch, 1.6 ms paced against 0.06 ms back to back, and the display list), per-element versions letting typing skip the loop's bodies, or F4's option (c) for windows.
+- [ ] Identity through calls returning borrows (`fun first(s: &State<List<T>>): &T` keeping the argument's identity by elision rule 1), if real code needs it; a call's result has no identity today, so its callee always runs (D5, non-goal of the change).
+- [ ] Skipping composables with by-value non-`Copy` parameters or composable content lambdas, which a restart could pass again only by cloning; the idiom is to take `&T` (D1, non-goal of the change).
+- [ ] Memoizing composable lambdas, as Compose's strong skipping does with `remember`; Prism's content lambdas borrow their captures and are not values one can keep (non-goal of the change).
+- [ ] Fusing `state version` into `state read` when both are emitted (one runtime call instead of two), once `app_frame_timing` shows the second call matters (open question of the change).
+- [ ] A call site whose borrowed argument alternates between having an identity and none (`Show(if (c) &a.value else &local)`) switches between a restart and a replaceable group and recreates its group each time, as an alternating handler does (D8, risk of the change).
+
 Follow-ups of `ui-toolkit`:
 - [ ] A public `Layout` with measure policies in Prism and a `ModifierNodeElement`-style API for custom modifiers, which would make `NodeId` public (D3, D11, D25, non-goals of the change).
 - [ ] `LazyColumn`, scrolling, `Modifier.clip` and `BoxScope.matchParentSize` (non-goals of the change).

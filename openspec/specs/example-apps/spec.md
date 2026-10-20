@@ -120,7 +120,7 @@ A frame whose events invalidate no scope and change no node MUST allocate nothin
 - **THEN** stderr holds `frame stats: allocations per frame median 0` and `none in 10 of 11 frames`
 
 ### Requirement: The Apps Meet Their Frame Budgets
-On a release build, headless, a click of the counter and the frame that shows it SHOULD take under 1 ms in the median and under 2 ms at the 99th percentile. Toggling one item of `large.prism` SHOULD take under 4 ms of recomposition in the median and under 4 ms of frame time at the 99th percentile. An ignored benchmark MUST measure and report these numbers through `--frame-stats`.
+On a release build, headless, a click of the counter and the frame that shows it SHOULD take under 1 ms in the median and under 2 ms at the 99th percentile. With inputs 100 ms apart, as a person's, toggling one item of `large.prism` SHOULD take under 1 ms of recomposition in the median, and typing one character into its field under 2 ms; each SHOULD take under 4 ms of frame time at the 99th percentile. An ignored benchmark MUST measure and report these numbers through `--frame-stats`.
 
 #### Scenario: Timing the apps' frames
 - **WHEN** `crates/prism-cli/tests/app_frame_timing.rs` runs on a release build with `PRISM_ASSERT_TIMING=1`
@@ -132,6 +132,21 @@ The benchmark MUST report when the todo app's first frame is ready after `prism 
 #### Scenario: Timing the first frame
 - **WHEN** the same benchmark runs `prism run --frame-stats --headless examples/apps/todo/main.prism` twenty times without the cache and twenty times with it
 - **THEN** it reports the median `first frame ready ... after start` of each, and, with `PRISM_ASSERT_TIMING=1`, passes only if both are under their targets
+
+### Requirement: Rows Recompose Only When Their Item Changes
+Over the 1,000 items of `large.prism`, toggling an item MUST rerun only that item's row and the count of items left, typing into the text field MUST rerun the screen and skip every row, and adding an item MUST rerun every row once and then skip them again, as `dump recompositions` shows.
+
+#### Scenario: Toggling one of a thousand items recomposes its row
+- **WHEN** the session `toggling-one-of-a-thousand-items-recomposes-its-row` runs `large.prism` with `dump recompositions`, `click checkbox 2` and `dump recompositions`
+- **THEN** the second section lists `ran 1 skipped 0` for `TodoRow` and for `LeftCount`, and no other composable, and the session passes the allocation check
+
+#### Scenario: Typing into the field of a thousand items skips every row
+- **WHEN** the session `typing-into-the-field-of-a-thousand-items-skips-every-row` runs `large.prism` with `click textfield`, `dump recompositions`, `type "a"` and `dump recompositions`
+- **THEN** the second section lists `ran 1 skipped 0` for `TodoScreen` and `ran 0 skipped 1000` for `TodoRow`, and no other composable that ran
+
+#### Scenario: Adding an item to a thousand recomposes every row once
+- **WHEN** the session `adding-an-item-to-a-thousand-recomposes-every-row-once` runs `large.prism` with `click textfield`, `type "x"`, `dump recompositions`, `click "Add"`, `dump recompositions`, `click textfield`, `type "y"` and `dump recompositions`
+- **THEN** the second section lists `ran 1001 skipped 0` for `TodoRow`, and the third `ran 0 skipped 1001`
 
 ## Design Rationale
 
@@ -149,3 +164,8 @@ Decisions from `reactive-app-verification` (planned autonomously on 2026-10-18 a
 Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **The todo app keeps a state per item** (D20). `Todo` holds `done: MutableState<Bool>` in a plain `List<Todo>` kept in a remembered state; each row's `DoneBox(todo.done)` is a skippable restart scope that alone reads its item's state, so a toggle recomposes two scopes (the box and `LeftCount`), measured at 0.008 ms median on the 1,000-item screen against 1.909 ms before. A row takes `todos` rather than `onRemove`, since an attached handler cannot yet be forwarded from inside a nested content lambda (open, for the user). The counter's source is unchanged; `examples/run` uses an explicit weak reference for its returned click handler.
+
+Decisions from `strong-skipping` (review item A1 and option (b) of review finding F4, in `docs/milestone-2-review-notes.md`; the rest decided while proposing and implementing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Rows read their own state** (D17). With borrowed parameters kept by identity, `TodoRow(todo, todos)` is a restart scope, so `owned-state`'s `DoneBox` folds back into it and the row reads `todo.done.value` itself, as Compose code would: a toggle reruns that row and `LeftCount`, typing reruns `TodoScreen` and skips every row, and adding an item reruns every row once (the list's version changed). Three sessions on `large.prism` pin those counts with `dump recompositions`.
+- **Paced frame budgets** (D16). `app_frame_timing` paces the todo app's inputs 100 ms apart. Measured on a release build (M4 Pro), a toggle's recomposition takes 0.24 ms paced (target under 1 ms, met; 1.9 ms before the change back to back), but the paced toggle frame's p99 is 6.0 ms, typing's recomposition 2.2 ms and its frame p99 5.9 ms, above their targets of 4, 2 and 4 ms. Back to back the same frames take 0.17 and 0.24 ms: the misses are the clocked-down core of review finding F4 (the toggle's event dispatch alone grows from 0.06 to 1.6 ms), not recomposition work. The targets are kept as designed and reported, not loosened; less work per input outside recomposition, or per-element versions letting typing skip the loop's bodies, are follow-ups.

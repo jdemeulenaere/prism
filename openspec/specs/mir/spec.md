@@ -584,7 +584,7 @@ The lowered MIR of a composable function or closure MUST hold a group start mark
 - **THEN** `prism dump-mir` shows the loop's group start as `loop 0, continued`
 
 ### Requirement: Composed MIR
-After borrow checking, the MIR of every file MUST be composed. A composable body MUST take the composer and its change words as `Int` arguments after its declared ones, start its body group first and end it before every return, and every composable call MUST pass the caller's composer and change words for the callee. Composed MIR MUST hold no region marker and MUST be well formed.
+After borrow checking, the MIR of every file MUST be composed. A composable body MUST take the composer, its change words and its version arguments as `Int` arguments after its declared ones, start its body group first and end it before every return, and every composable call MUST pass the caller's composer, change words for the callee and the versions of its borrowed arguments. Composed MIR MUST hold no region marker and MUST be well formed.
 
 #### Scenario: Composer passed to composable calls
 - **WHEN** `compose fun Label(n: Int) {}` and `compose fun Screen() { Label(1) }` are compiled
@@ -595,11 +595,15 @@ After borrow checking, the MIR of every file MUST be composed. A composable body
 - **THEN** the body `main::Screen#closure0` takes a composer and a change word, and `Column`'s call of `content` passes them
 
 ### Requirement: Skippable Bodies Keep, Compare and Skip
-A skippable body MUST keep each argument in a slot of its restart group, comparing it there when its change bits are uncertain, test whether it may skip, and on skipping drop the arguments it owns and go to its group's end. It MUST end its restart group with the value of its restart closure, `<symbol>#restart`, which captures nothing, reads the kept arguments and calls the composable with the force bit.
+A skippable body MUST take its replaceable path when a version argument is `0`, keep each argument in a slot of its restart group (a borrow as its address and version, in a slot of its reference type), compare it when its bits are uncertain, test whether it may skip, and on skipping drop what it owns and go to its group's end. It MUST end its restart group with its restart closure, `<symbol>#restart`, which captures nothing, reads the kept arguments and calls the composable with the force bit.
 
 #### Scenario: A skippable body and its restart closure
 - **WHEN** `compose fun Badge(n: Int) { println(n) }` is composed
 - **THEN** `prism dump-mir --composed` shows `main::Badge` compare its argument with its kept slot of type `Int`, a skip path that ends its restart group, and the body `main::Badge#restart`, without captures, which reads kept slot 0 as an `Int` and calls `main::Badge` with it and the force bit
+
+#### Scenario: A skippable body keeping a borrow
+- **WHEN** `compose fun Show(s: &String) { println(s) }` is composed
+- **THEN** `prism dump-mir --composed` shows `main::Show` test `$version0` against `0` before its restart group, with a path that starts a replaceable group, keep `s` and `$version0` in a slot of type `&String`, and the body `main::Show#restart` read kept slot 0 as a `&String` and its version and call `main::Show` with both and the force bit
 
 ### Requirement: Root Content Adapters
 A body that calls `composition` or `setContent` MUST have one adapter closure, `<symbol>#root-content`, owning the content function value and calling it, when the runtime calls the adapter with a composer, with that composer and the force bit. Each such call MUST build its adapter from the content it is given.
@@ -623,7 +627,7 @@ A generic composable MUST be composed once, in its polymorphic MIR, and its reco
 - **THEN** it prints `main::Show<Bool>` and `main::Show<Int>`, each keeping its argument in a slot of its own type argument, each with its restart closure
 
 ### Requirement: State Operations Are Calls
-Every state operation MUST lower to `Call` terminators of state operations, each with the value type as its type argument and the state object passed by shared borrow: creating a state; reading it, which gives a shared reference to its value tied to that borrow; writing it; taking a shared or exclusive flag and ending it; moving its value out and putting one back; making a weak handle and resolving one. A state place MUST be the dereference of the reference a read gives.
+Every state operation MUST lower to `Call` terminators of state operations, each with the value type as its type argument and the state object passed by shared borrow: creating a state; reading it, which gives a shared reference to its value tied to that borrow; reading its version; writing it; taking a shared or exclusive flag and ending it; moving its value out and putting one back; making a weak handle and resolving one. A state place MUST be the dereference of the reference a read gives.
 
 #### Scenario: A compound assignment through a handle
 - **WHEN** `prism dump-mir` runs on `fun f(s: &MutableState<Int>) { s.value += 1 }`
@@ -678,6 +682,24 @@ A weak capture MUST be a capture local of the weak reference's type. The enclosi
 #### Scenario: A handler's weak capture in MIR
 - **WHEN** `prism dump-mir` runs on a file declaring `struct Todo { val id: Int, val done: MutableState<Bool> }`, `fun keep(f: attached (Bool) -> Unit) {}` and `fun row(todo: &Todo) { keep({ todo.done.value = it }) }`
 - **THEN** `row` builds the closure value from `weak (*_1).done`, a weak capture of the place `(*todo).done`, and the closure's body calls `state write<Bool>` on a borrow of a view of its capture local `todo.done`
+
+### Requirement: Composable Calls Pass the Versions of Their Borrowed Arguments
+A composable body MUST take, after its change words, one `Int` version argument per parameter that is a borrow, shared or mutable, or a nullable of one, whatever its referent, in parameter order, and every composable call MUST pass one per such parameter: `0` for none, `1` for a permanent source, a version argument or capture for a borrow derived from one, or the result of a `state version` call on the state object whose read the borrow derives from.
+
+#### Scenario: Versions passed to a row
+- **WHEN** `prism dump-mir --composed` runs on a file declaring `compose fun Show(s: &String) {}` and `compose fun Screen(items: &State<List<String>>) { for (s in items.value) { Show(s) } }`
+- **THEN** `main::Show` takes `$version0` after its change word, and `main::Screen` calls `state version<List<String>>` with the state object it calls `state read<List<String>>` with, and passes a copy of that version in each call of `main::Show`
+
+#### Scenario: Versions of locals, top-level values and parameters
+- **WHEN** `prism dump-mir --composed` runs on a file declaring `val Title: String = "t"`, `compose fun Show(s: &String) {}` and `compose fun Screen(s: &String) { val local = "a" + "b"; Show(local); Show(Title); Show(s) }`
+- **THEN** the three calls of `main::Show` in `main::Screen` pass `const 0`, `const 1` and a copy of `main::Screen`'s `$version0` as their version arguments
+
+### Requirement: Composable Closures Capture the Versions of Their Borrowed References
+A composable closure that captures a dereference of a reference MUST also capture that reference's version, after its other captures: by a shared borrow of the local holding it when the closure borrows its captures, by a copy when it owns them. Its body MUST use that capture as the version of borrows derived from the captured reference.
+
+#### Scenario: A key lambda captures a version
+- **WHEN** `prism dump-mir --composed` runs on a file declaring `compose fun Show(s: &String) {}` and `compose fun Screen(items: &State<List<String>>) { for (s in items.value) { key(s.length) { Show(s) } } }`
+- **THEN** `main::Screen` builds the closure value of the `key` lambda from a borrow of `s` and then a borrow of the local holding the version it passes for `s`, and the lambda's body passes a copy of its last capture local as the version argument of its call of `main::Show`
 
 ## Design Rationale
 Decisions from `mir-lowering` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with `prism dump-mir` for snapshot tests; the rest decided while proposing, implementing and reviewing the change and logged in `docs/decisions-for-review.md`). The consumers are the borrow checker (`borrowck-moves`, `borrowck-exclusivity`, `borrowck-elision`), drop elaboration, closure conversion, the Cranelift backend, `hot-reload` and `compose-transform`.
@@ -805,3 +827,11 @@ Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by 
 Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Guards and weak captures in MIR** (D3, D10). A guarded state access lowers to `state begin shared|exclusive` with the state object's borrow, lowered straight into the guard's local, and a borrow of that local of origin `state guard`, whose loan every reference the call gives keeps; the guard's scope ends it with `state end` on every path. A weak capture is a capture local of type `WeakReference<S>` built from `Capture::Weak(place)`, and uses of the path read the `View` projection of that local, never moved or dropped.
+
+Decisions from `strong-skipping` (review item A1, agreed with the user on 2026-10-19 and 2026-10-20 in `docs/milestone-2-review-notes.md`; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Version words after the change words** (D4, D21). The address of a borrowed argument is the argument itself, so only its version is added: one `Int` per parameter that is a borrow, shared or mutable, or a nullable of one, in parameter order, for composable functions and lambdas alike, so a lambda forwards its parameter's identity. Whether a parameter takes one depends on its type's shape alone, never on its referent or mutability, so no in-place conversion of a function value changes a calling convention: a generic body composed once with `&T` and a lambda written for `T = MutableState<Int>` take the same words, and so do a lambda taking `&T` and the `&mut T` function type it is given for (found at review: both mismatches let a callee read a version that belonged to another argument, and a restart read a dead frame). Only a shared borrow of a type other than a state object uses its word as its identity; callers pass `0` for a mutable borrow, and restart functions pass `0` for a borrowed state. The ABI hash is unchanged, since it covers the parameter types. Rejected: a side table keyed by address, fat references, one version per call, versions for functions only.
+- **The classification is syntactic and linear** (D5). In a composable body, one scan indexes the assignments of reference locals; a backward worklist from the borrowed arguments of composable calls and the references hidden captures describe visits each local once. A local whose every assignment gives one constant or one given version uses it directly (`const 0`, `const 1`, `copy $version0`); a local derived from a `state read`, or assigned different versions, gets a version local, assigned beside each of its assignments and `0` in the prologue, so the two agree on every path, loops and branches included; a `state version` call on the same state object follows each classified read. Results of calls and destructurings have no identity, a `remember` result is permanent, and a reference borrowed or captured mutably as a whole, or an argument or capture assigned, has none. Rejected: a data-flow analysis (the same answer at a higher cost), reading the version at the call, a version local per reference, identity through calls returning borrows (a follow-up).
+- **Hidden version captures** (D6). A composable closure built in a composable body gets one hidden `Int` capture, `$version(<path>)`, per capture holding a reference and per borrowed capture of a place reached through one (or through such a capture of its author), so `key(todo.id) { TodoRow(todo) }` and `Column { ... }` keep identities. A borrowing closure borrows the local holding the version (its author's version local, `$version` argument or hidden capture, or a temporary for a constant), so its environment stays in the creating frame and a value built in an earlier iteration reads a reference and its version as they are now; an owning closure copies it. Closures built outside composable bodies get none. Rejected: owned copies always (one environment allocation per row per pass, found by the benchmark), losing identities inside lambdas, inlining `key`'s content.
+- **A kept identity** (D7). `Keep(&T)` of an identity takes the reference, its version and the passed bits, and keeps them in one 16-byte slot of type `&T`; the restart function reads the reference with `KeptParameter` and the version with `KeptVersion`. Rejected: a two-word MIR value (MIR has no pair type), two slots per parameter.
+- **Instance requests recorded per body** (found at review while timing `inst`). `Body::requests_instances` records whether a call of the body names a generic with type arguments; the builder, the restart and root-content constructors and the codec's decoder compute it from the body's blocks while they are at hand, every other pass keeps it, and the validator checks it. A file's summary then reads only the bodies that request instances: scanning every 360-byte block of a large composed file outgrew the caches (the `inst` stage of `borrowed-arguments` grew x5.4 and x6.3 per x4).
