@@ -1979,6 +1979,11 @@ impl TypeChecker {
         // and using a member still needs its module imported (`E4014`).
         for definition in &abi.type_definitions {
             let (id, type_definition, marker) = crate::types::type_definition_from_abi(definition);
+            // A type's `equals` operator is part of its definition (D6 of
+            // `operator-conventions`).
+            if definition.equality {
+                self.types.insert_equality_operator(id.clone());
+            }
             self.types
                 .insert_marker(id.clone(), marker.marker, marker.parameters);
             self.types.insert_definition(id, type_definition);
@@ -3030,6 +3035,13 @@ impl TypeChecker {
         // An operator declaration of the wrong shape is reported once, and not registered.
         if f.is_operator && !self.check_operator_declaration(f, Some(&receiver_ty)) {
             return;
+        }
+        // The file's own type's `equals` operator is part of its definition (D6 of
+        // `operator-conventions`).
+        if f.is_operator && f.name == "equals" {
+            if let Some(id) = receiver_ty.nominal_id() {
+                self.types.insert_equality_operator(id.clone());
+            }
         }
         let key = (
             ReceiverKey::of(&receiver_ty),

@@ -651,6 +651,11 @@ impl Codec for TypeTable {
         for id in captured {
             id.encode(encoder);
         }
+        let equality: Vec<&NominalId> = self.equality_operator_types().collect();
+        encoder.length(equality.len());
+        for id in equality {
+            id.encode(encoder);
+        }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
         let length = decoder.sequence_length()?;
@@ -682,6 +687,10 @@ impl Codec for TypeTable {
         let captured = decoder.sequence_length()?;
         for _ in 0..captured {
             table.insert_capture_function(decoder.decode()?);
+        }
+        let equality = decoder.sequence_length()?;
+        for _ in 0..equality {
+            table.insert_equality_operator(decoder.decode()?);
         }
         Some(table)
     }

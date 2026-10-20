@@ -1,0 +1,31 @@
+// expect: ok
+// run: 0
+import /prism/collections
+import /prism/core
+
+struct Item { var name: String }
+struct Bag { var items: List<Item> }
+
+operator fun Bag.iterator(): Int = 0
+operator fun Bag.hasNext(cursor: &Int): Bool = cursor < items.size
+operator fun Bag.next(cursor: &mut Int): &Item {
+    val i: Int = cursor
+    *cursor = i + 1
+    return &items[i]
+}
+operator mut fun Bag.next(cursor: &mut Int): &mut Item {
+    val i: Int = cursor
+    *cursor = i + 1
+    return &mut items[i]
+}
+
+fun main() {
+    var b = Bag(listOf(Item("a"), Item("b"), Item("c")))
+    for (item in &mut b) {
+        item.name += "!"
+    }
+    for (item in b) {
+        if (item.name == "b!") continue
+        println(item.name)
+    }
+}

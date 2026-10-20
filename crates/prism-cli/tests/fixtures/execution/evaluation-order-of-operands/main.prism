@@ -1,0 +1,28 @@
+// expect: ok
+// run: 0
+import /prism/collections
+import /prism/core
+
+struct Tags { val names: List<Int> }
+struct Matrix { val columns: Int, var cells: List<Double> }
+
+operator fun Tags.contains(n: Int): Bool = names.contains(n)
+operator fun Matrix.get(row: Int, column: Int): Double = cells[row * columns + column]
+operator mut fun Matrix.set(row: Int, column: Int, value: Double) {
+    cells[row * columns + column] = value
+}
+fun noisy(label: String, n: Int): Int {
+    println(label)
+    return n
+}
+fun tags(): Tags {
+    println("tags")
+    return Tags(listOf(1))
+}
+
+fun main() {
+    println(noisy("left", 1) in tags())
+    var m = Matrix(2, listOf(1.0, 2.0))
+    m[noisy("row", 0), noisy("column", 1)] += 2.0
+    println(m[0, 1])
+}

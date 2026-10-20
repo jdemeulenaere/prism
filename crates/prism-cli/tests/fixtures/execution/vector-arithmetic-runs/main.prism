@@ -1,0 +1,17 @@
+// expect: ok
+// run: 0
+import /prism/core
+
+struct Vector2 : Copy { val x: Int, val y: Int }
+
+operator fun Vector2.plus(other: Vector2): Vector2 = Vector2(x + other.x, y + other.y)
+operator fun Vector2.minus(other: Vector2): Vector2 = Vector2(x - other.x, y - other.y)
+operator fun Vector2.times(k: Int): Vector2 = Vector2(x * k, y * k)
+operator fun Vector2.unaryMinus(): Vector2 = Vector2(-x, -y)
+fun Vector2.toString(): String = "($x, $y)"
+
+fun main() {
+    println(Vector2(1, 2) + Vector2(3, 4))
+    println(-Vector2(1, 2) * 3)
+    println(Vector2(5, 5) - Vector2(1, 2))
+}

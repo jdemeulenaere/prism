@@ -1,0 +1,21 @@
+// expect: ok
+// run: 0
+import /prism/collections
+import /prism/core
+
+struct Matrix { val columns: Int, var cells: List<Double> }
+
+operator fun Matrix.get(row: Int, column: Int): Double = cells[row * columns + column]
+operator mut fun Matrix.set(row: Int, column: Int, value: Double) {
+    cells[row * columns + column] = value
+}
+
+fun main() {
+    var m = Matrix(2, listOf(0.0, 0.0, 0.0, 0.0))
+    m[1, 0] = 2.5
+    m[1, 0] += 1.0
+    m[0, 1] = m[1, 0] * 2.0
+    println(m[1, 0])
+    println(m[0, 1])
+    println(m[0, 0])
+}

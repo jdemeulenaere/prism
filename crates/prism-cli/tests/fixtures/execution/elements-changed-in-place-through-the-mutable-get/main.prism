@@ -1,0 +1,21 @@
+// expect: ok
+// run: 0
+import /prism/collections
+import /prism/core
+
+struct Item { var name: String, var count: Int }
+struct Bag { var items: List<Item> }
+
+operator fun Bag.get(index: Int): &Item = &items[index]
+operator mut fun Bag.get(index: Int): &mut Item = &mut items[index]
+
+fun main() {
+    var b = Bag(listOf(Item("a", 0), Item("b", 0)))
+    b[0].count += 2
+    b[1].name = "c"
+    b[0] = Item("d", 5)
+    val first: &Item = &b[0]
+    println(first.name)
+    println(b[0].count)
+    println(b[1].name)
+}

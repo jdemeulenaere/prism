@@ -202,7 +202,14 @@ impl Builder<'_> {
         let mut receiver_borrowed = false;
         // The receiver follows the context argument, if any (D9 of `receiver-lambdas`).
         let receiver_index = usize::from(call.has_context);
-        if call.has_receiver {
+        // A receiver written after an argument (`a in b` is `b.contains(a)`, D4 of
+        // `operator-conventions`) is evaluated and borrowed in its turn.
+        let receiver_first = call
+            .evaluation_order
+            .iter()
+            .find(|&&index| !(call.has_context && index == 0))
+            == Some(&receiver_index);
+        if call.has_receiver && receiver_first {
             if let Some(Argument::Written(receiver)) = call.arguments.get(receiver_index) {
                 pending = self.receiver_place(*receiver);
                 // A receiver reached through a `?.` test is borrowed right after its test, so
@@ -223,6 +230,12 @@ impl Builder<'_> {
             let Argument::Written(value) = call.arguments[index] else {
                 panic!("internal error: call evaluates an omitted argument");
             };
+            if call.has_receiver && !receiver_first && index == receiver_index {
+                if let Some(receiver) = self.receiver_place(value) {
+                    operands[index] = Some(self.borrow_receiver(call, index, receiver));
+                    continue;
+                }
+            }
             let borrowed_by_default = generator_reads
                 .iter()
                 .any(|&(default, inputs)| default > index && inputs.reads(index));

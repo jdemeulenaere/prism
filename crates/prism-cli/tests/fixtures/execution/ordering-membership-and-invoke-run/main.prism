@@ -1,0 +1,27 @@
+// expect: ok
+// run: 0
+import /prism/collections
+import /prism/core
+
+struct Version : Copy { val major: Int, val minor: Int }
+struct Tags { val names: List<String> }
+struct Counter { var count: Int }
+
+operator fun Version.compareTo(other: &Version): Int =
+    if (major != other.major) major - other.major else minor - other.minor
+operator fun Tags.contains(name: &String): Bool = names.contains(name)
+operator mut fun Counter.invoke(step: Int = 1): Int {
+    count += step
+    return count
+}
+
+fun main() {
+    println(Version(1, 2) < Version(1, 10))
+    println(Version(2, 0) <= Version(1, 9))
+    println("b" in Tags(listOf("a", "b")))
+    println("c" !in Tags(listOf("a")))
+    println(3 in 0..<3)
+    var c = Counter(0)
+    println(c())
+    println(c(step = 5))
+}

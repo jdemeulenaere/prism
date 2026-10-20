@@ -1,0 +1,16 @@
+// expect: ok
+// run: 0
+import /prism/collections
+import /prism/core
+
+struct Text { val s: String }
+
+operator consuming fun Text.plus(other: &Text): Text = Text(s + other.s)
+
+fun main() {
+    var t = Text("a")
+    for (part in listOf("b", "c")) {
+        t += Text(part.clone())
+    }
+    println(t.s)
+}

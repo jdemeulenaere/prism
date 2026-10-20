@@ -293,6 +293,9 @@ pub struct TypeTable {
     /// from declarations, never from names: closures given to `attached` parameters capture
     /// their values weakly, and composables compare borrowed ones by identity.
     captured_weakly: std::collections::BTreeSet<NominalId>,
+    /// The structs and enums with an `equals` operator, which `==` calls wherever their values
+    /// are compared (D6 of `operator-conventions`), from their declarations and ABI records.
+    equality_operators: std::collections::BTreeSet<NominalId>,
 }
 
 /// The position of each member of `definition` by name, the first of a repeated name.
@@ -545,6 +548,9 @@ impl TypeTable {
             if self.captured_weakly.contains(&id) {
                 restricted.captured_weakly.insert(id.clone());
             }
+            if self.equality_operators.contains(&id) {
+                restricted.equality_operators.insert(id.clone());
+            }
             if let Some(marker) = self.markers.get(&id) {
                 restricted.markers.insert(id, marker.clone());
             }
@@ -571,12 +577,34 @@ impl TypeTable {
         self.captured_weakly.iter()
     }
 
+    /// Records that the struct or enum `id` has an `equals` operator (D6 of
+    /// `operator-conventions`).
+    pub fn insert_equality_operator(&mut self, id: NominalId) {
+        self.equality_operators.insert(id);
+    }
+
+    /// Whether `==` on values of `ty` calls an `equals` operator: a struct or enum declared
+    /// with one. A set lookup.
+    pub fn has_equality_operator(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Struct { id, .. } | Type::Enum { id, .. } => self.equality_operators.contains(id),
+            _ => false,
+        }
+    }
+
+    /// The types with an `equals` operator, in order.
+    pub fn equality_operator_types(&self) -> impl Iterator<Item = &NominalId> {
+        self.equality_operators.iter()
+    }
+
     /// Adds the definitions and markers of `other` that this table does not record. Two tables
     /// of one program never disagree about a type, since a [`NominalId`] is unique in a program
     /// and every definition comes from the same declarations (D5 of `monomorphization`).
     pub fn extend_from(&mut self, other: &TypeTable) {
         self.captured_weakly
             .extend(other.captured_weakly.iter().cloned());
+        self.equality_operators
+            .extend(other.equality_operators.iter().cloned());
         for (id, definition) in &other.definitions {
             debug_assert!(
                 self.definitions

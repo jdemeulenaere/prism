@@ -2649,3 +2649,57 @@ fn typing_into_the_field_of_a_thousand_items_skips_every_row_without_allocating(
         .unwrap_or_else(|| panic!("no allocations line in {}", stderr));
     assert!(median < 100, "{}", stderr);
 }
+
+/// The declarations of the code-generation scenarios of `operator-conventions`: a `User` whose
+/// `equals` compares ids, inside a `Team`.
+const USER_WITH_EQUALS: &str = "struct User { val id: Int, val name: String }\n\
+     operator fun User.equals(other: &User): Bool = id == other.id\n\
+     struct Team { val lead: User, val size: Int }\n";
+
+/// code-generation: "Equality expansion calling equals" (`operator-conventions`): `same`
+/// compares `size` inline and calls `User.equals` through its slot for `lead`, and compares no
+/// string.
+#[test]
+fn equality_expansion_calling_equals() {
+    let directory = single_file(
+        "equality_calling_equals",
+        &format!(
+            "{}fun same(a: &Team, b: &Team): Bool = a == b\nfun main() {{}}\n",
+            USER_WITH_EQUALS
+        ),
+    );
+    let output = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let dump = stdout(&output);
+    let same = function_ir(&dump, "main::same");
+    assert!(
+        same.contains("symbol %\"main::main.User.equals#slot\"") && same.contains("call_indirect"),
+        "{}",
+        same
+    );
+    assert!(!same.contains("prism_rt_string_equals"), "{}", same);
+    assert!(same.contains("icmp eq"), "{}", same);
+}
+
+/// code-generation: "List search calling equals" (`operator-conventions`): the index-of glue of
+/// `List<User>` calls `User.equals` for each element.
+#[test]
+fn list_search_calling_equals() {
+    let directory = single_file(
+        "list_search_calling_equals",
+        &format!(
+            "{}fun has(xs: &List<User>, u: &User): Bool = xs.contains(u)\nfun main() {{}}\n",
+            USER_WITH_EQUALS
+        ),
+    );
+    let output = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let dump = stdout(&output);
+    let glue = function_ir(&dump, "main#indexOf(List<main::User>)");
+    assert!(
+        glue.contains("symbol %\"main::main.User.equals#slot\"") && glue.contains("call_indirect"),
+        "{}",
+        glue
+    );
+    assert!(!glue.contains("prism_rt_string_equals"), "{}", glue);
+}

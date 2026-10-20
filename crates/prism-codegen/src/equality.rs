@@ -33,7 +33,7 @@ use cranelift_codegen::ir::{self, condcodes::FloatCC, condcodes::IntCC, types, I
 use cranelift_codegen::ir::{Block, MemFlagsData, Value};
 use cranelift_frontend::{FunctionBuilder, Switch};
 use cranelift_module::{FuncId, Module};
-use prism_typed_tree::Type;
+use prism_typed_tree::{DeclarationPath, Type};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -229,6 +229,7 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
             Type::Struct { id, .. } if id.intrinsic().is_some() => Ok(id
                 .intrinsic()
                 .is_some_and(|intrinsic| intrinsic.equality_entry().is_some())),
+            _ if self.has_equality_operator(ty) => Ok(true),
             Type::Struct { .. } | Type::Enum { .. } => {
                 let layout = self.layout(ty)?;
                 let parts: Vec<&Member> = match &layout.shape {
@@ -417,6 +418,8 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
             }
             Type::Nullable(inner) => Ok(count(weight, 1) && self.add_weight(inner, limit, weight)?),
             Type::Struct { id, .. } if id.intrinsic().is_some() => Ok(count(weight, 1)),
+            // A type's `equals` operator is one call (D16 of `operator-conventions`).
+            _ if self.has_equality_operator(ty) => Ok(count(weight, 1)),
             Type::Struct { .. } | Type::Enum { .. } => {
                 let layout = self.layout(ty)?;
                 let parts: Box<dyn Iterator<Item = &Member>> = match &layout.shape {
@@ -443,6 +446,14 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
     /// Joins the comparison of a part of type `ty`: an aggregate is expanded inline when it
     /// fits in the budget, which it then uses up, and compared by its equality glue otherwise.
     fn part(&mut self, ty: &Type, left: Operand, right: Operand) -> Result<(), BackendError> {
+        // A type's `equals` operator replaces its structural comparison (D16 of
+        // `operator-conventions`).
+        if self.has_equality_operator(ty) {
+            if !self.charged {
+                self.budget = self.budget.saturating_sub(1);
+            }
+            return self.call_equals(ty, left, right);
+        }
         if self.charged || !is_aggregate(ty) {
             return self.expand(ty, left, right);
         }
@@ -460,6 +471,57 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
                 self.call(id, &[left, right])
             }
         }
+    }
+
+    /// Whether `ty` is a struct or enum with an `equals` operator.
+    fn has_equality_operator(&self, ty: &Type) -> bool {
+        self.context.file.types.has_equality_operator(ty)
+    }
+
+    /// Joins the result of `ty`'s `equals` operator called with the addresses of the two
+    /// values, through the function table like any call of it (D16 of
+    /// `operator-conventions`).
+    fn call_equals(
+        &mut self,
+        ty: &Type,
+        left: Operand,
+        right: Operand,
+    ) -> Result<(), BackendError> {
+        let path = DeclarationPath::extension(
+            ty.nominal_id()
+                .map_or_else(String::new, |id| id.module.clone()),
+            ty.clone(),
+            "equals",
+        );
+        let symbol = crate::symbols::function_symbol(&path);
+        let slot = self.context.slot(&symbol)?;
+        let (left, right) = (self.address(left)?, self.address(right)?);
+        self.flush();
+        let pointer = self.context.pointer;
+        let global = crate::unit::data_global(self.builder.func, slot);
+        let address = self.builder.ins().symbol_value(pointer, global);
+        let target = self
+            .builder
+            .ins()
+            .load(pointer, MemFlagsData::trusted(), address, 0);
+        let borrowed = Type::Reference {
+            mutable: false,
+            inner: Box::new(ty.clone()),
+        };
+        let signature = crate::representation::signature(
+            &[borrowed.clone(), borrowed],
+            &Type::Bool,
+            self.context.call_conv,
+            pointer,
+        );
+        let signature = self.builder.import_signature(signature);
+        let call = self
+            .builder
+            .ins()
+            .call_indirect(signature, target, &[left, right]);
+        let equal = self.builder.inst_results(call)[0];
+        self.join(equal);
+        Ok(())
     }
 
     /// The address of a value in memory.
@@ -620,6 +682,7 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
                     }
                 }
             }
+            _ if self.has_equality_operator(ty) => self.call_equals(ty, left, right)?,
             Type::Struct { .. } => {
                 let layout = self.layout(ty)?;
                 let Shape::Struct { fields } = &layout.shape else {
