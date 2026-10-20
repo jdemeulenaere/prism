@@ -123,6 +123,9 @@ pub enum GlueKind {
     Equals,
     /// The search of a list for an element (D15 of `collections`).
     IndexOf,
+    /// The comparison of two kept identities of a borrowed argument, its address and version,
+    /// word by word (D7 of `strong-skipping`): never the referents.
+    Identity,
 }
 
 impl GlueKind {
@@ -132,6 +135,7 @@ impl GlueKind {
             GlueKind::Clone => "clone",
             GlueKind::Equals => "equals",
             GlueKind::IndexOf => "indexOf",
+            GlueKind::Identity => "identity",
         }
     }
 
@@ -141,7 +145,7 @@ impl GlueKind {
             GlueKind::Drop => Some("prism_rt_string_drop"),
             GlueKind::Clone => Some("prism_rt_string_clone"),
             GlueKind::Equals => Some("prism_rt_string_equals"),
-            GlueKind::IndexOf => None,
+            GlueKind::IndexOf | GlueKind::Identity => None,
         }
     }
 }
@@ -272,6 +276,13 @@ impl<M: Module> UnitContext<'_, M> {
         self.generated_glue(GlueKind::Equals, ty)
     }
 
+    /// The glue comparing two kept identities of reference type `ty`,
+    /// `<unit module>#identity(<type>)`: equal when both their addresses and their versions are
+    /// (D7 of `strong-skipping`).
+    pub fn identity_glue(&mut self, ty: &Type) -> Result<FuncId, BackendError> {
+        self.generated_glue(GlueKind::Identity, ty)
+    }
+
     /// The generated glue function of `kind` for `ty`, declared and queued once.
     fn generated_glue(&mut self, kind: GlueKind, ty: &Type) -> Result<FuncId, BackendError> {
         let key = (kind, ty.clone());
@@ -366,13 +377,15 @@ impl<M: Module> UnitContext<'_, M> {
         let mut signature = ir::Signature::new(self.call_conv);
         let parameters = match kind {
             GlueKind::Drop => 1,
-            GlueKind::Clone | GlueKind::Equals | GlueKind::IndexOf => 2,
+            GlueKind::Clone | GlueKind::Equals | GlueKind::IndexOf | GlueKind::Identity => 2,
         };
         for _ in 0..parameters {
             signature.params.push(AbiParam::new(self.pointer));
         }
         match kind {
-            GlueKind::Equals => signature.returns.push(AbiParam::new(types::I8)),
+            GlueKind::Equals | GlueKind::Identity => {
+                signature.returns.push(AbiParam::new(types::I8))
+            }
             GlueKind::IndexOf => signature.returns.push(AbiParam::new(types::I64)),
             GlueKind::Drop | GlueKind::Clone => {}
         }
@@ -479,6 +492,29 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
         lowering.check_stack()?;
         let layout = lowering.layout(ty)?;
         match (kind, ty) {
+            (GlueKind::Identity, _) => {
+                let flags = MemFlagsData::trusted();
+                let mut equal = None;
+                for offset in [0, 8] {
+                    let left =
+                        lowering
+                            .builder
+                            .ins()
+                            .load(types::I64, flags, parameters[0], offset);
+                    let right =
+                        lowering
+                            .builder
+                            .ins()
+                            .load(types::I64, flags, parameters[1], offset);
+                    let same = lowering.builder.ins().icmp(IntCC::Equal, left, right);
+                    equal = Some(match equal {
+                        Some(previous) => lowering.builder.ins().band(previous, same),
+                        None => same,
+                    });
+                }
+                let equal = equal.expect("two words");
+                lowering.builder.ins().return_(&[equal]);
+            }
             (GlueKind::Drop, Type::List(element)) => lowering.drop_list(element, parameters[0])?,
             (GlueKind::Clone, Type::List(element)) => {
                 lowering.clone_list(element, parameters[0], parameters[1])?

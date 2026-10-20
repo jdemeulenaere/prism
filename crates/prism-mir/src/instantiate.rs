@@ -232,6 +232,10 @@ impl Instance<'_> {
                 index: *index,
                 ty: self.substitute(ty),
             },
+            Operation::KeptVersion { index, ty } => Operation::KeptVersion {
+                index: *index,
+                ty: self.substitute(ty),
+            },
             other => other.clone(),
         }
     }

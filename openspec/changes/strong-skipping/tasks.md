@@ -12,7 +12,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 3. MIR (D3, D7)
 
-- [ ] 3.1 In `crates/prism-mir/src/mir.rs`, add `StateOperation::Version` (`(state object borrow) -> Int`, appended to `ALL`), and let `ComposerOperation::Keep` and `KeptParameter` take a shared reference type as a kept borrow's identity; update the codec (`codec.rs`, with a round-trip in `tests/codec_tests.rs`), the validator and the dump (`state version<T>`, `slot &T`). Verify with `cargo test -p prism-mir`.
+- [x] 3.1 In `crates/prism-mir/src/mir.rs`, add `StateOperation::Version` (`(state object borrow) -> Int`, appended to `ALL`), and let `ComposerOperation::Keep` and `KeptParameter` take a shared reference type as a kept borrow's identity; update the codec (`codec.rs`, with a round-trip in `tests/codec_tests.rs`), the validator and the dump (`state version<T>`, `slot &T`). Verify with `cargo test -p prism-mir`.
 
 ## 4. The compose transform (D1, D2, D4 to D8, D10)
 

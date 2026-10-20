@@ -835,11 +835,14 @@ pub enum StateOperation {
     /// `(&WeakReference<T>) -> (&T)?`, with the state object type as its type argument: `null`
     /// once the state is retired, else the reference's own word viewed as the state object.
     Get,
+    /// `(&S) -> Int`: the state's version, which every change of its value renews; it
+    /// registers no reader (D3 of `strong-skipping`).
+    Version,
 }
 
 impl StateOperation {
     /// Every operation, in code order.
-    pub const ALL: [StateOperation; 11] = [
+    pub const ALL: [StateOperation; 12] = [
         StateOperation::Create,
         StateOperation::Read,
         StateOperation::Write,
@@ -851,6 +854,7 @@ impl StateOperation {
         StateOperation::Put,
         StateOperation::Weak,
         StateOperation::Get,
+        StateOperation::Version,
     ];
 
     /// The operation's name in dumps: `state read<Int>`.
@@ -867,6 +871,7 @@ impl StateOperation {
             StateOperation::Put => "put",
             StateOperation::Weak => "weak",
             StateOperation::Get => "get",
+            StateOperation::Version => "version",
         }
     }
 
@@ -970,6 +975,7 @@ impl StateOperation {
                 inner: Box::new(value),
             }
             .nullable(),
+            StateOperation::Version => Type::Int,
             StateOperation::Write
             | StateOperation::EndShared
             | StateOperation::Put
@@ -1017,11 +1023,16 @@ pub enum ComposerOperation {
     /// `(composer, value moved, passed bits) -> Int`: keeps an argument of a skippable body in
     /// the slot at the cursor by the change bits its caller passed: compared when uncertain,
     /// stored when different, read past when same or static (stored when missing). Gives the
-    /// bits the body now knows, plus 4 when the value changed (D8 of `compose-transform`).
+    /// bits the body now knows, plus 4 when the value changed (D8 of `compose-transform`). A
+    /// borrowed argument's identity, of a reference type `&T` or `(&T)?`, is kept as its two
+    /// words: `(composer, reference, version, passed bits) -> Int` (D7 of `strong-skipping`).
     Keep(Type),
     /// `(composer) -> T`: during a restart, the value kept in slot `index` of the scope's
-    /// group, copied out or duplicated.
+    /// group, copied out or duplicated; for a kept identity, its reference.
     KeptParameter { index: u32, ty: Type },
+    /// `(composer) -> Int`: during a restart, the version of the identity of reference type
+    /// `ty` kept in slot `index` of the scope's group (D7 of `strong-skipping`).
+    KeptVersion { index: u32, ty: Type },
     /// `(&function value) -> Bool`: whether the function value can be kept and compared.
     Keepable,
     /// `(&function value) -> function value`: a duplicate of a keepable function value.
@@ -1065,6 +1076,7 @@ impl ComposerOperation {
             ComposerOperation::SetSlot(_) => "set_slot",
             ComposerOperation::Keep(_) => "keep",
             ComposerOperation::KeptParameter { .. } => "kept_parameter",
+            ComposerOperation::KeptVersion { .. } => "kept_version",
             ComposerOperation::Keepable => "keepable",
             ComposerOperation::Duplicate => "duplicate",
             ComposerOperation::CurrentScope => "current_scope",
@@ -1100,7 +1112,8 @@ impl ComposerOperation {
             ComposerOperation::Changed(ty)
             | ComposerOperation::SetSlot(ty)
             | ComposerOperation::Keep(ty)
-            | ComposerOperation::KeptParameter { ty, .. } => Some(ty),
+            | ComposerOperation::KeptParameter { ty, .. }
+            | ComposerOperation::KeptVersion { ty, .. } => Some(ty),
             _ => None,
         }
     }

@@ -507,7 +507,9 @@ fn composer_operation(operation: &crate::mir::ComposerOperation) -> String {
         Operation::Changed(ty) | Operation::SetSlot(ty) | Operation::Keep(ty) => {
             format!("<{}>", ty.qualified())
         }
-        Operation::KeptParameter { index, ty } => format!(" {}<{}>", index, ty.qualified()),
+        Operation::KeptParameter { index, ty } | Operation::KeptVersion { index, ty } => {
+            format!(" {}<{}>", index, ty.qualified())
+        }
         _ => String::new(),
     };
     format!("composer {}{}", operation.name(), detail)

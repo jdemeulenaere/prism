@@ -240,3 +240,30 @@ fn a_summary_round_trips() {
         .collect();
     assert!(types.iter().all(|ty| !ty.mentions_parameter()));
 }
+
+/// `strong-skipping`: the state's version and the kept identity's operations round-trip.
+#[test]
+fn identity_operations_round_trip() {
+    use prism_mir::codec::{decode, encode};
+    use prism_mir::{Callee, ComposerOperation, StateOperation};
+    let identity = Type::Reference {
+        mutable: false,
+        inner: Box::new(Type::String),
+    };
+    let callees = [
+        Callee::State(StateOperation::Version),
+        Callee::Composer(ComposerOperation::Keep(identity.clone())),
+        Callee::Composer(ComposerOperation::KeptParameter {
+            index: 2,
+            ty: identity.clone(),
+        }),
+        Callee::Composer(ComposerOperation::KeptVersion {
+            index: 2,
+            ty: identity.nullable(),
+        }),
+    ];
+    for callee in callees {
+        let bytes = encode(&callee);
+        assert_eq!(decode::<Callee>(&bytes).as_ref(), Some(&callee));
+    }
+}

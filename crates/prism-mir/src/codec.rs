@@ -1496,6 +1496,11 @@ impl Codec for crate::mir::ComposerOperation {
                 encoder.u8(22);
                 key.encode(encoder);
             }
+            Operation::KeptVersion { index, ty } => {
+                encoder.u8(23);
+                index.encode(encoder);
+                ty.encode(encoder);
+            }
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1534,6 +1539,10 @@ impl Codec for crate::mir::ComposerOperation {
             21 => Operation::SideEffect,
             22 => Operation::StartNodeGroup {
                 key: decoder.decode()?,
+            },
+            23 => Operation::KeptVersion {
+                index: decoder.decode()?,
+                ty: decoder.decode()?,
             },
             _ => return None,
         })

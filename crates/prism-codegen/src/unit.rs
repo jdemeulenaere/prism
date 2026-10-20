@@ -340,12 +340,28 @@ impl<'m, M: Module> UnitContext<'m, M> {
         let name = crate::glue::qualified_name(ty);
         let text = self.text(&name)?;
         let fingerprint = self.fingerprints.fingerprint(ty);
+        // A kept borrow is its identity, the reference and its version: two words, no drop,
+        // compared word by word, never through its referent (D7 of `strong-skipping`).
+        let identity = crate::representation::is_identity_type(ty);
         let drop = match self.glue(GlueKind::Drop, ty)? {
+            _ if identity => None,
             Some(crate::glue::Glue::Runtime(function)) => Some(self.runtime_function(function)?),
             Some(crate::glue::Glue::Generated(id)) => Some(id),
             None => None,
         };
-        let equals = self.equality_glue(ty)?;
+        let equals = if identity {
+            self.identity_glue(ty)?
+        } else {
+            self.equality_glue(ty)?
+        };
+        let (size, align) = if identity {
+            (
+                2 * self.pointer.bytes() as usize,
+                u64::from(self.pointer.bytes()),
+            )
+        } else {
+            (layout.storage_size() as usize, u64::from(layout.align))
+        };
         let symbol = format!("{}#slot-type({})", self.name, name);
         let id = self
             .module
@@ -353,9 +369,8 @@ impl<'m, M: Module> UnitContext<'m, M> {
         let word = self.pointer.bytes() as usize;
         let mut bytes = vec![0u8; 32 + 6 * word];
         bytes[..32].copy_from_slice(&fingerprint.0);
-        bytes[32..32 + word].copy_from_slice(&(layout.storage_size() as u64).to_le_bytes()[..word]);
-        bytes[32 + word..32 + 2 * word]
-            .copy_from_slice(&u64::from(layout.align).to_le_bytes()[..word]);
+        bytes[32..32 + word].copy_from_slice(&(size as u64).to_le_bytes()[..word]);
+        bytes[32 + word..32 + 2 * word].copy_from_slice(&align.to_le_bytes()[..word]);
         bytes[32 + 5 * word..32 + 6 * word]
             .copy_from_slice(&(name.len() as u64).to_le_bytes()[..word]);
         let mut description = DataDescription::new();

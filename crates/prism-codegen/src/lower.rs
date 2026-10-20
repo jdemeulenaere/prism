@@ -1944,18 +1944,44 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     let result =
                         self.call_runtime("prism_compose_changed", &[composer, record, value])?;
                     self.write_place(destination, Lowered::Scalar(result[0]), false)?;
-                } else {
-                    let stored =
-                        self.call_runtime("prism_compose_set_slot", &[composer, record, value])?[0];
+                } else if matches!(
+                    destination.ty(self.body, self.types()),
+                    Type::Reference { .. }
+                ) {
                     // `remember` lends a value that is not `Copy` from its slot (D6 of
-                    // `owned-state`).
-                    if matches!(
-                        destination.ty(self.body, self.types()),
-                        Type::Reference { .. }
-                    ) {
-                        self.write_place(destination, Lowered::Scalar(stored), false)?;
-                    }
+                    // `owned-state`), always a new block, so that a kept identity of the old
+                    // value never matches it (D19 of `strong-skipping`).
+                    let stored = self
+                        .call_runtime("prism_compose_remember_slot", &[composer, record, value])?
+                        [0];
+                    self.write_place(destination, Lowered::Scalar(stored), false)?;
+                } else {
+                    self.call_runtime("prism_compose_set_slot", &[composer, record, value])?;
                 }
+            }
+            // A borrowed argument's identity is kept as its two words: the reference and its
+            // version (D7 of `strong-skipping`).
+            Operation::Keep(ty) if crate::representation::is_identity_type(ty) => {
+                let composer = word(self, 0)?;
+                let record = self.context.slot_type(ty)?;
+                let record = self.data(record);
+                let reference = word(self, 1)?;
+                let version = word(self, 2)?;
+                let passed = word(self, 3)?;
+                let pointer = self.pointer();
+                let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    2 * pointer.bytes(),
+                    pointer.bytes().trailing_zeros() as u8,
+                ));
+                let identity = self.builder.ins().stack_addr(pointer, slot, 0);
+                self.builder.ins().store(aligned(), reference, identity, 0);
+                self.builder
+                    .ins()
+                    .store(aligned(), version, identity, pointer.bytes() as i32);
+                let result =
+                    self.call_runtime("prism_compose_keep", &[composer, record, identity, passed])?;
+                self.write_place(destination, Lowered::Scalar(result[0]), false)?;
             }
             Operation::Keep(ty) => {
                 let composer = word(self, 0)?;
@@ -1982,6 +2008,20 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     let value = self.read_location(Location::Memory(address), ty)?;
                     self.write_place(destination, value, false)?;
                 }
+            }
+            Operation::KeptVersion { index, ty } => {
+                let composer = word(self, 0)?;
+                let record = self.context.slot_type(ty)?;
+                let record = self.data(record);
+                let index = self.builder.ins().iconst(types::I64, i64::from(*index));
+                let address =
+                    self.call_runtime("prism_compose_kept_slot", &[composer, index, record])?[0];
+                let offset = self.pointer().bytes() as i32;
+                let version = self
+                    .builder
+                    .ins()
+                    .load(types::I64, aligned(), address, offset);
+                self.write_place(destination, Lowered::Scalar(version), false)?;
             }
             Operation::Keepable => {
                 let value = word(self, 0)?;
@@ -2156,6 +2196,13 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                     _ => "prism_compose_state_end_edit",
                 };
                 self.call_runtime(name, &[handle, record])?;
+            }
+            Operation::Version => {
+                let handle = handle(self)?;
+                let version =
+                    self.call_runtime("prism_compose_state_version", &[handle, record])?[0];
+                fail_on_zero(self, version)?;
+                self.write_place(destination, Lowered::Scalar(version), false)?;
             }
             Operation::Weak | Operation::Get => unreachable!("lowered above"),
         }

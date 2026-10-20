@@ -151,6 +151,17 @@ pub fn function_value_signature(
     signature
 }
 
+/// Whether a kept value of `ty` is a borrowed argument's identity, its address and its
+/// version in two words (D7 of `strong-skipping`): a reference or a nullable of one, which a
+/// slot never holds otherwise.
+pub fn is_identity_type(ty: &Type) -> bool {
+    match ty {
+        Type::Reference { .. } => true,
+        Type::Nullable(inner) => matches!(**inner, Type::Reference { .. }),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
