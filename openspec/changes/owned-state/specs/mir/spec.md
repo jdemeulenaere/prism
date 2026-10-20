@@ -12,11 +12,11 @@ A borrow of a state's value that holds the state's flag (compose, "Borrows of a 
 - **THEN** the body calls `state begin shared<List<Int>>` before `items` is initialized and `state end<List<Int>>` once, when the block's locals end, on the path that returns
 
 ### Requirement: Weak Captures Are Words of the Closure Value
-A weak capture MUST be a capture local of the weak reference's type, built where the closure is built by the capture function's operation from a shared borrow of the captured path's place. A use of the captured path in the closure's body MUST be a place that views that local as the state object, which is never moved or dropped.
+A weak capture MUST be a capture local of the weak reference's type. The enclosing body MUST build the closure value from a weak capture of the captured path's place, which makes the word by the capture function's operation and which the borrow checker sees as a shared borrow held by the closure value. A use of the path in the closure's body MUST be a place that views the local as the state object, never moved or dropped.
 
 #### Scenario: A handler's weak capture in MIR
 - **WHEN** `prism dump-mir` runs on a file declaring `struct Todo { val id: Int, val done: MutableState<Bool> }`, `fun keep(f: attached (Bool) -> Unit) {}` and `fun row(todo: &Todo) { keep({ todo.done.value = it }) }`
-- **THEN** `row` builds the closure value from the result of `state weak<Bool>` on a borrow of `(*todo).done`, and the closure's body calls `state write<Bool>` on a view of its capture local `todo.done`
+- **THEN** `row` builds the closure value from `weak (*_1).done`, a weak capture of the place `(*todo).done`, and the closure's body calls `state write<Bool>` on a borrow of a view of its capture local `todo.done`
 
 ## MODIFIED Requirements
 

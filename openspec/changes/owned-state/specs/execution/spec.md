@@ -18,6 +18,27 @@ Under `--check-allocations`, when `main` returns, every retired cell MUST be fre
 - **WHEN** `val Count: MutableState<Int> = mutableStateOf(1)` and `fun main() { Count.value += 1; println(Count.value) }` run with `--check-allocations`
 - **THEN** stdout is `2`, and the exit status is 0
 
+## MODIFIED Requirements
+
+### Requirement: Closures Use the Paths They Capture
+A closure that borrows a captured path MUST read and write that place where it lives each time it is called, a closure that copies a captured path MUST read the value the path held when the closure was built, and one that captures a state path weakly MUST reach the state the path held then. None MUST take the path's binding, which its owner frees exactly once.
+
+#### Scenario: A closure writes one field while another is written
+- **WHEN** `struct P { var x: Int, var y: Int }` is declared and `fun main() { var p = P(1, 2); val bump = { p.x += 10 }; p.y += 1; bump(); bump(); println(p.x); println(p.y) }` runs with `--check-allocations`
+- **THEN** stdout is `21` and then `3`, and the exit status is 0
+
+#### Scenario: A copied path keeps the value it was built with
+- **WHEN** `struct P { val x: Int }` and `fun make(p: &P): () -> Int = { p.x * 10 }` are declared and `fun main() { var p = P(1); val f = make(p); p = P(2); println(f()); println(p.x) }` runs with `--check-allocations`
+- **THEN** stdout is `10` and then `2`, and the exit status is 0
+
+#### Scenario: A closure copying a field leaves its binding to its owner
+- **WHEN** `struct User { val id: Int, val name: String }` and `struct Button { val onClick: () -> Int }` are declared and `fun main() { val u = User(7, "a" + "b"); val b = Button({ u.id * 2 }); println(b.onClick()); println(u.name) }` runs with `--check-allocations`
+- **THEN** stdout is `14` and then `ab`, no live allocation is reported, and the exit status is 0
+
+#### Scenario: A handler writes a state field of a borrowed item
+- **WHEN** `struct Todo { val id: Int, val done: MutableState<Bool> }`, `fun deliver(v: Bool, f: attached (Bool) -> Unit) { f(v) }` and `fun toggle(todo: &Todo) { deliver(true, { todo.done.value = it }) }` are declared and `fun main() { val t = Todo(1, mutableStateOf(false)); toggle(t); println(t.done.value) }` runs with `--check-allocations`
+- **THEN** stdout is `true`, and the exit status is 0: the handler holds a weak handle of `todo.done`, and `t` frees the state once
+
 ## REMOVED Requirements
 
 ### Requirement: Program Cells Are Released Before the Allocation Check

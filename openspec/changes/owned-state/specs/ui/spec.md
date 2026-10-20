@@ -20,6 +20,17 @@ When a pass removes the groups of an item whose handlers captured the item's sta
 
 ## MODIFIED Requirements
 
+### Requirement: Text Takes Borrowed Text
+`Text(text: &String, modifier = Modifier, color = Color.Unspecified, fontSize = TextUnit.Unspecified, style = MaterialTheme.typography.bodyLarge)` MUST show its text in one text node, through `BasicText`. The text MUST be borrowed, so literals, templates and a state's contents in a composable context pass without a clone. A specified `color` or `fontSize` MUST take precedence over the style's, and an unspecified font size MUST be 16.
+
+#### Scenario: Text of a state's string
+- **WHEN** `compose fun Name(name: &State<String>) { Text(name.value); Text("Hello ${name.value}") }` is checked
+- **THEN** the file typechecks, without `E4017`
+
+#### Scenario: An explicit colour wins over the style
+- **WHEN** a headless app composes `Text("a", color = Color.Blue, style = TextStyle(Color.Red, 24.sp))` and its script is `dump`
+- **THEN** the dump holds `text #1 0,0 12x30 "a" color #FF0000FF fontSize 24`
+
 ### Requirement: Checkboxes
 `Checkbox(checked, onCheckedChange: attached (Bool) -> Unit, modifier = Modifier, enabled = true)` MUST be a box node with the caller's modifier, `toggleable` with the role `Checkbox` and `size(20.dp)`, then a background and a border of 2 in `#FF6750A4` when checked, or a border of 2 in `#FF49454F`, with corners of 2. A click on an enabled checkbox MUST call `onCheckedChange` with the opposite of `checked`, and the box MUST NOT change until the program passes a new `checked`.
 

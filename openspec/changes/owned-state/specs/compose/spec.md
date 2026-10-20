@@ -80,8 +80,8 @@ Outside composable contexts, a shared borrow of a non-`Copy` state value MUST ho
 Dropping a state object MUST retire its state: invalidate the scopes registered as its readers, forget them, and make every explicit weak reference to it give `null`. Until its cell is freed, a retired state's value MUST stay valid, and reads and writes through weak handles MUST keep working; a write to it MUST invalidate nothing.
 
 #### Scenario: A dropped state recomposes its readers
-- **WHEN** `fun consume(s: MutableState<Int>) {}` is declared and `fun main() { val s = mutableStateOf(5); val c = composition { println("read ${s.value}") }; consume(s); println(c.recompose()) }` runs with `--check-allocations`
-- **THEN** stdout is `read 5`, `read 5` and `true`, one per line, and the exit status is 0: the root content, which captured `s` through a weak handle, reran and read the retired state
+- **WHEN** `fun consume(s: MutableState<Int>) {}` is declared and `fun main() { val s = mutableStateOf(5); val ref = s.weak(); val c = composition { println("read ${ref.get()?.value ?: -1}") }; consume(s); println(c.recompose()) }` runs with `--check-allocations`
+- **THEN** stdout is `read 5`, `read -1` and `true`, one per line, and the exit status is 0: the root content read the state through the weak reference, so dropping the state invalidated it
 
 #### Scenario: A weak reference to a dropped state is null
 - **WHEN** `fun consume(s: MutableState<Int>) {}` is declared and `fun main() { val s = mutableStateOf(1); val ref = s.weak(); println(ref.get()?.value ?: -1); consume(s); println(ref.get()?.value ?: -1) }` runs with `--check-allocations`
@@ -277,8 +277,8 @@ A retired state whose cell a flag or `update` holds when its free is due MUST be
 Any use of a weak handle whose cell was freed, by a closure that captured it or through a borrow a weak reference gave, MUST end the program with the runtime error `stale state handle`, at the use. A cell index whose generation reaches its maximum MUST be retired, never reused.
 
 #### Scenario: Stale handle detected
-- **WHEN** `fun consume(s: MutableState<Int>) {}` is declared and `fun main() { val s = mutableStateOf(5); val t = mutableStateOf(0); val c = composition { println("s ${s.value} t ${t.value}") }; consume(s); println(c.recompose()); t.value = 1; println(c.recompose()) }` runs
-- **THEN** stdout is `s 5 t 0`, `s 5 t 0` and `true`, stderr is `panic: stale state handle` and the location of `s.value` in the content, and the exit status is 101: the pass after `consume` freed the cell, and the next one reached it through the content's weak handle
+- **WHEN** `fun consume(s: MutableState<Int>) {}` is declared and `fun main() { val s = mutableStateOf(5); val ref = s.weak(); val c = composition { }; val r = ref.get(); consume(s); c.setContent { }; println(r?.value ?: -1) }` runs
+- **THEN** stdout is empty, stderr is `panic: stale state handle` and the location of `r?.value`, and the exit status is 101: the pass of `setContent` freed the retired cell, which the borrow `r` taken before still named
 
 ### Requirement: Side Effects Run After Their Pass
 `SideEffect(effect)`, whose `effect` is an `attached` parameter, MUST be a composable that queues `effect` each time a pass runs the call. After the pass ends and has released what it removed, the queued effects MUST run in the order they were queued, outside composition and as handlers of the composition, and each effect MUST then be dropped. An effect's writes MUST be recomposed by the next pass.
