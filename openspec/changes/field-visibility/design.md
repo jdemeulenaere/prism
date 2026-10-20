@@ -1,0 +1,169 @@
+# Design: field-visibility
+
+## Context
+
+See `proposal.md` for the motivation. This change is item 10b of "After Milestone 2: the review round" in `ROADMAP.md`. It is the language prerequisite of `compose-library-in-prism` (10c), the compose half of agreed item **A4** of `docs/milestone-2-review-notes.md`: "as much as possible ... normal prism code that is imported like any other code" (user, 2026-10-20), with no `unsafe` layer. `core-library-in-prism` D1 and D10 named field visibility as what lets a library struct wrap a runtime handle without being forged.
+
+The user is away. Every decision the user might take differently is marked **(autonomous)** and logged in `docs/decisions-for-review.md`. Decisions the user took in the review are marked **(user direction 2026-10-20)**. Compile speed is a primary criterion (AGENTS.md §5), so each decision states its compile-time cost.
+
+**Baseline.** Proposed on top of `b56208a` ("Warn about the missing timeout command on macOS in the playbook"). Three packets are open, and the order of `ROADMAP.md` lands them before this one:
+
+- `drop-and-clone-hooks` (item 8, implemented, under review);
+- `vararg` (item 9, proposed);
+- `core-library-in-prism` (item 10a, proposed).
+
+This packet modifies no requirement of the main specs: it only ADDS requirements, so it cannot conflict with them. In particular, the field precedence rules of `extension-functions`, which `core-library-in-prism` modifies ("Members Take Precedence Over Extensions", "Extension Declarations Are Checked") and extends (its ADDED "Extension Properties Are Read Like Fields" and "Extension Property Declarations Are Checked"), are qualified by one ADDED requirement here ("Only Visible Fields Count"), rather than rewritten. The first task re-checks this.
+
+Current state (main specs and code):
+
+- A struct field is `val` or `var` with a name and a type (`StructField` in `crates/prism-ast/src/decl.rs`), visible wherever its struct is.
+- Top-level declarations are `private` to their file by default, `package` to their package directory, or `public` (`syntax`, "Default Private Visibility and Export Modifiers"). Using a `package` declaration from another package is `E4007` (`VisibilityViolation`).
+- An exported struct lists every field with its name, mutability and type (`ExportedSymbol::Struct::fields`), which importers use to type field accesses and to lay values out.
+- A field takes precedence over members and extensions in calls (`extension-functions`, "Members Take Precedence Over Extensions"). An extension named like a field of its receiver struct is `E4010`.
+
+## Goals / Non-Goals
+
+**Goals:**
+
+- A struct can hide fields from other files or packages, so that a library struct wrapping a runtime handle can be neither forged nor read outside its file.
+- Kotlin's surface for fields, and Prism's existing meanings of `private`, `package` and `public`.
+- Existing programs keep their meaning: an unmarked field behaves as today.
+- Constant compile-time cost per field use, no new pass.
+
+**Non-Goals:**
+
+- Visibility of enum variants and payloads.
+- A constructor visibility separate from field visibility (Kotlin's `private constructor`).
+- `protected`, `internal`, and Kotlin's `private set`.
+- Rewriting the compose handles: `compose-library-in-prism`.
+
+## Decisions
+
+### D1. Fields take `private`, `package` or `public`; unmarked fields are visible wherever their struct is (autonomous)
+
+The modifier comes before `val` or `var`, in both struct forms:
+
+```kotlin
+struct Account { private var balance: Int, val owner: String }
+struct Session(private val id: Int)
+public struct Modifier : Copy { private val count: Int, ... }
+```
+
+**The default.** An unmarked field is as visible as its struct. Kotlin's members are public by default, and every program written so far relies on it. A field marked `public` says the same thing explicitly, as Kotlin allows.
+
+**The modifiers.**
+
+- `private` means the struct's file, which is Prism's `private` for top-level declarations and Kotlin's file-private top level. Methods are extension functions, so "the type's methods" are the extensions of its file. This is the "encapsulation boundary for extension functions" the ROADMAP item asks for.
+- `package` means the struct's package directory, as for top-level declarations.
+- A field's effective visibility is the narrower of its own and its struct's: a `public` field of a `package` struct is visible in the package only. No diagnostic is given for a modifier wider than its struct, as Kotlin gives none.
+
+**Errors.** A modifier written twice, two modifiers, a modifier on an enum payload, and a modifier not followed by `val` or `var` (a shorthand field may omit `val`, `struct Id(id: Int)`, but not after a modifier, as Kotlin requires `private val` in a constructor) are `E2001`.
+
+**Compile-time cost.** The parser tests one optional token per field.
+
+Rejected:
+
+- **Private by default**, as top-level declarations are: every existing struct used across files would break, and Kotlin's default for members is public.
+- **Kotlin's class-private `private`**: Prism has no class bodies. Methods live in files, so file-private is the only boundary they can share.
+- **Rejecting `public` on fields**: Kotlin code writes it.
+
+### D2. Constructing a struct needs every field visible (autonomous)
+
+A construction, positional or named, assigns every field, so it is rejected with `E4007` where any field is hidden, naming the first hidden field and its visibility. A struct with a `private` field can therefore be built only in its own file. This is what makes a handle unforgeable, and it is Rust's rule for struct literals.
+
+**Compile-time cost.** One visibility comparison per field of a construction, done while its arguments are matched.
+
+Rejected:
+
+- **Kotlin's `private constructor`**: a second visibility to declare. Every handle type of the library hides its field anyway, and a struct with public fields and a private constructor is a follow-up if a program needs it.
+- **Constructing with only the visible fields, hidden ones taking defaults**: fields have no defaults.
+
+### D3. Reading, writing and borrowing a hidden field is `E4007` (autonomous)
+
+The following are `E4007` where the field is not visible:
+
+- `s.id`, `s?.id` and `s.balance = 1`, also through references and boxes;
+- compound assignments, borrows `&s.id` and `&mut s.balance`, and paths captured by closures;
+- a bare name that would read a receiver's field in an extension body or a lambda with a receiver.
+
+The message names the field, its visibility and the file or package that declares it. Copies, moves of whole values, `clone()`, drops, structural `==`, hashing of kept values and text forms are not field accesses: they are the type's own operations, generated or declared in its file, and work everywhere.
+
+A hidden field is not "no field". When nothing else resolves the name (no member, extension or outer binding, D5), the error is `E4007` for the hidden field, not `E4006`.
+
+**Compile-time cost.** One visibility comparison per field access: the field record holds its visibility, and the checker knows the current file and package.
+
+### D4. Patterns and destructuring name only visible fields (autonomous)
+
+- A **positional struct pattern** (`Session(val id)`) gives every field, so it is `E4007` where any field is hidden.
+- A **named sub-pattern** (`Account(owner = val o)`) or a **destructuring entry** (`val (owner) = account`) naming a hidden field is `E4007`.
+- Named patterns and destructuring declarations that leave hidden fields out stay valid. The fields they leave out are matched by wildcards, as `patterns` already says, so exhaustiveness is unchanged.
+- **Taking a value apart** this way (moving a visible non-`Copy` part out of an owned value) stays valid, with the hidden parts handled as any part a pattern leaves out, as Rust allows `let S { a, .. } = s` with private fields. A type that must not be taken apart declares a drop hook (`drop-and-clone-hooks` D5).
+
+**Compile-time cost.** One comparison per field a pattern names, and one flag test per positional struct pattern.
+
+### D5. Only fields visible in the file count for resolution (autonomous; closes the `extension-methods` follow-up)
+
+Everywhere a field takes part in name resolution, only a field visible in the file of the use or declaration counts:
+
+- the call precedence of "Members Take Precedence Over Extensions";
+- the property reads of `core-library-in-prism` ("Extension Properties Are Read Like Fields");
+- bare names in extension bodies;
+- the `E4010` rule for an extension or extension property named like a field.
+
+So `fun Session.id(): Int` declared in another file than `Session` is valid, and `s.id()` there calls it. In `Session`'s own file, the field still wins and such an extension is still `E4010`.
+
+**Compile-time cost.** The existing field lookup gains one comparison.
+
+Rejected: **hidden fields still shadowing extensions everywhere**. An extension could then be declared but never called outside the type's file.
+
+### D6. Field visibility is part of the ABI (autonomous)
+
+- Each field of an exported struct carries its visibility in `ExportedSymbol::Struct`, covered by the ABI hash and printed by `prism abi` (`private val id: Int`).
+- Hidden fields stay in the ABI, as Rust's private fields stay in a crate's metadata: importers lay values out, copy, drop and compare them.
+- Reachable definitions (`AbiTypeDefinition`) need no visibility. A file that reaches a type without importing its module cannot touch its members (`E4014`), and one that imports it reads the exported struct.
+- Changing a field's visibility changes the ABI hash, so importers are re-checked. It changes no layout, so no slot contract and no type fingerprint changes, and hot reload keeps values (`hot-reload`).
+
+**Compile-time cost.** One byte per exported field in Phase 1.
+
+### D7. The library hides `Modifier`'s representation (autonomous)
+
+`Modifier`'s fields (`count`, `first`, `second`) and `ModifierElements`' fields (`e0` to `e7`) become `private`. Only `/prism/compose/ui` reads them, through `append`, `element` and `then`, so the toolkit modules and programs build chains only through the modifier functions. The `ui-toolkit` follow-up "Field visibility, so that `ModifierElement`'s payloads and the element blocks are not readable or constructible by programs" is half done. `ModifierElement`'s variants stay constructible until enum variants can be hidden, which the follow-up keeps open.
+
+The UI runtime reads chains by layout (`prism_ui_set_modifier` takes `&Modifier`), which visibility does not change.
+
+**Compile-time cost.** None.
+
+Rejected: **leaving the library unchanged here**. The library is the feature's first user, and the follow-up is listed in `ROADMAP.md`.
+
+### D8. Formatting keeps field modifiers as written (autonomous)
+
+`prism fmt` prints a field's modifier before `val`/`var`, in block and shorthand structs, and keeps an explicit `public`. The formatter's meaning check compares the new AST field.
+
+**Compile-time cost.** None for compilation.
+
+### D9. No new error code (autonomous)
+
+- **`E4007` `VisibilityViolation`** is widened from `package` declarations to hidden fields: reads, writes, borrows, constructions, patterns and destructuring entries (D2 to D4).
+- **`E2001`** covers misplaced or repeated field modifiers.
+
+A hidden field is a visibility violation like a `package` declaration used from another package, so it shares that code.
+
+### D10. Compile timing (autonomous)
+
+`crates/prism-cli/tests/compile_timing.rs` gains the shape `field-visibility` at 256, 1,024 and 4,096: that many structs with a `private`, a `package` and an unmarked field, each constructed, read, written and matched by a named pattern in the struct's file, timing parse and check. Under `PRISM_ASSERT_TIMING=1`, each stage grows by at most ×4.6 per ×4.
+
+## Risks / Trade-offs
+
+- **[Hidden fields still cost layout]** Adding a private field changes importers' layouts, so it recompiles them. → This is the price of by-value structs across files, already the case for every field. Opaque handles would need boxes.
+- **[Taking apart a value with hidden fields]** D4 lets another file move visible parts out of a struct whose hidden parts are then dropped. → A type with invariants across fields declares a drop hook, which forbids taking it apart, or keeps its non-`Copy` fields hidden.
+- **[`E4007` where `E4006` was]** A misspelled access of a hidden field is reported as a visibility error. → The message names the field and its visibility.
+- **[Packets landing in between]** → Task 1.1 re-checks that no open packet modifies the blocks this one adds or modifies, and rebases if needed.
+
+## Migration Plan
+
+Programs keep their meaning: unmarked fields are as visible as before. The library hides `Modifier`'s and `ModifierElements`' fields, which no example or fixture reads. The build cache is keyed by the compiler identity, so nothing cached is reused. Rollback: revert the commits.
+
+## Open Questions
+
+- Kotlin's `private set` (a `var` field readable everywhere and written only in its file), if library or application code wants it.
+- Enum variant and payload visibility, for `ModifierElement`.
