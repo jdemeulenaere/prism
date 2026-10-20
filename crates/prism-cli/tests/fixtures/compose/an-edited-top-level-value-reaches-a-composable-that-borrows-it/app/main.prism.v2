@@ -1,0 +1,11 @@
+package app
+import /prism/compose/ui
+import /prism/compose/layout
+import /lib/label
+val Greeting: String = "hi"
+compose fun Screen() {
+    Column {
+        Label(Greeting)
+    }
+}
+fun main() { runApp(width = 400, height = 300) { Screen() } }

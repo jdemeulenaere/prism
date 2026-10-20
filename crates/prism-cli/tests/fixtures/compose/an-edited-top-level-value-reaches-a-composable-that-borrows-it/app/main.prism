@@ -1,0 +1,16 @@
+// expect: ok
+// run: 0
+// watch: edits
+// events: events
+// entry: app/main.prism
+package app
+import /prism/compose/ui
+import /prism/compose/layout
+import /lib/label
+val Greeting: String = "hello"
+compose fun Screen() {
+    Column {
+        Label(Greeting)
+    }
+}
+fun main() { runApp(width = 400, height = 300) { Screen() } }

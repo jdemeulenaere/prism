@@ -1,0 +1,6 @@
+window 400x300
+  column #1 0,0 40x20
+    text #2 0,0 40x20 "hello"
+window 400x300
+  column #1 0,0 16x20
+    text #2 0,0 16x20 "hi"
