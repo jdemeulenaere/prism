@@ -781,6 +781,20 @@ A top-level `fun` MAY carry `external` or `intrinsic`, and an extension property
 - **WHEN** parsing `compose intrinsic fun A() { }`, `intrinsic public fun b(): Int`, `external intrinsic fun c(): Int` or `mut external fun Int.d()`
 - **THEN** the parser reports `E2001`
 
+### Requirement: Annotations
+A top-level declaration MAY start with annotations, each `@` directly followed by an identifier, with no arguments, on the declaration's line or on lines of their own (`@Keeper public struct Composition { ... }`). Annotations MUST come before `context(...)`, the visibility and every other modifier. Which annotations exist and which files may use them is the rule of `standard-library`.
+
+#### Scenario: Annotations before declarations
+- **WHEN** parsing `@Keeper\npublic struct C { private val handle: Int }`, `@DrivesComposition public fun f(): Unit {}` and `@ExplicitGroupsComposable\npublic compose fun S(): Unit {}`
+- **THEN** each parses as its declaration carrying the annotation named `Keeper`, `DrivesComposition` and `ExplicitGroupsComposable`, with its visibility and modifiers as written
+
+### Requirement: Malformed Annotations Are Rejected
+An `@` not directly followed by an identifier, an annotation with arguments, and an annotation anywhere but before a top-level declaration MUST be rejected with `E2001`.
+
+#### Scenario: Malformed annotations rejected
+- **WHEN** parsing `@ Keeper struct A(val n: Int)`, `@1 fun f() {}`, `@Keeper(1) struct B(val n: Int)` and `fun g() { @Keeper val x = 1 }`
+- **THEN** the parser reports `E2001` for each, saying that an annotation is `@` followed by a name before a top-level declaration
+
 ### Requirement: Function Bodies Are Required
 A `fun` declaration without `external` or `intrinsic` MUST have a body, an `=` expression or a block. Without one the parser MUST report `E2001`, saying that a function needs a body.
 
@@ -1062,3 +1076,7 @@ Decisions from `core-library-in-prism` (the core half of the review's agreed ite
 Decisions from `field-visibility` (item 10b of the review round, the language prerequisite of the compose half of the review's agreed item A4, user direction 2026-10-20 for library handles written as ordinary Prism structs; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Field modifiers before `val` or `var`** (D1). One optional token per field, in block and shorthand structs. After a modifier a shorthand field must say `val` or `var`, as Kotlin requires `private val` in a constructor; two modifiers, a repeated one and one on an enum payload are `E2001`, enum payloads having no visibility yet.
+
+Decisions from `compose-library-in-prism` (item 10c of the review round, the compose half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over one composer-access primitive with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Annotations are one token** (D2, refined at implementation). `@` directly followed by a name lexes as one `Annotation(name)` token, and an `@` without a name is a lexer error (`E2001`), because the formatter's corpus tests insert comments and spaces between any two tokens; nothing may come between `@` and the name, as in Kotlin. Annotations come before `context(...)`, the visibility and every modifier, with no arguments; an annotation elsewhere is `E2001`.

@@ -270,6 +270,13 @@ The formatter MUST print a closure's header exactly when it was written, includi
 - **WHEN** `prism fmt -` reads `public   intrinsic  mut fun <T> List<T>.add( element :T )` and `public intrinsic val <T> List<T>.size :Int`
 - **THEN** it writes `public intrinsic mut fun <T> List<T>.add(element: T)` and `public intrinsic val <T> List<T>.size: Int`, each on its own line
 
+### Requirement: Annotations Are Printed
+The formatter MUST print each annotation of a declaration on its own line, in the order written, directly above the declaration and at its indentation, keeping any comment above the first annotation.
+
+#### Scenario: Annotations formatted
+- **WHEN** formatting a library module holding `@Keeper public struct C(private val handle: Int)` and `@DrivesComposition   @ExplicitGroupsComposable public fun f(): Unit {}`
+- **THEN** the results are `@Keeper\npublic struct C(private val handle: Int)` and `@DrivesComposition\n@ExplicitGroupsComposable\npublic fun f(): Unit {}`
+
 ### Requirement: Receivers and Context Parameters Are Printed
 The formatter MUST print a function type's receiver as written, with no space around its `.` and one space after `compose`, `mut` and `escaping`, and MUST print a context parameter on its own line directly above the rest of its declaration, as `context(name: Type)`. Comments before a declaration MUST stay above its context line.
 
@@ -387,3 +394,7 @@ Decisions from `core-library-in-prism` (the core half of the review's agreed ite
 Decisions from `field-visibility` (item 10b of the review round, the language prerequisite of the compose half of the review's agreed item A4, user direction 2026-10-20 for library handles written as ordinary Prism structs; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Field modifiers kept as written** (D8). `prism fmt` prints a field's modifier before `val`/`var` in both struct forms, an explicit `public` included, and the meaning check compares it.
+
+Decisions from `compose-library-in-prism` (item 10c of the review round, the compose half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over one composer-access primitive with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Annotations on their own lines** (D2). Each annotation is printed on its own line above its declaration, in the order written, keeping comments above the first, as Kotlin's formatter does for declaration annotations.

@@ -654,6 +654,17 @@ Every type with a slot type record, other than a kept borrow's reference type, M
 - **WHEN** `struct D : Copy { val v: Double }`, `compose fun Show(d: D) { println("show") }`, `fun screen(v: Double): compose () -> Unit = { Show(D(v)) }` and `fun main() { val nan = 0.0 / 0.0; val c = composition(screen(nan)); c.setContent(screen(nan)); c.setContent(screen(1.0)); c.setContent(screen(1.0)) }` run
 - **THEN** `show` is printed three times: on both passes with `NaN`, and on the first pass with `1.0`
 
+### Requirement: Compositions and Scopes Are Library Structs
+`Composition` and `RecomposeScope` MUST be laid out as the structs `/prism/compose/runtime` declares, one `Int` field each. Dropping a `Composition` MUST run its drop hook, which disposes the composition, through drop glue like any hooked type, with no special case in the backend.
+
+#### Scenario: Layout of a composition
+- **WHEN** `prism dump-layout main.prism` runs on a file declaring `struct Screen { val c: Composition, val s: RecomposeScope }` and `fun f(s: Screen) {}`
+- **THEN** it shows `Screen` with size 16 and alignment 8, and `prism/compose/runtime::Composition` and `prism/compose/runtime::RecomposeScope` with size 8, each holding the field it declares
+
+#### Scenario: The drop glue of a composition calls its hook
+- **WHEN** `prism dump-clif` runs on `struct Screen { val c: Composition }` and `fun f(s: Screen) {}`
+- **THEN** the drop glue of `Screen` calls that of `prism/compose/runtime::Composition`, which calls the hook `prism/compose/runtime::Composition.drop` through its slot, and nothing in the unit calls `prism_compose_dispose` directly
+
 ### Requirement: Keepable Closures Compare and Duplicate Their Environments
 A closure that captures nothing or owns only `Copy` captures MUST have an environment equality entry, comparing two environments' captures with `==` in capture order. When such a closure's environment is allocated, it MUST also have an environment duplicate entry returning a new allocation holding a copy of the captures. Every other closure MUST have neither.
 
@@ -661,19 +672,19 @@ A closure that captures nothing or owns only `Copy` captures MUST have an enviro
 - **WHEN** `fun keep(f: escaping () -> Unit) {}` and `fun main() { val a = 1; val b = 2; keep { println(a + b) }; val s = "x" + "y"; keep { println(s) } }` are declared and `prism dump-clif main.prism` runs
 - **THEN** it prints `main::main#closure0#equals-environment` and `main::main#closure0#duplicate-environment`, and neither for `main::main#closure1`
 
-### Requirement: Intrinsic Structs Are Laid Out by the Compiler
-`Composition` and `RecomposeScope` MUST each be one 64-bit word holding a runtime handle. The drop glue of `Composition` MUST dispose the composition it names, and `==` of either MUST compare the handles.
-
-#### Scenario: Layout of a composition
-- **WHEN** `prism dump-layout main.prism` runs on a file declaring `struct Screen { val c: Composition, val s: RecomposeScope }` and `fun f(s: Screen) {}`
-- **THEN** it shows `Screen` with size 16 and alignment 8, and `prism/compose/runtime::Composition` and `prism/compose/runtime::RecomposeScope` with size 8
-
 ### Requirement: State Handles Are One Word
 `State<T>`, `MutableState<T>` and `WeakReference<T>` MUST be laid out as one 8-byte, 8-aligned word for every `T`. A state object MUST have drop glue that retires its state, no clone glue, and equality glue that compares the words; a weak reference MUST have no drop glue and compare its words. `prism dump-layout` MUST name them `prism/compose/runtime::State<...>`, `prism/compose/runtime::MutableState<...>` and `prism/compose/runtime::WeakReference<...>`.
 
 #### Scenario: Layout of a state handle
 - **WHEN** `prism dump-layout` runs on a file declaring `struct Todo { val title: String }` and `fun f(s: MutableState<List<Todo>>, r: WeakReference<MutableState<Int>>) { }`
 - **THEN** it prints the layouts of `prism/compose/runtime::MutableState<List<Todo>>` and `prism/compose/runtime::WeakReference<prism/compose/runtime::MutableState<Int>>` as size 8 and alignment 8, each holding only the hidden `handle: Int` word that every intrinsic struct has
+
+### Requirement: Intrinsic State Handles Travel as Words
+A value of `State<T>`, `MutableState<T>` or `WeakReference<T>`, the intrinsic structs the catalog lays out as one word, MUST be passed to and returned from functions and externals as a 64-bit word, not by address. Its representation is fixed by the catalog, so no signature depends on a declared type's layout.
+
+#### Scenario: A weak reference passed as a word
+- **WHEN** `prism dump-clif` runs on `fun f(r: WeakReference<MutableState<Int>>): WeakReference<MutableState<Int>> = r`
+- **THEN** `main::f` takes one 64-bit word and returns one, with no address parameter
 
 ### Requirement: State Operations Call the Compose Runtime
 Each state operation MUST be a direct call of a compose runtime entry point with the state's word, loaded through the borrow of the state object, the slot type record of the value type, and the value passed by address where it moves. When the entry reports a failure, the generated code MUST raise the error the runtime recorded at the operation's location.
@@ -702,20 +713,6 @@ The JIT MUST resolve `prism-ui`'s entry points by symbol, as it resolves the run
 #### Scenario: A UI entry point declared with the wrong signature
 - **WHEN** a library test module declares `private external fun prism_ui_set_enabled(node: Int, enabled: Double)` and a program calls it
 - **THEN** compiling the program reports `E6005`, saying that the entry point `prism_ui_set_enabled` takes `i8` where the declaration passes `f64`
-
-### Requirement: One-Word Intrinsic Structs Travel as Words
-A value of an intrinsic struct that the catalog lays out as one word (`NodeId`, `HandlerId`, `State<T>`, `MutableState<T>`, `WeakReference<T>`, `RecomposeScope`, `Composition`) MUST be passed to and returned from functions and externals as a 64-bit word, not by address. Its representation is fixed by the catalog, so no signature depends on a declared type's layout.
-
-#### Scenario: An external taking a node handle
-- **WHEN** `prism dump-clif` runs on a library test module declaring `private external fun prism_ui_set_enabled(node: NodeId, enabled: Bool)` and a call of it
-- **THEN** the call passes two machine values, a 64-bit word and an 8-bit `Bool`, and no address
-
-### Requirement: Intrinsic Structs Compared Through a Runtime Entry
-When the catalog gives an intrinsic struct an equality entry, `==` of two of its values, and its part in the equality glue of every type that holds it, MUST call that entry with the two words and use its result, instead of comparing the words.
-
-#### Scenario: Comparing handler ids
-- **WHEN** `prism dump-clif` runs on a library test module of `/prism/compose/ui` declaring `fun same(a: HandlerId, b: HandlerId): Bool = a == b` and `struct Pair : Copy { val h: HandlerId }`, with a comparison of two `Pair`s
-- **THEN** the body of `same` and the equality glue of `Pair` each call `prism_ui_handlers_equal` with two 64-bit words
 
 ### Requirement: Dropping a State Object Retires Its State
 The drop glue of `State<T>` and `MutableState<T>` MUST call the compose runtime's retire entry with the state's word, so every drop of a state object, of a local, a field, a list element or a slot, retires its state exactly once.
@@ -748,6 +745,13 @@ Where the equality expansion or an equality glue function compares two values of
 #### Scenario: List search calling equals
 - **WHEN** `prism dump-clif main.prism` runs on a file declaring that `User` and `fun has(xs: &List<User>, u: &User): Bool = xs.contains(u)`
 - **THEN** the index-of glue of `List<User>` calls the function of `User.equals` for each element compared
+
+### Requirement: Handler Ids Compare Through Their Equality Operator
+`==` of two `HandlerId`s, and its part in the equality glue of every type that holds one, MUST call `HandlerId`'s `equals` operator, which compares the two handlers through `prism_ui_handlers_equal`.
+
+#### Scenario: Comparing handler ids
+- **WHEN** `prism dump-clif` runs on a library test module `/prism/compose/test`, of the package `prism.compose`, that imports `ui` and declares `fun same(a: HandlerId, b: HandlerId): Bool = a == b` and `struct Pair : Copy { val h: HandlerId }`, with a comparison of two `Pair`s
+- **THEN** the body of `same` and the comparison of the two `Pair`s each call `prism/compose/ui::HandlerId.equals` through its slot, and only that operator calls `prism_ui_handlers_equal`
 
 ## Design Rationale
 
@@ -886,8 +890,8 @@ Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled w
 Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by user direction to follow Jetpack Compose's APIs and modules, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
 
 - **`UI_FUNCTIONS` beside the runtime tables** (D2). The entry-point lookup searches `RUNTIME_FUNCTIONS`, `COMPOSE_FUNCTIONS`, then `UI_FUNCTIONS`, and `Linker::new` registers all three, so `prism-ui`'s externals are checked for `E6005` like the runtime's; the cost is one more table per external a unit declares.
-- **One-word intrinsic structs are words** (apply). Intrinsic structs travelled by address; they are now `i64` scalars in machine signatures, laid out as one `Int` in memory, and the composer and state operations that wrote a handle through its destination's address write it as a scalar. So an external taking a `NodeId` passes a word and no signature depends on a declared type's layout.
-- **Equality through a catalog entry** (D23). An intrinsic struct whose catalog names an equality entry (`HandlerId`, `prism_ui_handlers_equal`) compares through a call of that entry, inline and in every equality glue that holds it, so a `Modifier` holding handler elements compares its handlers by code and captures.
+- **One-word intrinsic structs are words** (apply). Intrinsic structs travelled by address; they are now `i64` scalars in machine signatures, laid out as one `Int` in memory, and the composer and state operations that wrote a handle through its destination's address write it as a scalar. So an external taking a `NodeId` passes a word and no signature depends on a declared type's layout. (Since `compose-library-in-prism` D8 and D13, below, only `State`, `MutableState` and `WeakReference` are intrinsic, and the UI externals take `Int` words.)
+- **Equality through a catalog entry** (D23). An intrinsic struct whose catalog names an equality entry (`HandlerId`, `prism_ui_handlers_equal`) compares through a call of that entry, inline and in every equality glue that holds it, so a `Modifier` holding handler elements compares its handlers by code and captures. (Since `compose-library-in-prism` D8, below, `HandlerId` is a library struct whose `equals` operator calls the entry.)
 - **Environments are unchanged rules over paths** (D8 of `path-captures`). A borrowed path's environment entry is its place's address and a copied path's entry its value, so a handler copying one `Int` or handle through a borrow is held inline and allocates nothing. A closure borrowing several fields of one binding holds one pointer per path, a few stack words in the creating frame; sharing one pointer among them is a possible optimization. A slot's contract fingerprints each capture by its path's type and records the path itself (the binding's and fields' names), so a reload that changes a closure from capturing `t` to `t.id`, or swaps `t.id` for `t.count` of the same type, gives it a new slot: a value made before keeps the code that reads its environment as the paths it copied. Names rather than field indices, so reordering a struct's fields keeps the slot of a closure copying one of them.
 
 Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -907,3 +911,8 @@ Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for pa
 Decisions from `drop-and-clone-hooks` (part L2 of the review's agreed item A4, planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the user decided in A4 that there is no `unsafe` layer for now, so hooks serve types wrapping runtime handles, not raw memory):
 
 - **Glue calls hooks through the function table** (D9): the drop glue of a type with a drop hook calls it with the value's address and then drops the parts; the clone glue of a type with a clone hook calls it with the destination's and the source's addresses (the hook's own machine signature) instead of cloning field by field. The call loads the slot of the hook's symbol, the extension's or, for a generic type, the instance's, so glue stays local to its unit and depends only on its type's ABI flags, editing a hook recompiles no importer, and hot reload repoints the hook like any function. `glue::needs_glue(kind, ty, types)` replaces `owns_storage` as the test for glue: a type also needs drop glue when it reaches a drop hook through its fields, payloads, nullables, boxes or list elements (`TypeTable::reaches_drop_hook`, constant for a table without hooks), clone glue when it reaches a clone hook, and closure environments ask the same, so a hooked capture is never kept inline without a drop entry. Glue runs user code only through hooks. Run-time cost: one indirect call per hooked value dropped or cloned; types without hooks are unchanged. Rejected: calling hooks directly by symbol (a reload would keep old glue on the old body), lowering hook calls in MIR (every drop site would expand nested types, and lists, boxes and environments would still need glue).
+
+Decisions from `compose-library-in-prism` (item 10c of the review round, the compose half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over one composer-access primitive with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Library structs instead of one-word intrinsics** (D8, D13). `Composition`, `RecomposeScope`, `NodeId` and `HandlerId` are declared structs, so they are passed by address like every aggregate; only `State`, `MutableState` and `WeakReference` still travel as words, so no signature depends on a declared layout (`code-generation` D10). Measured at the change (D15): a node's extra call, its `NodeId` by address and handler comparisons through `equals` are within run-to-run variance of the frame medians, and frames that change nothing still allocate nothing. Rejected: small structs in registers for every struct (a Tier 2 follow-up).
+- **Drop and equality through declarations** (D6, D8). `Composition`'s drop glue calls its hook through the function table, and `HandlerId`'s `==` calls its `equals` operator, in every equality glue holding one; the backend has no special case for either.

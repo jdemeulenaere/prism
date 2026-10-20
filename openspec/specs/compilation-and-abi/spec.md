@@ -411,11 +411,11 @@ Phase 1 MUST record whether a function type in an exported signature has a recei
 - **THEN** the ABI records two distinct functions, and the exported ABI hash is the same in both orders
 
 ### Requirement: Intrinsic Structs in the ABI
-An exported intrinsic struct MUST be an ABI entry with its name, type parameters and markers, marked intrinsic, covered by the ABI hash and shown by `prism abi` with its modifier (`public intrinsic struct RecomposeScope : Copy`). Its layout MUST NOT be part of the ABI: it comes from the compiler, whose version every artifact key holds.
+An exported intrinsic struct MUST be an ABI entry with its name, type parameters and markers, marked intrinsic, covered by the ABI hash and shown by `prism abi` with its modifier (`public intrinsic struct WeakReference<T> : Copy`). Its layout MUST NOT be part of the ABI: it comes from the compiler, whose version every artifact key holds.
 
 #### Scenario: The ABI of the compose module
 - **WHEN** the ABI of `/prism/compose/runtime` is extracted
-- **THEN** it holds `public intrinsic struct Composition`, `public intrinsic struct RecomposeScope : Copy` and `public intrinsic compose fun <T> remember(calculation: () -> T): T`, and removing the `Copy` marker of `RecomposeScope` changes the module's ABI hash
+- **THEN** it holds `public intrinsic struct State<T>`, `public intrinsic struct WeakReference<T> : Copy` and `public intrinsic compose fun <T> remember(calculation: () -> T): T`, and removing the `Copy` marker of `WeakReference` changes the module's ABI hash
 
 ### Requirement: Companion Values in the ABI
 A public struct and its public companion value MUST both be exported, as two symbols with one name: the struct with its definition and the value with its declared type. Adding, removing or retyping the companion value MUST change the file's ABI hash.
@@ -483,6 +483,17 @@ The ABI MUST record, for each exported struct and enum and in each reachable def
 #### Scenario: Editing a hook's body recompiles nothing downstream
 - **WHEN** `lib/net.prism` declares `public struct Session(val id: Int)` and `operator mut fun Session.drop() { println("closed") }`, `app/main.prism` imports `/lib/net` and declares `fun main() { val s = Session(1) }`, the program has been run, and the hook's body changes to `println("bye")`
 - **THEN** the ABI hash of `lib/net` is unchanged, the next `prism run --explain-cache app/main.prism` prints `  checked lib/net.prism` and `  reused app/main.prism`, and the program prints `bye`
+
+### Requirement: Library Annotations in the ABI
+An exported struct annotated `@Keeper` MUST carry a keeper flag in its ABI entry and in every reachable definition of it, and an exported function annotated `@DrivesComposition` MUST carry its flag. The ABI hash MUST cover both, and `prism abi` MUST print them as the annotations. `@ExplicitGroupsComposable` MUST NOT be part of the ABI.
+
+#### Scenario: A keeper reached without its module
+- **WHEN** `app/screen.prism` imports `/prism/compose/runtime` and `/prism/core` and exports `public fun state(): MutableState<Int> = mutableStateOf(0)`, `public fun show(s: &MutableState<Int>): Composition = composition { println(s.value) }` and `public fun consume(s: MutableState<Int>): Unit {}`, and `app/main.prism` imports only `/app/screen` and declares `fun main() { val s = state(); val c = show(s); consume(s); val d = c }`
+- **THEN** the borrow checker emits `E5005` at `s` in `consume(s)`: `app/main` knows from the reachable definition of `Composition` that it is a keeper, although it does not import `/prism/compose/runtime`
+
+#### Scenario: Annotations change the ABI hash
+- **WHEN** a library test module's struct `@Keeper public struct H(private val n: Int)` loses its annotation
+- **THEN** the module's ABI hash changes, and `prism abi` printed `@Keeper public struct H` before the edit and `public struct H` after it
 
 ### Requirement: Hook Instances Are Planned From Summaries
 Each file's summary MUST request the drop hook instance of every generic type with a drop hook that the types its bodies drop or clone, and the type arguments of its generic calls, reach through fields, payloads, nullables, boxes, lists and function environments, and the clone hook instance of each such type that is `Clone` at its type arguments. A generic's summary MUST request them with its own type parameters left as they are, which planning substitutes as it does for calls.
@@ -601,3 +612,7 @@ Decisions from `core-library-in-prism` (the core half of the review's agreed ite
 Decisions from `field-visibility` (item 10b of the review round, the language prerequisite of the compose half of the review's agreed item A4, user direction 2026-10-20 for library handles written as ordinary Prism structs; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Field visibility in the ABI** (D6). Hidden fields stay in an exported struct's ABI entry, as Rust's private fields stay in a crate's metadata, since importers lay values out, copy, drop and compare them. Each field's visibility is folded into its mutability byte in the hash, so an unmarked field hashes as before and a visibility change re-checks importers without changing any layout, slot contract or type fingerprint. Reachable definitions carry none: a file that does not import a type's module cannot touch its members (`E4014`). One byte per exported field in Phase 1.
+
+Decisions from `compose-library-in-prism` (item 10c of the review round, the compose half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over one composer-access primitive with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Annotations in the ABI** (D12). `@Keeper` is a flag of a struct's ABI entry and of every reachable definition of it, since a file can hold a `Composition` reached through another module's signature without importing `/prism/compose/runtime`, and its borrow checker must still see a keeper; `@DrivesComposition` is a flag of a function's entry. Both are hashed and printed. `@ExplicitGroupsComposable` is not in the ABI: it changes only its own body's lowering. Cost: two flags per exported symbol in Phase 1.

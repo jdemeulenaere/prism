@@ -61,7 +61,7 @@ A workspace file declaring anything `external` or `intrinsic`, or carrying an an
 - **THEN** `prism check` reports `E3002` at the `@` of each
 
 ### Requirement: Intrinsic Structs
-An `intrinsic struct` MUST declare a type whose representation, glue and operations the compiler provides from its catalog, with the markers the catalog gives it. The catalog MUST hold `State`, `MutableState` and `WeakReference` only. A library declaration naming no intrinsic struct of the catalog, or with other type parameters or markers, MUST be rejected with `E4029`. No program MUST construct a value of an intrinsic struct, read a field of one, or take one apart: only its intrinsic functions make and use its values.
+An `intrinsic struct` MUST declare a type whose representation, glue and operations the compiler provides from its catalog, with the catalog's markers. The catalog MUST hold `State`, `MutableState` and `WeakReference` only. A library declaration naming none of them, or with other type parameters or markers, MUST be `E4029`. No program MUST construct, read a field of or take apart a value of an intrinsic struct: only its intrinsic functions make and use its values.
 
 #### Scenario: An unknown intrinsic struct is rejected
 - **WHEN** a library test module declares `public intrinsic struct Window` or `public intrinsic struct Composition`

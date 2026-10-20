@@ -22,6 +22,13 @@ When the compose runtime runs a composition's root and its content is composable
 - **WHEN** `compose fun Screen() { println("screen") }` and `fun main() { val c = composition(Screen); c.setContent(Screen) }` run with `--check-allocations`
 - **THEN** stdout is `screen` twice, and the exit status is 0
 
+### Requirement: Composition Functions Reached Through Function Values
+A `@DrivesComposition` function called during a pass through a function value, which the type checker does not follow, MUST end the program with the misuse `composition operation during a pass`; `runApp` MUST do so before it opens any window.
+
+#### Scenario: A composition function called through a function value
+- **WHEN** `compose fun Screen(start: (attached compose () -> Unit) -> Composition) { println("screen"); val d = start { } }` and `fun main() { val c = composition { Screen(composition) } }` run, or `runApp` is given likewise to a composable that calls it, headless
+- **THEN** stdout is `screen`, and the program ends with `panic: composition misuse: composition operation during a pass` and status 101
+
 ## MODIFIED Requirements
 
 ### Requirement: Compositions Are Owned Values
@@ -40,7 +47,7 @@ When the compose runtime runs a composition's root and its content is composable
 - **THEN** the type checker emits `E4007` for the construction and for `handle`, each naming the private field `handle` of `prism/compose/runtime`
 
 ### Requirement: Composition Operations Are Rejected in Composable Contexts
-Calling a function annotated `@DrivesComposition` (`composition`, `setContent` and `recompose` of `/prism/compose/runtime`, and `runApp` of `/prism/compose/ui`) in a composable context MUST be rejected with `E4030` (`CompositionInComposable`), at the call, with a note that compositions are started and driven outside composition. In a non-composable closure written inside a composable, such calls MUST be accepted. Such a function called during a pass through a function value, which the type checker does not follow, MUST end the program with the misuse `composition operation during a pass`, `runApp` before it opens any window.
+Calling a function annotated `@DrivesComposition` (`composition`, `setContent` and `recompose` of `/prism/compose/runtime`, and `runApp` of `/prism/compose/ui`) in a composable context MUST be rejected with `E4030` (`CompositionInComposable`), at the call, with a note that compositions are started and driven outside composition. In a non-composable closure written inside a composable, such calls MUST be accepted.
 
 #### Scenario: Starting a composition inside a composable
 - **WHEN** `compose fun Screen(c: &Composition) { val d = composition { }; c.recompose() }` is checked
@@ -50,6 +57,3 @@ Calling a function annotated `@DrivesComposition` (`composition`, `setContent` a
 - **WHEN** `fun later(f: () -> Unit) { f() }` and `compose fun Screen() { later { val d = composition { } } }` are checked
 - **THEN** the file typechecks
 
-#### Scenario: A composition function called through a function value
-- **WHEN** `compose fun Screen(start: (attached compose () -> Unit) -> Composition) { println("screen"); val d = start { } }` and `fun main() { val c = composition { Screen(composition) } }` run, or `runApp` is given likewise to a composable that calls it, headless
-- **THEN** stdout is `screen`, and the program ends with `panic: composition misuse: composition operation during a pass` and status 101

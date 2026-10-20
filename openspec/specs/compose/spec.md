@@ -340,8 +340,15 @@ Once its buffers have grown to fit the composition, a pass that creates no group
 - **WHEN** `compose fun Column(content: compose () -> Unit) { println("column"); content() }`, `compose fun Text(n: Int) { println("text $n") }` and `fun main() { val c = composition { Column { Text(1); Text(2) } } }` run
 - **THEN** stdout is `column`, `text 1` and `text 2`, one per line
 
+### Requirement: Root Content Is Called With the Force Bit
+When the compose runtime runs a composition's root and its content is composable content given to it by `composition`, `setContent` or `runApp`, it MUST call that content with the composition's composer and one change word holding only the force bit, so that the content runs even when it is a restartable composable whose scope is valid.
+
+#### Scenario: A composable function as root content
+- **WHEN** `compose fun Screen() { println("screen") }` and `fun main() { val c = composition(Screen); c.setContent(Screen) }` run with `--check-allocations`
+- **THEN** stdout is `screen` twice, and the exit status is 0
+
 ### Requirement: Compositions Are Owned Values
-`Composition` MUST be neither `Copy` nor `Clone`. Dropping a composition MUST dispose it: every group it holds is removed and released, with its kept and remembered values, and its root content is released. Dropping a composition while a pass runs MUST be the misuse `composition operation during a pass` (compose, "One Pass at a Time").
+`Composition` MUST be neither `Copy` nor `Clone`. It MUST be a library struct of `/prism/compose/runtime` over a private handle, so no program constructs or takes one apart, and its drop hook MUST dispose it: every group it holds is removed and released, with its kept and remembered values, and its root content is released. Dropping a composition while a pass runs MUST be the misuse `composition operation during a pass` (compose, "One Pass at a Time").
 
 #### Scenario: Dropping a composition frees everything
 - **WHEN** `compose fun Plus(onClick: escaping () -> Unit) { println("plus") }` and `fun main() { val c = composition { val a = 1; val b = 2; Plus(onClick = { println(a + b) }) } }` run with `--check-allocations`
@@ -350,6 +357,10 @@ Once its buffers have grown to fit the composition, a pass that creates no group
 #### Scenario: A composition is not copied
 - **WHEN** `fun main() { val c = composition { }; val d = c; val e = c }` is checked
 - **THEN** the borrow checker reports `E5001` for the second use of `c`
+
+#### Scenario: A composition cannot be forged
+- **WHEN** a file importing `/prism/compose/runtime` declares `fun forge(): Composition = Composition(1)` and `fun open(c: &Composition): Int { val (handle) = c; return handle }`
+- **THEN** the type checker emits `E4007` for the construction and for `handle`, each naming the private field `handle` of `prism/compose/runtime`
 
 ### Requirement: Setting the Content and Recomposing
 `c.setContent(content)` MUST replace the composition's root content and recompose its root. `c.recompose()` MUST recompose the composition's invalid scopes and return `true` when any ran, and `false` without running anything otherwise.
@@ -366,7 +377,7 @@ Once its buffers have grown to fit the composition, a pass that creates no group
 - **THEN** stdout is the line `root`, a `replaceable` line one level deeper for the content lambda, a `restart` line below it for `Badge`, the line `slot Int` below that, and the line `nodes`
 
 ### Requirement: Composition Operations Are Rejected in Composable Contexts
-Calling `composition`, `setContent` or `recompose` in a composable context MUST be rejected with `E4030` (`CompositionInComposable`), at the call, with a note that compositions are started and driven outside composition. In a non-composable closure written inside a composable, they MUST be accepted.
+Calling a function annotated `@DrivesComposition` (`composition`, `setContent` and `recompose` of `/prism/compose/runtime`, and `runApp` of `/prism/compose/ui`) in a composable context MUST be rejected with `E4030` (`CompositionInComposable`), at the call, with a note that compositions are started and driven outside composition. In a non-composable closure written inside a composable, such calls MUST be accepted.
 
 #### Scenario: Starting a composition inside a composable
 - **WHEN** `compose fun Screen(c: &Composition) { val d = composition { }; c.recompose() }` is checked
@@ -376,12 +387,34 @@ Calling `composition`, `setContent` or `recompose` in a composable context MUST 
 - **WHEN** `fun later(f: () -> Unit) { f() }` and `compose fun Screen() { later { val d = composition { } } }` are checked
 - **THEN** the file typechecks
 
+### Requirement: Composition Functions Reached Through Function Values
+A `@DrivesComposition` function called during a pass through a function value, which the type checker does not follow, MUST end the program with the misuse `composition operation during a pass`; `runApp` MUST do so before it opens any window.
+
+#### Scenario: A composition function called through a function value
+- **WHEN** `compose fun Screen(start: (attached compose () -> Unit) -> Composition) { println("screen"); val d = start { } }` and `fun main() { val c = composition { Screen(composition) } }` run, or `runApp` is given likewise to a composable that calls it, headless
+- **THEN** stdout is `screen`, and the program ends with `panic: composition misuse: composition operation during a pass` and status 101
+
 ### Requirement: A Composable Body Runs in One Group
 Each call of a composable MUST run its body in one group of the current composition: a restart group when the composable is skippable ("Every Restartable Composable Can Skip"), and a replaceable group otherwise. A call MUST NOT add a group of its own, so calls of one composable among the same siblings match their groups in order.
 
 #### Scenario: Calls of one composable match in order
 - **WHEN** `compose fun Leaf() { }`, `compose fun Tree(s: String) { Leaf(); Leaf() }` and `fun main() { val c = composition { Tree("a") }; print(c.dump()) }` run
 - **THEN** the dump shows, below the content lambda's group, a `replaceable` group for `Tree` holding two `restart` groups with the same key
+
+### Requirement: Composables With Explicit Groups
+A composable annotated `@ExplicitGroupsComposable` MUST start no group of its own, keep no parameter, never skip and be no restart scope: its body runs in its caller's group, at the call's position. Outside closures, its body MUST make no composable call inside a branch, a loop, the right operand of `&&` or `||`, the fallback of `?:`, a safe call or a `when` with composable tests, or after a `return` taken in one of those, and MUST NOT call `remember` or `key` (`E4029`).
+
+#### Scenario: A side effect adds no group
+- **WHEN** `compose fun Log(n: Int) { SideEffect { println("effect $n") } }` and `fun main() { val c = composition { Log(1) }; print(c.dump()) }` run with `--check-allocations`
+- **THEN** stdout is `effect 1`, then the dump, in which `Log`'s `restart` group holds one `slot Int` and no group
+
+#### Scenario: A side effect never skips
+- **WHEN** `compose fun Log(n: Int, tick: Int) { println("log $tick"); SideEffect { println("effect $n") } }`, `fun screen(t: Int): compose () -> Unit = { Log(1, t) }` and `fun main() { val c = composition(screen(1)); c.setContent(screen(2)) }` run with `--check-allocations`
+- **THEN** stdout is `log 1`, `effect 1`, `log 2` and `effect 1`: on the second pass the effect, which captures only an equal `Int`, is queued again, since `SideEffect` never skips
+
+#### Scenario: Grouped code in a body with explicit groups rejected
+- **WHEN** a library test module declares `compose fun Leaf() {}`, `@ExplicitGroupsComposable compose fun A(on: Bool) { if (on) { Leaf() } }` and `@ExplicitGroupsComposable compose fun B() { val n = remember { 1 } }`, or `@ExplicitGroupsComposable compose fun C(on: Bool) { if (on) { return }; Leaf() }`
+- **THEN** the type checker emits `E4029` at the call of `Leaf` in `A`, at `remember` in `B` and at the call of `Leaf` in `C`, saying that a composable with explicit groups composes only outside branches and loops, and remembers nothing
 
 ### Requirement: Group Keys Come From Declarations and Source Structure
 A group key MUST be a 64-bit hash of the enclosing top-level declaration's path and of the path in the source structure from it to the group: a composable body by its declaration path alone, a composable lambda by the call it is an argument of, and a region by its construct and its ordinal among sibling constructs of the same kind. Keys MUST NOT depend on byte offsets, lines or columns.
@@ -1003,7 +1036,7 @@ A restart scope recomposed alone MUST be called with the addresses and versions 
 - **THEN** stdout is `screen`, `show ab 0`, `screen` and `true`, one per line, and the exit status is 0: `Screen` recomposes first and removes the branch, whose slot is freed after the pass
 
 ### Requirement: The Compose Runtime Module
-The bundled module `/prism/compose/runtime` MUST declare `Composition`, `composition`, `setContent`, `recompose` and `dump`, `remember`, `key`, `RecomposeScope`, `currentRecomposeScope` and `invalidate`, and the state declarations `State`, `MutableState`, `mutableStateOf`, `value`, `update`, `WeakReference`, `weak`, `get` and `SideEffect`. A file MUST use them only after importing the module, and a file that does not import it MAY declare any of those names as its own.
+The bundled module `/prism/compose/runtime` MUST declare `Composition`, `composition`, `setContent`, `recompose` and `dump`, `remember`, `key`, `currentComposer`, `RecomposeScope`, `currentRecomposeScope` and `invalidate`, and the state declarations `State`, `MutableState`, `mutableStateOf`, `value`, `update`, `WeakReference`, `weak`, `get` and `SideEffect`. A file MUST use them only after importing the module, and a file that does not import it MAY declare any of those names as its own.
 
 #### Scenario: Compose primitives are imported
 - **WHEN** a file declaring `import /prism/compose/runtime` declares `compose fun Counter() { val id = remember { 7 }; val s = currentRecomposeScope() }` and `fun main() { val c = composition { Counter() } }`, and the same declarations are checked without the import
@@ -1065,7 +1098,7 @@ Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconcil
 - **The shape of a composed body** (D11). A keepability test, the restart group, the kept arguments, the skip test (no force, nothing changed, `skipping`) whose path drops the function arguments and skips to the group's end, then the body, its calls passing the composer and change words; the replaceable path shares the body's blocks through a `Bool` that the group's end switches on, so a body is never duplicated.
 - **`remember` and `key`** (D12, D13; `remember` revised by `owned-state` D6, below: it keeps any borrow-free value). `remember<T : Copy>` is an intrinsic composable using the current group's slots after the kept arguments, with up to three `Copy`, borrow-free keys (rule-typed), each compared with `changed`; on a miss or a changed key the calculation runs as the only code between the decision and `set_slot`, the seam `state-handles` uses. `key(value: Int) { }` starts a movable group whose data key is the `Int`. Rejected: `vararg` keys (none yet), `remember1`-style names, a group per `remember`, keys of other types through a hash (collisions would share state silently).
 - **Composable lambdas** (D14). A composable closure runs in a replaceable group keyed by where it is written and is never a restart scope, so an invalidation inside it reruns the nearest restart scope above, its author. Calls of composable function values pass the caller's composer and change words.
-- **Entering composition** (D15, D16). `composition(content)` returns an owned `Composition`, an intrinsic struct whose drop glue disposes it; `setContent`, `recompose` and `dump` take a shared receiver, so `val c = composition { }` works as in Kotlin. A body calling `composition` or `setContent` gets one root content adapter, `<symbol>#root-content`, owning the content and calling it with the composer and the force bit. `RecomposeScope` is a `Copy` intrinsic struct. Rejected: one global composition started by `runApp`, exposing composer words, `mut` receivers, user-defined destructors, a library struct with an `Int` field (forgeable, no drop).
+- **Entering composition** (D15, D16). `composition(content)` returns an owned `Composition`, an intrinsic struct whose drop glue disposes it; `setContent`, `recompose` and `dump` take a shared receiver, so `val c = composition { }` works as in Kotlin. A body calling `composition` or `setContent` gets one root content adapter, `<symbol>#root-content`, owning the content and calling it with the composer and the force bit. `RecomposeScope` is a `Copy` intrinsic struct. Rejected: one global composition started by `runApp`, exposing composer words, `mut` receivers, user-defined destructors, a library struct with an `Int` field (forgeable, no drop). (Since `compose-library-in-prism` D4 and D6, below, `Composition` and `RecomposeScope` are library structs over private words, made possible by field visibility and drop hooks, and the runtime calls composable content itself, so no body gets an adapter.)
 - **What is rejected** (D17). `E4030` for `composition`, `setContent` and `recompose` in a composable context (a handler written inside one is not), `E4008` for composable calls in default values (generators run in the caller, outside the callee's groups; composable defaults are a follow-up), `E4021`/`E4022` for `remember` values and keys and `E4004` for a non-`Int` `key`. Dropping a `Composition` during a pass stays a runtime misuse. `/prism/composer` stays public and unchanged as the protocol's hand-testing surface (D18).
 - **Generics and hot reload** (D21, D22). A generic composable is composed once, before instantiation: stability from bounds, keys from its declaration path, slot types substituted per instance, so instances of one generic among the same siblings share a key and a reorder recreates only their slots. Keys never depend on positions, so a reloaded body keeps the state of every group whose construct path did not change; a reloaded scope is recomposed through `skipping`, with no bit of its own.
 - **Costs** (D24). One linear walk per composable body before instances, a terminator scan for other bodies, one hash per group, one marker lookup per parameter type, one small restart body per skippable composable; nothing per instance or across files. `compile_timing.rs` times the transform as the `compose` stage on five shapes, all roughly linear; at 4096 skippable composables of four parameters it takes 38 ms, and `lower` and `clif` about 0.14 ms per composable. A skipped call costs one group start and end and one runtime call per stable parameter, and allocates nothing for `Copy` arguments and one-word handlers.
@@ -1134,3 +1167,10 @@ Decisions from `strong-skipping` (review item A1, agreed with the user on 2026-1
 Decisions from `drop-and-clone-hooks` (part L2 of the review's agreed item A4, planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the user decided in A4 that there is no `unsafe` layer for now, so hooks serve types wrapping runtime handles, not raw memory):
 
 - **Hooks run after the pass when the composition releases values, when the cell is freed for state values, and under the pass's rules inside it** (D15, following R1 and R2 of `owned-state`): a remembered value's hook runs as its slot is released, after `end_pass`, so it may write states (invalidating readers for the next pass) and start, recompose or dispose other compositions; a state's value runs its hook when its cell is freed, one pass after the state is dropped, the price of R2's guarantee that no handler meets a freed cell; a value dropped during a pass runs its hook there, where a state write is the run-time error `state written during composition`. Releases are a queue processed with no borrow of the runtime's state held, so a hook that runs a nested pass of another composition drains the queue with it (found safe in review). Rejected: deferring every hook run during a pass to its end (a hidden queue changing when locals die).
+
+Decisions from `compose-library-in-prism` (item 10c of the review round, the compose half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over one composer-access primitive with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **`@ExplicitGroupsComposable`: no group of its own, never skips** (D5). Such a body runs in its caller's group, as Compose's `@ExplicitGroupsComposable` or an inline composable does, so `currentRecomposeScope` returns its caller's scope and `SideEffect` never skips under strong skipping. A varying group structure in it would shift its caller's later groups, so a composable call in a branch, loop, `&&`/`||` right operand, `?:` fallback, safe call or composable `when`, or after a `return` in one of those (found at review), and any `remember` or `key`, is `E4029`. Library modules never reload, so no reload has to find the scopes of a body without a group. Rejected: `@NonRestartableComposable` semantics (a group per node per pass), allowing regions with their own groups (no library body needs them). Cost: one linear walk of each annotated library body.
+- **`Composition` is a `@Keeper` library struct** (D6). A private `handle`, a drop hook disposing it (so the backend's special case went), and `@DrivesComposition` on `composition`, `setContent` and `recompose`, which `E4030` reads instead of a list. The keeper is declared because it cannot be derived: hooked types like sessions keep nothing, and `runApp` takes attached content but keeps none past its call. Dropping a composition during a pass stays the runtime's misuse; a composition cannot be made during a pass nor moved into composition-owned storage, so in practice no drop hook runs during one (probed at review). Cost: one flag lookup per call and per local type, as the name tests.
+- **Root content called with the force bit** (D4). The runtime knows bit 0 of a composable's first change word, which `compose-runtime` D1 had kept out of it; only the root call of composable content uses it, and the code-generation spec already fixes that bit for every composable signature. The protocol's word content stays for hand-lowered code, and each root records which kind it holds.
+- **Compose's constant node key** (D9). `Node` and `LeafNode` start their node groups with the key 125, Compose's `nodeKey`, instead of a hash of the region and the call's ordinal. Equal keys match their old siblings in order and conditional code runs in groups of its own, so the n-th node group of a region matches the old n-th, as the ordinal keys did, and a kind change makes a new node (pinned at review with node groups whose kinds change). Rejected: passing the call's key to explicit-groups composables (a hidden parameter for no behaviour difference), a key per kind.

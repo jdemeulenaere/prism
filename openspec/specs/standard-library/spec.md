@@ -52,6 +52,13 @@ An external's machine signature MUST be the one a Prism function of the same sig
 - **WHEN** a library test module declares `external fun prism_rt_int_to_string(value: Int): String` and `public fun text(n: Int): String = prism_rt_int_to_string(n)`, and its unit is compiled
 - **THEN** the external is declared with an address parameter followed by a 64-bit integer and no result, which matches the runtime's entry, and `text` passes the address of its own result first
 
+### Requirement: Externals Take Composable Content
+An external MAY take a parameter of composable function type, passed by address and moved like any function value. `/prism/compose/runtime`'s `composition` and `setContent` and `/prism/compose/ui`'s `runApp` MUST give their content to the runtime this way, and the runtime MUST run such content as a composition's root (compose, "Root Content Is Called With the Force Bit").
+
+#### Scenario: Content given to an external
+- **WHEN** a library test module declares `private external fun prism_compose_start_composable(content: attached compose () -> Unit): Int` and `public fun start(content: attached compose () -> Unit): Int = prism_compose_start_composable(content)`, and its unit is compiled
+- **THEN** the external is declared with one address parameter and a 64-bit result, which matches the runtime's entry, and `start` passes it the address of its content, moved
+
 ### Requirement: External Declarations Are Restricted
 An external MUST NOT be `public`, generic, an extension or `compose`, MUST NOT have default values, and MUST NOT return a type holding a reference. Each such declaration MUST be rejected with `E4029` (`InvalidLibraryDeclaration`), naming the rule it breaks.
 
@@ -103,11 +110,33 @@ An intrinsic extension, and every extension that `/prism/core` declares on a bui
 - **THEN** the file typechecks, and the call resolves to the file's own extension
 
 ### Requirement: Library-Only Declarations Are Rejected in the Workspace
-A workspace file declaring anything `external` or `intrinsic` MUST be rejected in Phase 1 with `E3002` (`LibraryOnlyDeclaration`), at the modifier, with help saying that only the bundled library may declare them.
+A workspace file declaring anything `external` or `intrinsic`, or carrying an annotation, MUST be rejected in Phase 1 with `E3002` (`LibraryOnlyDeclaration`), at the modifier or the annotation's `@`, with help saying that only the bundled library may declare them.
 
 #### Scenario: External declarations outside the bundled library rejected
 - **WHEN** a workspace file declares `external fun f(): Int` or `public intrinsic fun g(): Int`
 - **THEN** `prism check` reports `E3002` at `external`, and at `intrinsic`
+
+#### Scenario: Annotations outside the bundled library rejected
+- **WHEN** a workspace file declares `@Keeper struct S(val n: Int)` or `@Stable fun f(): Int = 1`
+- **THEN** `prism check` reports `E3002` at the `@` of each
+
+### Requirement: Library Annotations
+The library MAY use three annotations: `@ExplicitGroupsComposable` on a `compose fun` (compose, "Composables With Explicit Groups"), `@Keeper` on a struct, and `@DrivesComposition` on a function that is not composable. A struct annotated `@Keeper` MUST be a keeper (references, "Weak Captures Keep Their States Borrowed"). Calling a `@DrivesComposition` function in a composable context MUST be `E4030`. The compiler MUST find these properties only through the annotations.
+
+#### Scenario: A keeper declared by its annotation
+- **WHEN** a library test module `/prism/test` declares `@Keeper public struct Holder(private val n: Int)` and `public fun hold(content: attached () -> Unit): Holder = Holder(1)`, and a workspace file importing it and `/prism/compose/runtime` declares `fun consume(s: MutableState<Int>) {}` and `fun main() { val s = mutableStateOf(0); val h = hold { println(s.value) }; consume(s); val k = h }`
+- **THEN** the borrow checker emits `E5005` at `s` in `consume(s)`, labelling the weak capture of `s` and the later use of `h`
+
+#### Scenario: A function that drives compositions
+- **WHEN** a library test module `/prism/test` declares `@DrivesComposition public fun drive(): Unit {}`, and a workspace file importing it declares `compose fun Screen() { drive() }` and `fun later() { drive() }`
+- **THEN** the type checker emits `E4030` at `drive` in `Screen`, and accepts `later`
+
+### Requirement: Annotation Rules in the Library
+In a library module, an annotation of another name, an annotation on a kind of declaration it does not apply to, an annotation written twice on one declaration, and `@DrivesComposition` on a composable MUST be rejected with `E4029`, naming the rule.
+
+#### Scenario: Misused annotations in the library
+- **WHEN** a library test module declares `@Stable public fun a(): Int = 1`, `@Keeper public fun b(): Int = 1`, `@ExplicitGroupsComposable public fun c(): Unit {}`, `@Keeper @Keeper public struct D(private val n: Int)` and `@DrivesComposition public compose fun E(): Unit {}`
+- **THEN** the type checker emits `E4029` for each of the five
 
 ### Requirement: The Core Module
 `/prism/core` MUST declare `print` and `println` as public intrinsics, and every member of the built-in types:
@@ -152,26 +181,33 @@ Every library module MUST pass `prism check` with no diagnostic and `prism fmt -
 - **THEN** it checks and formats every embedded module, compares every external with the runtime table, and compares the embedded module list with the files of `library/prism/`, failing on any difference
 
 ### Requirement: Intrinsic Structs
-An `intrinsic struct` MUST declare a type whose representation, glue and operations the compiler provides from its catalog, with the markers the catalog gives it. A library declaration naming no intrinsic struct of the catalog, or with other type parameters or markers, MUST be rejected with `E4029`. No program MUST construct a value of an intrinsic struct, read a field of one, or take one apart: only its intrinsic functions make and use its values.
+An `intrinsic struct` MUST declare a type whose representation, glue and operations the compiler provides from its catalog, with the catalog's markers. The catalog MUST hold `State`, `MutableState` and `WeakReference` only. A library declaration naming none of them, or with other type parameters or markers, MUST be `E4029`. No program MUST construct, read a field of or take apart a value of an intrinsic struct: only its intrinsic functions make and use its values.
 
 #### Scenario: An unknown intrinsic struct is rejected
-- **WHEN** a library test module declares `public intrinsic struct Window`
-- **THEN** the type checker emits `E4029`, saying that the compiler provides no intrinsic struct `Window`
+- **WHEN** a library test module declares `public intrinsic struct Window` or `public intrinsic struct Composition`
+- **THEN** the type checker emits `E4029` for each, saying that the compiler provides no intrinsic struct of that name
 
 #### Scenario: An intrinsic struct cannot be constructed
-- **WHEN** a workspace file declares `fun f() { val c = Composition() }` or `fun g(s: RecomposeScope) { val (h) = s }`
-- **THEN** the type checker rejects each, saying that `Composition` and `RecomposeScope` have no constructor and no fields
+- **WHEN** a workspace file declares `fun f() { val s = MutableState<Int>() }` or `fun g(r: WeakReference<MutableState<Int>>) { val (h) = r }`
+- **THEN** the type checker rejects each, saying that `MutableState` and `WeakReference` have no constructor and no fields
 
 ### Requirement: The Compose Module
-`/prism/compose/runtime` MUST declare, all as intrinsics, the structs `Composition` and `RecomposeScope : Copy`, the functions `composition`, `remember`, `key` and `currentRecomposeScope`, the members `setContent`, `recompose` and `dump` of `Composition`, and the member `invalidate` of `RecomposeScope`. `remember`, `key` and `currentRecomposeScope` MUST be composables.
+`/prism/compose/runtime` MUST declare the composables `remember`, `key` and `currentComposer` as intrinsics, and in Prism: `Composition`, a `@Keeper` struct with a private handle and a drop hook disposing it; `composition`, `setContent` and `recompose`, annotated `@DrivesComposition`; `dump`; `RecomposeScope : Copy` over a private word, with `invalidate`; and `currentRecomposeScope`, annotated `@ExplicitGroupsComposable`.
 
 #### Scenario: Signatures of the compose module
 - **WHEN** `prism abi` prints the ABI of `/prism/compose/runtime`
-- **THEN** it holds `public intrinsic fun composition(content: attached compose () -> Unit): Composition`, `public intrinsic fun Composition.setContent(content: attached compose () -> Unit)`, `public intrinsic fun Composition.recompose(): Bool`, `public intrinsic fun Composition.dump(): String`, `public intrinsic compose fun <T> remember(calculation: () -> T): T`, `public intrinsic compose fun key(value: Int, content: compose () -> Unit)`, `public intrinsic compose fun currentRecomposeScope(): RecomposeScope` and `public intrinsic fun RecomposeScope.invalidate()`
+- **THEN** it holds `@Keeper public struct Composition` with the private field `handle: Int`, `@DrivesComposition public fun composition(content: attached compose () -> Unit): Composition`, `@DrivesComposition public fun Composition.setContent(content: attached compose () -> Unit): Unit`, `@DrivesComposition public fun Composition.recompose(): Bool`, `public fun Composition.dump(): String`, `public intrinsic compose fun <T> remember(calculation: () -> T): T`, `public intrinsic compose fun key(value: Int, content: compose () -> Unit)`, `public intrinsic compose fun currentComposer(): Int`, `public struct RecomposeScope : Copy` with the private field `word: Int`, `public compose fun currentRecomposeScope(): RecomposeScope` and `public fun RecomposeScope.invalidate(): Unit`
 
 #### Scenario: Members of a composition
-- **WHEN** a file declares `import /prism/compose/runtime` and `fun Composition.recompose(): Bool = false`
-- **THEN** the type checker emits `E4010`, saying that the member of `/prism/compose/runtime` always takes precedence
+- **WHEN** a file declares `import /prism/compose/runtime`, `import /prism/core`, `fun Composition.recompose(): Bool = false` and `fun main() { val c = composition { }; println(c.recompose()) }`, and runs with `--check-allocations`
+- **THEN** stdout is `false`: the file's own extension shadows the imported one, as for any imported extension
+
+### Requirement: The Current Composer
+`/prism/compose/runtime` MUST declare `public intrinsic compose fun currentComposer(): Int`, Compose's `currentComposer`, which gives the composer word of the body running it, the word the protocol functions of `/prism/composer` take. Its call MUST add no group and make no region need one.
+
+#### Scenario: Protocol calls inside a composable
+- **WHEN** `compose fun Cell(n: Int) { val k = currentComposer(); val v = rememberInt(k, 7) { println("computed"); 42 }; println(v) }` and `fun main() { val n = mutableStateOf(1); val c = composition { Cell(n.value) }; n.value = 2; c.recompose() }` run with `import /prism/composer`, `import /prism/compose/runtime` and `import /prism/core`, under `--check-allocations`
+- **THEN** stdout is `computed`, `42` and `42`, one per line: the word slot was kept in `Cell`'s group across the passes
 
 ### Requirement: Writable Intrinsic Properties
 An `intrinsic var` property MUST be an intrinsic extension property that can also be assigned, as the catalog lowers it. It MUST be checked against the catalog like an `intrinsic val`, and declaring as `var` a property the catalog lists as read-only, or the reverse, MUST be `E4029`.
@@ -188,7 +224,7 @@ An `intrinsic var` property MUST be an intrinsic extension property that can als
 - **THEN** the type checker emits `E4003`, saying that a `State<Int>` is read-only, with help suggesting a `&MutableState<Int>` parameter
 
 ### Requirement: The UI Modules Are Bundled
-The compiler MUST ship `/prism/compose/ui`, `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3` as bundled modules, all files of the package `prism.compose` beside `/prism/compose/runtime`. Their files MUST be checked, formatted and compiled by the library tests like every bundled module, and their externals MUST match `prism-ui`'s entry points.
+The compiler MUST ship `/prism/compose/ui`, `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3` as bundled modules, all files of the package `prism.compose` beside `/prism/compose/runtime`. Their files MUST be checked, formatted and compiled by the library tests like every bundled module, and their externals MUST match `prism-ui`'s and `prism-compose`'s entry points.
 
 #### Scenario: The UI modules' externals match the entry points
 - **WHEN** `library_tests.rs` checks and compiles every bundled module
@@ -196,27 +232,22 @@ The compiler MUST ship `/prism/compose/ui`, `/prism/compose/foundation`, `/prism
 
 #### Scenario: The UI modules are not in the prelude
 - **WHEN** `prism check --explain-cache` runs on a file without imports, and then on the same file with `import /prism/compose/material3`
-- **THEN** the first lists no file of `prism/compose/`, and the second lists `prism/compose/ui.prism`, `prism/compose/foundation.prism`, `prism/compose/layout.prism` and `prism/compose/material3.prism`, and not `prism/compose/runtime.prism`
+- **THEN** the first lists no file of `prism/compose/`, and the second lists `prism/compose/ui.prism`, `prism/compose/foundation.prism`, `prism/compose/layout.prism`, `prism/compose/material3.prism` and `prism/compose/runtime.prism`, which the UI base module imports for `currentComposer`, and not `prism/composer.prism`
 
-### Requirement: The UI Intrinsics
-The intrinsic catalog MUST hold, as intrinsics of `/prism/compose/ui`:
-- the one-word structs `NodeId : Copy`, `package`, and `HandlerId : Copy`, public, whose equality is the runtime entry `prism_ui_handlers_equal`;
-- the `package` composables `Node(kind: Int, update: (NodeId) -> Unit, content: compose () -> Unit)` and `LeafNode(kind: Int, update: (NodeId) -> Unit)`;
-- the function `runApp`.
+### Requirement: The UI Handles and Node Functions Are Written in Prism
+`/prism/compose/ui` MUST declare, in Prism and with no intrinsic: `NodeId : Copy`, with `package` visibility, and `HandlerId : Copy`, public, each over a `package` word; `HandlerId`'s `equals` operator over `prism_ui_handlers_equal`; the `package` composables `Node` and `LeafNode`, annotated `@ExplicitGroupsComposable`, which start node groups through the protocol; and `runApp`, annotated `@DrivesComposition`.
 
-A declaration of one of them with another signature or in another module MUST be `E4029`.
-
-#### Scenario: The public signature of runApp
+#### Scenario: The public UI declarations
 - **WHEN** `prism abi` prints the ABI of `/prism/compose/ui`
-- **THEN** it holds the public intrinsic function `runApp` with the parameters `title: &String`, `width: Int` and `height: Int`, each with a default, and `content: escaping compose () -> Unit`, the public intrinsic struct `HandlerId : Copy`, and the public extension properties `val Int.dp: Dp` and `val Int.sp: TextUnit`, and none of `NodeId`, `Node` and `LeafNode`, which are not public
-
-#### Scenario: A UI intrinsic in another library module
-- **WHEN** a library test module declares `private intrinsic compose fun LeafNode(kind: Int, update: (Int) -> Unit)`
-- **THEN** the type checker emits `E4029`, saying that the compiler provides `LeafNode` only in `/prism/compose/ui`
+- **THEN** it holds `@DrivesComposition public fun runApp` with the parameters `title: &String`, `width: Int` and `height: Int`, each with a default, and `content: attached compose () -> Unit`, the public struct `HandlerId : Copy` with its `package` field `word`, and `public operator fun HandlerId.equals(other: &HandlerId): Bool`, and none of `NodeId`, `Node` and `LeafNode`, which are not public
 
 #### Scenario: Calling runApp with its defaults
 - **WHEN** `fun main() { runApp { } }` runs with `import /prism/compose/ui` under `prism run --headless` with the script `dump`
 - **THEN** stdout is `window 800x600`: `width` and `height` took their defaults
+
+#### Scenario: A handler id cannot be made by a program
+- **WHEN** a file importing `/prism/compose/ui` declares `fun forge(): HandlerId = HandlerId(1)` and `fun word(h: HandlerId): Int = h.word`
+- **THEN** the type checker emits `E4007` for the construction and for `word`, each naming the `package` field `word` of `prism/compose/ui`
 
 ### Requirement: Intrinsic Struct Markers Are Unconditional
 The markers the catalog gives a generic intrinsic struct MUST hold for every type argument, unlike the conditional markers of declared generic structs: `WeakReference<MutableState<String>>` is `Copy`, and `MutableState<Int>` is not, although `Int` is.
@@ -307,11 +338,11 @@ A scenario of these specifications whose program uses a library function, extens
 - **THEN** `library/prism/collections.prism` declares `public fun <T> listOf(vararg elements: T): List<T> = elements` and passes its checks, the intrinsic catalog has no `listOf`, and the body of `f` is a call of `prism/collections::listOf<Int>` whose argument is a call of `builtin varargList<Int>` with the literals `1` and `2`
 
 ### Requirement: The State Declarations of the Compose Runtime Module
-`/prism/compose/runtime` MUST declare, as intrinsics, the structs `State<T>`, `MutableState<T>` and `WeakReference<T> : Copy`, the function `mutableStateOf`, the property `value` of `State<T>` and the writable property `value` of `MutableState<T>`, the member `update` of `MutableState<T>`, the capture functions `weak` of `State<T>` and of `MutableState<T>`, the member `get` of `WeakReference<T>`, and the composable `SideEffect`.
+`/prism/compose/runtime` MUST declare, as intrinsics, the structs `State<T>`, `MutableState<T>` and `WeakReference<T> : Copy`, the function `mutableStateOf`, the property `value` of `State<T>` and the writable property `value` of `MutableState<T>`, the member `update` of `MutableState<T>`, the capture functions `weak` of `State<T>` and of `MutableState<T>`, and the member `get` of `WeakReference<T>`; and, in Prism, the composable `SideEffect`, annotated `@ExplicitGroupsComposable`.
 
 #### Scenario: Signatures of the state declarations
 - **WHEN** `prism abi` prints the ABI of `/prism/compose/runtime`
-- **THEN** it holds `public intrinsic struct State<T>`, `public intrinsic struct MutableState<T>`, `public intrinsic struct WeakReference<T> : Copy`, `public intrinsic fun <T> mutableStateOf(value: T): MutableState<T>`, `public intrinsic val <T> State<T>.value: T`, `public intrinsic var <T> MutableState<T>.value: T`, `public intrinsic fun <T> MutableState<T>.update(transform: (T) -> T)`, `public intrinsic capture fun <T> State<T>.weak(): WeakReference<State<T>>`, `public intrinsic capture fun <T> MutableState<T>.weak(): WeakReference<MutableState<T>>`, `public intrinsic fun <T> WeakReference<T>.get(): (&T)?` and `public intrinsic compose fun SideEffect(effect: attached () -> Unit)`
+- **THEN** it holds `public intrinsic struct State<T>`, `public intrinsic struct MutableState<T>`, `public intrinsic struct WeakReference<T> : Copy`, `public intrinsic fun <T> mutableStateOf(value: T): MutableState<T>`, `public intrinsic val <T> State<T>.value: T`, `public intrinsic var <T> MutableState<T>.value: T`, `public intrinsic fun <T> MutableState<T>.update(transform: (T) -> T)`, `public intrinsic capture fun <T> State<T>.weak(): WeakReference<State<T>>`, `public intrinsic capture fun <T> MutableState<T>.weak(): WeakReference<MutableState<T>>`, `public intrinsic fun <T> WeakReference<T>.get(): (&T)?` and `public compose fun SideEffect(effect: attached () -> Unit): Unit`
 
 #### Scenario: State declarations are imported
 - **WHEN** a file declaring `import /prism/compose/runtime` declares `compose fun Counter() { val count = remember { mutableStateOf(0) }; SideEffect { } }` and `public fun counter(): MutableState<Int> = mutableStateOf(0)`
@@ -384,7 +415,7 @@ Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled w
 Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by user direction to follow Jetpack Compose's APIs and modules, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
 
 - **The toolkit modules** (D21, user direction). `/prism/compose/ui`, `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3` are files of the package directory `prism/compose/` beside `/prism/compose/runtime`, imported explicitly, importing each other with sibling imports (`import ui`) in one direction, as Compose's artifacts depend: `ui` on nothing of the toolkit, `foundation` and `layout` on `ui`, `material3` on all three. A program that imports none pays nothing; one importing `material3` loads four cached ABIs. Rejected: one `/prism/ui`, toolkit modules in the prelude.
-- **The UI intrinsics** (D3, D7, D15, D23). `NodeId` (`package`) and `HandlerId` (public, whose catalog equality entry is `prism_ui_handlers_equal`) are one-word intrinsic structs; `Node` and `LeafNode` are `package` intrinsic composables; `runApp` is an intrinsic so that `E4030` names it and its call builds a root content adapter, its defaults being ordinary generators in `/prism/compose/ui` that `BuiltinFunction::declaration_with_defaults` names; `Int.dp` and `Int.sp` are intrinsic properties lowered as constructions (since `core-library-in-prism` D7, below, Prism extension properties with getters). Setters are `package` externals, so only the toolkit's files reach them. `ModifierElement` and `HandlerId` stay public because programs read chains, until fields have visibility.
+- **The UI intrinsics** (D3, D7, D15, D23). `NodeId` (`package`) and `HandlerId` (public, whose catalog equality entry is `prism_ui_handlers_equal`) are one-word intrinsic structs; `Node` and `LeafNode` are `package` intrinsic composables; `runApp` is an intrinsic so that `E4030` names it and its call builds a root content adapter, its defaults being ordinary generators in `/prism/compose/ui` that `BuiltinFunction::declaration_with_defaults` names; `Int.dp` and `Int.sp` are intrinsic properties lowered as constructions (since `core-library-in-prism` D7, below, Prism extension properties with getters). Setters are `package` externals, so only the toolkit's files reach them. `ModifierElement` and `HandlerId` stay public because programs read chains, until fields have visibility. (Since `compose-library-in-prism` D8 to D10, below, `NodeId`, `HandlerId`, `Node`, `LeafNode` and `runApp` are written in Prism.)
 
 Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
@@ -422,3 +453,12 @@ Decisions from `core-library-in-prism` (the core half of the review's agreed ite
 - **`print` and `println` stay rule-typed intrinsics** (D8; settles `vararg` D11 for them). Kotlin's `println(message: Any?)` needs `Any`, traits or overloading. Rejected: `println(message: &String)` (`println(1)` would stop compiling), a Prism `print` the rule calls with a template (an allocation per printed scalar), and a homogeneous `vararg`.
 - **The catalog's core part has twelve entries** (D9): `print`, `println`, `String.length`, and `size`, `contains`, `indexOf`, `add`, `insert`, `removeAt`, `removeLast`, `reverse` and `clear` of `List<T>`, all of `/prism/core`. No type-checker path tests a member's spelling to decide that a call is built in, apart from the built-in members of every type (`clone()`, `unbox()`), the conventions (operator names, `toString()` for text forms) and the compose names.
 - **The compose half's starting point** (D10). The change's design records a classification of every compose intrinsic, with a recommendation and what each needs (field visibility, the composer primitive, call-site groups for `remember` and `key`, state flags as catalog data rather than names); `compose-library-in-prism` starts from it.
+
+Decisions from `compose-library-in-prism` (item 10c of the review round, the compose half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over one composer-access primitive with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **What moves and what stays** (D1, D11; challenges `core-library-in-prism` D10). `Composition`, `composition`, `setContent`, `recompose`, `dump`, `RecomposeScope`, `invalidate`, `currentRecomposeScope`, `SideEffect`, `NodeId`, `HandlerId`, `Node`, `LeafNode` and `runApp` are Prism over runtime externals; `Node` and `LeafNode` moved too, since Compose's `ComposeNode` is library code over `currentComposer`. `remember` (keys need overloading; its result is a copy or a borrow of the slot, which no signature states without lifetimes), `key` (Compose's compiler treats it too), `currentComposer` and the state core with `WeakReference` stay intrinsic: an external cannot be generic and a cell is sized by `T`'s record, which needs `unsafe` or generic externals. The intrinsic struct catalog went from 7 entries to 3, the compose function catalog from 19 to 10, and `IntrinsicStruct::of` is the only comparison of a library declaration's module and name.
+- **Library annotations as the declared markers** (D2). Name tests became properties written on the declarations, in Kotlin's `@Name` syntax: `@ExplicitGroupsComposable` (Compose's name), `@Keeper` and `@DrivesComposition`. They are library-only (`E3002` in the workspace), and misuse in the library is `E4029` (D16: no new code). Rejected: contextual modifiers (`keeper struct`: modifiers carry language semantics written in user code, these are library metadata), a catalog of declaration paths (a name test moved to a table), annotations for workspace code now (each needs its own semantics; follow-up). Cost: one token test per declaration start and a name match per annotation.
+- **`currentComposer()` in `/prism/compose/runtime`** (D3, placement revised at implementation). The one composer-access primitive, Compose's `currentComposer`, lowered to a copy of the body's `$composer`. It is a function because Prism has no top-level computed properties. Proposed in `/prism/composer`, it moved to the runtime module because importing the protocol's twenty wrappers into every compose program cost about 11 % of a cold and warm startup (1.0 ms and 0.19 ms); a module of its own for one name was rejected.
+- **Externals take composable content** (D4). `prism_compose_start_composable`, `prism_compose_set_composable` and `prism_ui_run_app` take `compose () -> Unit` content by address, and the runtime calls it with the composer and the force bit, as Compose's `invokeComposable` does, so the transform's root content adapters went. Rejected: an `invokeComposable` intrinsic inside a word closure (an `attached` value handed on inside another closure, a path `E5010` does not cover), keeping adapters for library callers.
+- **Handles over `package` words** (D8). `NodeId` (`package`) and `HandlerId` (public) are `Copy` structs over a `package` word, so the toolkit modules of `prism.compose` build and read them and no program can (`E1008` reserves the package); `HandlerId.equals` replaces the catalog's equality entry, and the UI externals take `Int` words, so the calls into `prism-ui` are unchanged. Rejected: `private` words behind `package` wrappers (a call per setter per node per pass), `NodeId` parameters read through a pointer in `prism-ui`.
+- **Function values escape the static `E4030`** (D6, at review). A `@DrivesComposition` function named as a value and called during a pass meets the runtime's misuse `composition operation during a pass`; `runApp` checks for a pass before it makes its host, so no window opens. Closing it statically would need a flow analysis of function values, against compile speed.

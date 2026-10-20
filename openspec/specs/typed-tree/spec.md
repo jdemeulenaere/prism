@@ -412,11 +412,22 @@ A read of a `Copy` `s.value` MUST be a call of the built-in state read with a sh
 - **THEN** the receiver of `add` is a mutable receiver borrow of a state place over a shared receiver borrow of `*s`
 
 ### Requirement: State Built-Ins Are Identified
-Calls of `mutableStateOf`, `update`, `weak`, `get` and `SideEffect` MUST be calls of their built-ins, with their declared type arguments, the value type first for `mutableStateOf` and `update`.
+Calls of `mutableStateOf`, `update`, `weak` and `get` MUST be calls of their built-ins, with their declared type arguments, the value type first for `mutableStateOf` and `update`. A call of `SideEffect` MUST be a call of its declaration.
 
 #### Scenario: An update call
 - **WHEN** `fun f(s: &MutableState<List<Int>>) { s.update { v -> v } }` is checked and its typed tree dumped
 - **THEN** the call is a call of the built-in `update` with type argument `List<Int>`, a shared receiver borrow of `*s` as its receiver and the closure as its argument
+
+#### Scenario: A side effect in the tree
+- **WHEN** `compose fun C() { SideEffect { } }` is checked and its typed tree dumped
+- **THEN** the call is a call of the declaration `prism/compose/runtime::SideEffect` with the closure as its argument
+
+### Requirement: The Current Composer Is a Built-In Call
+A call of `currentComposer()` of `/prism/compose/runtime` MUST be a call of its built-in, of type `Int`, with no argument.
+
+#### Scenario: The current composer in the tree
+- **WHEN** `compose fun C(): Int = currentComposer()` is checked with `import /prism/compose/runtime` and its typed tree dumped
+- **THEN** the body is a call of the built-in `currentComposer` of type `Int`
 
 ### Requirement: Weak Captures Are Recorded
 A capture that a closure takes through a weak handle MUST be recorded with the mode weak, and the closure MUST record as its reason the `attached` parameter its value is given to. `prism dump-typed-tree` MUST print such a capture as `weak` followed by its path.
@@ -553,3 +564,7 @@ Decisions from `path-captures` (review item A2b, agreed with the user on 2026-10
 Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
 
 - **Operator uses are marked calls; equality stays a node** (D14). An operator use is the call of its function, normalized as an extension call and marked with the operator spelled; an ordering use compares the call with `0`; an accessor place is the dereference of a temporary holding `get`'s call, which borrows reborrow; a cursor loop records its protocol. `==` stays an equality node, since which comparison runs is the code generator's.
+
+Decisions from `compose-library-in-prism` (item 10c of the review round, the compose half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over one composer-access primitive with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **`currentComposer` is a built-in; the moved declarations are not** (D3, D13). `currentComposer()` is a call of its built-in, of type `Int`; `SideEffect`, `composition` and the other declarations written in Prism are calls of their declaration paths, and typed-tree dumps of files importing `/prism/compose/runtime` list `Composition` and `RecomposeScope` with their fields, as for any imported struct.

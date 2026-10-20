@@ -594,6 +594,31 @@ After borrow checking, the MIR of every file MUST be composed. A composable body
 - **WHEN** `compose fun Column(content: compose () -> Unit) { content() }` and `compose fun Screen() { Column { } }` are composed
 - **THEN** the body `main::Screen#closure0` takes a composer and a change word, and `Column`'s call of `content` passes them
 
+### Requirement: The Current Composer Is the Body's Composer Argument
+In composed MIR, a call of `currentComposer()` MUST be an assignment of a copy of the body's `$composer` argument, with no call and no group.
+
+#### Scenario: The composer read in a composable
+- **WHEN** `prism dump-mir --composed` runs on `compose fun C(): Int = currentComposer()` with `import /prism/compose/runtime`
+- **THEN** the body of `main::C` assigns a copy of `$composer` to its return place, and calls no composer operation for it
+
+### Requirement: Bodies With Explicit Groups Start No Group
+In composed MIR, the body of a composable annotated `@ExplicitGroupsComposable` MUST still take the composer and change words of every composable, and MUST start and end no group, keep no parameter, test no skipping and have no restart closure. Its composable calls MUST pass its composer and the change words it derives as in any composable body.
+
+#### Scenario: A node function's body
+- **WHEN** `prism dump-mir --composed` runs on a library test module `/prism/compose/test` that declares `@ExplicitGroupsComposable compose fun L(kind: Int, update: (Int) -> Unit) { update(kind) }`
+- **THEN** the body of `L` takes `$composer` and one change word, calls the update closure, and calls no `composer start_group`, `composer start_restart_group` or `composer end_group`, and the dump has no `L#restart` body
+
+### Requirement: Library Composables Are Called Like Any Function
+Calls of `composition`, `setContent`, `recompose`, `dump`, `invalidate`, `currentRecomposeScope`, `SideEffect`, `Node`, `LeafNode` and `runApp` MUST lower as calls of their declarations, composable ones with the caller's composer and change words, and no body MUST get a root content adapter.
+
+#### Scenario: A composition started in MIR
+- **WHEN** `compose fun Hello() {}` and `fun main() { val c = composition { Hello() } }` are composed
+- **THEN** `prism dump-mir --composed` shows `main` calling `prism/compose/runtime::composition` with the content lambda, moved, and no `main::main#root-content` body
+
+#### Scenario: A toolkit composable calls its node function
+- **WHEN** `prism dump-mir --composed` runs on a library test module `/prism/compose/test`, of the package `prism.compose`, that imports `ui` and declares `compose fun T(text: &String) { LeafNode(4) { node -> } }`
+- **THEN** the body of `T` calls `prism/compose/ui::LeafNode` with `const 4`, the update closure, its composer and a change word, inside its own body group, and starts no node group itself
+
 ### Requirement: Skippable Bodies Keep, Compare and Skip
 A skippable body MUST take its replaceable path when a version argument is `0`, keep each argument in a slot of its restart group (a borrow as its address and version, in a slot of its reference type), compare it when its bits are uncertain, test whether it may skip, and on skipping drop what it owns and go to its group's end. It MUST end its restart group with its restart closure, `<symbol>#restart`, which captures nothing, reads the kept arguments and calls the composable with the force bit.
 
@@ -604,13 +629,6 @@ A skippable body MUST take its replaceable path when a version argument is `0`, 
 #### Scenario: A skippable body keeping a borrow
 - **WHEN** `compose fun Show(s: &String) { println(s) }` is composed
 - **THEN** `prism dump-mir --composed` shows `main::Show` test `$version0` against `0` before its restart group, with a path that starts a replaceable group, keep `s` and `$version0` in a slot of type `&String`, and the body `main::Show#restart` read kept slot 0 as a `&String` and its version and call `main::Show` with both and the force bit
-
-### Requirement: Root Content Adapters
-A body that calls `composition` or `setContent` MUST have one adapter closure, `<symbol>#root-content`, owning the content function value and calling it, when the runtime calls the adapter with a composer, with that composer and the force bit. Each such call MUST build its adapter from the content it is given.
-
-#### Scenario: The adapter of a composition
-- **WHEN** `compose fun Hello() {}` and `fun main() { val c = composition { Hello() } }` are composed
-- **THEN** `prism dump-mir --composed` shows `main` building the closure value `main::main#root-content` from the content lambda, moved, and starting a composition with it
 
 ### Requirement: Composed MIR Dump
 `prism dump-mir --composed <file.prism>` MUST print the composed MIR of the file as deterministic text, its composable bodies marked composed and the skippable ones marked skippable, each group key as 16 hexadecimal digits followed by its construct. With errors of any stage up to borrow checking it MUST report them and print no MIR.
@@ -638,25 +656,11 @@ Every state operation MUST lower to `Call` terminators of state operations, each
 - **THEN** the body calls `state take<Int>`, calls the closure value with the taken value moved, and calls `state put<Int>` with the result moved
 
 ### Requirement: Composed MIR Marks Remember Windows and Side Effects
-In composed MIR, the calculation of a `remember` that misses its slot MUST run between a `begin_remember` and an `end_remember` composer operation, the end after the result's slot is written, and `remember` of a non-`Copy` type MUST give a shared reference to the slot's value. A call of `SideEffect` MUST be a `side_effect` composer operation taking the effect moved.
+In composed MIR, the calculation of a `remember` that misses its slot MUST run between a `begin_remember` and an `end_remember` composer operation, the end after the result's slot is written, and `remember` of a non-`Copy` type MUST give a shared reference to the slot's value. A call of `SideEffect` MUST be a call of its declaration, which queues the effect through the compose runtime.
 
 #### Scenario: Composed remember of a state
 - **WHEN** `prism dump-mir --composed` runs on `compose fun C() { val s = remember { mutableStateOf(0) } }`
 - **THEN** the missing path calls `composer begin_remember`, then the calculation, then `composer set_slot<MutableState<Int>>`, then `composer end_remember`, and `s` holds a shared reference to the slot's `MutableState<Int>` on both paths
-
-### Requirement: Node Calls Start Node Groups
-In composed MIR, a call of the intrinsic composable `Node` or `LeafNode` MUST start a node group with its kind, keyed by its position among the node calls of its region. It MUST call `update` with the node the group returns, call `content` (for `Node`) with the caller's composer, and end the group. A node call MUST add no other group.
-
-#### Scenario: A toolkit composable starts a node group
-- **WHEN** `prism dump-mir --composed` runs on a library test module of `/prism/compose/ui` that declares `compose fun T(text: &String) { LeafNode(4) { node -> } }`
-- **THEN** the body of `T` shows `composer start_node_group` with a key of 16 hexadecimal digits followed by `/* node 0 */` and the kind `const 4`, a call of the update closure with its result, and `composer end_group` before its body group ends
-
-### Requirement: runApp Gets a Root Content Adapter
-A body that calls `runApp` MUST have one root content adapter closure, `<symbol>#root-content`, built from the content it is given and passed to the app, as for `composition`.
-
-#### Scenario: The adapter of an app
-- **WHEN** `prism dump-mir --composed` runs on `fun main() { runApp { } }` with `import /prism/compose/ui`
-- **THEN** `main` builds the closure value `main::main#root-content` from the content lambda, moved, and passes it to the call that runs the app
 
 ### Requirement: Flags Outside Composition End With Their Scope
 A borrow of a state's value that holds the state's flag (compose, "Borrows of a State's Value Outside Composition Hold Its Flag") MUST lower to a call taking the flag, shared or exclusive, before the borrow, and a call ending it where the temporary scope of its statement ends, or where the block of the binding it initializes ends, on every path out of that scope.
@@ -843,8 +847,8 @@ Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled w
 
 Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by user direction to follow Jetpack Compose's APIs and modules, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
 
-- **Node calls start node groups** (D3). `Node(kind, update, content)` lowers in the transform to `start_node_group` with a key chained from the parent region's key and the call's ordinal among the region's node calls, a call of `update` with the returned node, a call of `content`, and `end_group`; `LeafNode` passes no content lambda, which would cost a group per leaf per pass. Two intrinsics replace Compose's two `ComposeNode` overloads, since Prism has no overloading. Cost: constant per call, one key hash.
-- **`runApp` gets a root content adapter** (D15), built from the content where it is called, as `composition` does.
+- **Node calls start node groups** (D3). `Node(kind, update, content)` lowers in the transform to `start_node_group` with a key chained from the parent region's key and the call's ordinal among the region's node calls, a call of `update` with the returned node, a call of `content`, and `end_group`; `LeafNode` passes no content lambda, which would cost a group per leaf per pass. Two intrinsics replace Compose's two `ComposeNode` overloads, since Prism has no overloading. Cost: constant per call, one key hash. (Since `compose-library-in-prism` D9, below, `Node` and `LeafNode` are Prism functions with explicit groups and Compose's constant node key.)
+- **`runApp` gets a root content adapter** (D15), built from the content where it is called, as `composition` does. (Since `compose-library-in-prism` D4, below, no body gets one: the runtime calls composable content with the force bit.)
 - **Unit properties are constructions** (D7; superseded by `core-library-in-prism` D7: `n.dp` and `n.sp` are calls of Prism getters, as every extension property read is). `n.dp` and `n.sp` lower to the aggregates `Dp(n)` and `TextUnit(n)`, so a unit costs a constructor and no call.
 - **Default generators borrow only what their default reads** (D26, review). A generator used to borrow the context, the receiver and every earlier argument, so `Modifier.padding(16.dp)` borrowed 27 arguments for its six defaults and the borrow check of a screen of toolkit calls cost about 0.17 ms per call. Its inputs are now decided syntactically (`prism_ast::default_inputs`): an earlier parameter or the context when its name appears, the receiver and the context when `this` or another name appears (a member of the implicit receiver, or a call needing the context), and every input for blocks, closures, `when` and jumps, which bind names or hold statements; a parameter whose type may hold a borrow (a reference, a function type, a type parameter) still takes every input, so the elision rules tie its result as before. Phase 1 stores the answer in the ABI and the checker computes it for the file's own functions, so both sides of a call agree. No program is accepted or rejected differently and no diagnostic changes; the borrow check fell to 0.07 ms per call. Rejected: resolving reads from the typed tree (another file sees only the ABI), skipping loans in the borrow checker alone (every later stage would keep the arguments), inlining constant defaults (a default may call the callee's private declarations).
 - **One capture local per captured path** (D7 of `path-captures`). A closure's capture local has the path's type and is named by its path (`p.x`), a place chain in its body maps onto the captured prefix's local and the rest of the chain in one walk, and the enclosing body builds the closure value from each path's place: a borrow of a borrowed path, a copy of a copied one, a move only of a whole binding. The borrow checker needs no new rule, since loans, overlap and capture-mode inference already work on places. Rejected: one capture local per binding with a partial environment, which MIR's types cannot express.
@@ -864,3 +868,10 @@ Decisions from `strong-skipping` (review item A1, agreed with the user on 2026-1
 Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
 
 - **Cursor loops and compound assignments lower to existing shapes** (D14). A cursor loop is a header calling `hasNext` and a body calling `next`, the cursor dropped on exit; a compound assignment through an operator function evaluates its target once. No new MIR form, so the borrow checker and the backend need nothing new.
+
+Decisions from `compose-library-in-prism` (item 10c of the review round, the compose half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over one composer-access primitive with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **No root content adapters** (D4). The runtime calls composable content with the composer and the force bit, so `BodyOwner::RootContent` and `<symbol>#root-content` went, and the transform rewrites composable bodies only. Cost: less than before, no adapter per caller and no scan of non-composable bodies.
+- **The current composer is a copy** (D3). `currentComposer()` lowers to a copy of `$composer`: no call, no group, and no region needs a group because of it.
+- **Explicit-groups bodies** (D5). The annotation reaches the transform as `Body::explicit_groups` (encoded by the codec, dumped as `compose explicit_groups fun`); such a body gets no body group, keep, skipping test or restart closure, and its calls pass its composer and change words as usual.
+- **Library composables called as declarations** (D13). The `BuiltinFunction` and `ComposerOperation` variants of the moved declarations were removed and their codec tags retired, never reused; every cache entry is keyed by the compiler identity, so the format version stayed. Dumps show calls of `prism/compose/runtime::composition`, `Node` and `LeafNode` instead, and the group key of a composable lambda given to a library function hashes the callee's declaration path.
