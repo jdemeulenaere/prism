@@ -525,7 +525,9 @@ Agreed with the user in the post–Milestone 2 review ([`docs/milestone-2-review
 7. [ ] `operator-conventions` (A4, L1): Kotlin-style `operator fun` (`get`, `set`, `iterator`, `plus`, `compareTo`, `equals`, `contains`, `invoke`).
 8. [ ] `drop-and-clone-hooks` (A4, L2): custom drop and clone for owning library types.
 9. [ ] `vararg` (A4, L4): variadic parameters, so `listOf` is ordinary code.
-10. [ ] `library-in-prism` (A4): `remember`, `key`, state, `Composition`, `print`, `toString` and the collection helpers written in Prism over runtime externals and the composer primitive, keeping the intrinsics to the minimum (`List`, `String` and `Heap` stay Rust-backed: no `unsafe` for now).
+10. [ ] `library-in-prism` (A4): `remember`, `key`, state, `Composition`, `print`, `toString` and the collection helpers written in Prism over runtime externals and the composer primitive, keeping the intrinsics to the minimum (`List`, `String` and `Heap` stay Rust-backed: no `unsafe` for now). Split into two sequential changes (`core-library-in-prism` D1, which classifies every intrinsic and external of the library):
+    - [ ] 10a. `core-library-in-prism`: extension properties with getters; `/prism/core` as the one member module, declaring every member of the built-in types, intrinsic or written in Prism (scalars' `toString()`, `isEmpty`, `isNotEmpty`, `indices`); `Int.dp` and `Int.sp` in Prism; `print`, `println` and the Rust-backed members stay intrinsic.
+    - [ ] 10b. `compose-library-in-prism`: the compose runtime and toolkit handles from the classification in `core-library-in-prism` D10: field visibility for handle structs, the composer primitive (`currentComposer` and running a composable for a composer word), markers for composables that run in their caller's group or never skip, `Composition` with a drop hook, and declared replacements for the name tests on `Composition` and the state types.
 11. [ ] `layout-in-prism` (A4, last): Compose's `Layout` and `MeasurePolicy`, with `Column`, `Row` and `Box` written in Prism.
 
 ## Phase 5: Tier 2 Release Backend (LLVM AOT), LSP & Self-Hosting (Milestone 3) (Current)
