@@ -1,0 +1,3 @@
+dump
+edit lib/shifts.prism lib/shifts.prism.v2
+dump

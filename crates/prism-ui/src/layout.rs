@@ -63,7 +63,7 @@ use crate::error::{
 };
 use crate::geometry::{clamp_extent, Constraints, Rect, Size};
 use crate::handle::NodeId;
-use crate::modifier::{ElementMirror, CAPACITY};
+use crate::modifier::{Element, ElementMirror, CAPACITY};
 use crate::node::{Node, NodeKind};
 use crate::properties::{Alignment, Arrangement};
 use crate::runtime::{
@@ -274,10 +274,10 @@ struct PolicyCall {
 
 /// A step call a measurement makes once the state is let go (D1 of `layout-in-prism`).
 struct StepCall {
-    /// The app's element measurer, called with the element.
+    /// The app's element measurer, called with the element, or a `Modifier.layout`'s step.
     function: FunctionValue,
-    /// The element, as Prism lays it out.
-    element: ElementMirror,
+    /// The built-in element, as Prism lays it out, or `None` for a `Modifier.layout`.
+    element: Option<ElementMirror>,
     /// The step's position.
     scope: Position,
     constraints: Constraints,
@@ -389,16 +389,28 @@ fn next_from(state: &mut State, position: Position, c: Constraints) -> UiResult<
     }
     if element < count {
         let entry = node.chain[element];
-        let function = state
-            .layout
-            .element_measurer
-            .as_ref()
-            .map(runtime::borrowed)
-            .expect("a layout modifier measured without an app's element measurer");
+        let (function, encoded) = match entry.element {
+            Element::Layout { handler } => (
+                state
+                    .handlers
+                    .function(handler)
+                    .ok_or(crate::error::STALE_HANDLER)?,
+                None,
+            ),
+            _ => (
+                state
+                    .layout
+                    .element_measurer
+                    .as_ref()
+                    .map(runtime::borrowed)
+                    .expect("a layout modifier measured without an app's element measurer"),
+                Some(ElementMirror::encode(&entry.element)),
+            ),
+        };
         push_frame(state, id, element, true, (0, 0), 1, true);
         return Ok(Next::Step(StepCall {
             function,
-            element: ElementMirror::encode(&entry.element),
+            element: encoded,
             scope: Position { node: id, element },
             constraints: c,
             composition: state.layout.composition,
@@ -491,15 +503,22 @@ fn call_step(call: &StepCall) {
     let constraints = ConstraintsMirror::from(call.constraints);
     let run = || {
         // SAFETY: the element measurer is the app's, of its function type, live while the app
-        // runs, and the element is encoded as Prism lays it out.
+        // runs, and the element is encoded as Prism lays it out; a `Modifier.layout`'s step is
+        // an entry its node holds, of its function type, live during layout, since no pass
+        // runs then.
         unsafe {
-            runtime::call_element_measurer(
-                &call.function,
-                &scope,
-                &call.element,
-                &measurable,
-                &constraints,
-            )
+            match &call.element {
+                Some(element) => runtime::call_element_measurer(
+                    &call.function,
+                    &scope,
+                    element,
+                    &measurable,
+                    &constraints,
+                ),
+                None => {
+                    runtime::call_layout_modifier(&call.function, &scope, &measurable, &constraints)
+                }
+            }
         }
     };
     let _result: MeasureResultMirror = match call.composition {

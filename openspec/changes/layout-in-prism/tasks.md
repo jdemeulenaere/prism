@@ -63,12 +63,12 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement la
 
 ## 5. `Modifier.layout` (D3, D8)
 
-- [ ] 5.1 Add `HandlerKind::LayoutModifier` and `prism_ui_register_layout_modifier(step) -> word`.
-  - `ModifierElement.Layout(HandlerId)` is a handler element: claimed, compared, duplicated and released as `Clickable` is in `tree.rs`'s chain code, and dumped as `layout`.
+- [x] 5.1 Add `HandlerKind::LayoutModifier` and `prism_ui_register_layout_modifier(step) -> word`.
+  - `ModifierElement.LayoutModifier(HandlerId)` is a handler element: claimed, compared, duplicated and released as `Clickable` is in `tree.rs`'s chain code, and dumped as `layout`.
   - The fold calls its function directly for its step.
   - In `library/prism/compose/ui.prism`, declare `Modifier.layout(measure: attached MeasureScope.(Measurable, Constraints) -> MeasureResult)`.
-- [ ] 5.2 In `App::reload_point`, also mark every node whose chain holds a `Layout` element.
-- [ ] 5.3 Add fixtures for:
+- [x] 5.2 In `App::reload_point`, also mark every node whose chain holds a `Layout` element.
+- [x] 5.3 Add fixtures for:
   - "A layout modifier moves its content";
   - "A card with an equal layout modifier is skipped";
   - "A layout modifier that hides its content";

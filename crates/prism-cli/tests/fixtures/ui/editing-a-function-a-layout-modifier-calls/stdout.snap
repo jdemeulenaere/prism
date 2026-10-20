@@ -1,0 +1,4 @@
+window 400x300
+  text #1 0,0 8x20 "a" layout
+window 400x300
+  text #1 0,0 18x20 "a" layout

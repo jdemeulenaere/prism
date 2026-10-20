@@ -1,0 +1,22 @@
+// expect: ok
+// run: 0
+// headless: 400x300
+// events: events.txt
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+import /prism/compose/runtime
+import /prism/core
+
+fun main() {
+    runApp(width = 400, height = 300) {
+        Text(
+            "a",
+            modifier = Modifier.layout { measurable, constraints ->
+                val p = measurable.measure(constraints)
+                layout(p.width + 10, p.height) { p.place(10, 0) }
+            }.background(Color.Red),
+        )
+    }
+}

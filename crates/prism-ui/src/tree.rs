@@ -422,6 +422,7 @@ impl UiTree {
             };
             let kind = match element {
                 Element::Toggleable { .. } => HandlerKind::Toggle,
+                Element::Layout { .. } => HandlerKind::LayoutModifier,
                 _ => HandlerKind::Click,
             };
             // An equal chain keeps the entry held at this position.
@@ -592,7 +593,13 @@ impl UiTree {
         stack.push(root);
         while let Some(id) = stack.pop() {
             let node = self.node_mut(id).unwrap();
-            if node.kind.has_policy() {
+            // A `Modifier.layout`'s step is program code too (D8 of `layout-in-prism`).
+            let steps = || {
+                node.chain
+                    .iter()
+                    .any(|entry| matches!(entry.element, Element::Layout { .. }))
+            };
+            if node.kind.has_policy() || steps() {
                 node.needs_measure = true;
             }
             let mut child = node.first_child;

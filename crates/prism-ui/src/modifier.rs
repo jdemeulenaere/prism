@@ -30,11 +30,13 @@
 //! | 10 | `Toggleable(HandlerId, Bool, Bool, Int)` | 8, 24, 25, 16 |
 //! | 11 | `TextFieldFrame(Color, Color)` | 8, 16 |
 //! | 12 | `Offset(Int, Int)` | 8, 16 |
+//! | 13 | `LayoutModifier(HandlerId)` | 8 |
 //!
-//! The layout elements (`Padding`, `Size`, `DefaultMinSize`, `FillMax` and `Offset`) are
-//! measurement steps (D1 of `layout-in-prism`): layout calls the app's element measurer, Prism
-//! code, with the element encoded again from its decoded form ([`ElementMirror::encode`]), so
-//! that its sizes and paddings are already bounded (D11 of `layout-in-prism`).
+//! The layout elements (`Padding`, `Size`, `DefaultMinSize`, `FillMax`, `Offset` and `Layout`)
+//! are measurement steps (D1 of `layout-in-prism`): for the built-in ones, layout calls the
+//! app's element measurer, Prism code, with the element encoded again from its decoded form
+//! ([`ElementMirror::encode`]), so that its sizes and paddings are already bounded (D11 of
+//! `layout-in-prism`); a `Layout` element names its own step, a handler of the node (D3).
 
 use crate::geometry::{clamp_extent, MAX_EXTENT};
 use crate::handle::HandlerId;
@@ -106,6 +108,10 @@ pub enum Element {
         x: i64,
         y: i64,
     },
+    /// A `Modifier.layout`, whose step is the handler entry the node holds.
+    Layout {
+        handler: HandlerId,
+    },
 }
 
 /// What an element is for.
@@ -127,6 +133,7 @@ impl Element {
             | Element::DefaultMinSize { .. }
             | Element::FillMax { .. }
             | Element::Offset { .. }
+            | Element::Layout { .. }
             | Element::Weight { .. }
             | Element::Align(_) => ElementClass::Layout,
             Element::Background { .. }
@@ -146,6 +153,7 @@ impl Element {
                 | Element::DefaultMinSize { .. }
                 | Element::FillMax { .. }
                 | Element::Offset { .. }
+                | Element::Layout { .. }
         )
     }
 
@@ -157,9 +165,9 @@ impl Element {
     /// The handler entry the element names.
     pub fn handler(&self) -> Option<HandlerId> {
         match self {
-            Element::Clickable { handler, .. } | Element::Toggleable { handler, .. } => {
-                Some(*handler)
-            }
+            Element::Clickable { handler, .. }
+            | Element::Toggleable { handler, .. }
+            | Element::Layout { handler } => Some(*handler),
             _ => None,
         }
     }
@@ -167,9 +175,9 @@ impl Element {
     /// The element naming `handler` instead.
     pub fn with_handler(mut self, new: HandlerId) -> Element {
         match &mut self {
-            Element::Clickable { handler, .. } | Element::Toggleable { handler, .. } => {
-                *handler = new
-            }
+            Element::Clickable { handler, .. }
+            | Element::Toggleable { handler, .. }
+            | Element::Layout { handler } => *handler = new,
             _ => {}
         }
         self
@@ -206,7 +214,7 @@ pub struct ModifierMirror {
 
 /// The offset of each payload of each variant of `ModifierElement`, by tag, in declaration
 /// order, as `prism dump-layout` prints them.
-pub const PAYLOAD_OFFSETS: [(&str, &[usize]); 13] = [
+pub const PAYLOAD_OFFSETS: [(&str, &[usize]); 14] = [
     ("None", &[]),
     ("Padding", &[8, 16, 24, 32]),
     ("Size", &[8, 16]),
@@ -220,6 +228,7 @@ pub const PAYLOAD_OFFSETS: [(&str, &[usize]); 13] = [
     ("Toggleable", &TOGGLEABLE),
     ("TextFieldFrame", &[8, 16]),
     ("Offset", &[8, 16]),
+    ("LayoutModifier", &[8]),
 ];
 
 /// `FillMax(width: Bool, height: Bool, fraction: Double)`.
@@ -242,6 +251,7 @@ const TAG_CLICKABLE: u8 = 9;
 const TAG_TOGGLEABLE: u8 = 10;
 const TAG_TEXT_FIELD_FRAME: u8 = 11;
 const TAG_OFFSET: u8 = 12;
+const TAG_LAYOUT: u8 = 13;
 
 impl ElementMirror {
     pub const NONE: ElementMirror = ElementMirror {
@@ -332,6 +342,9 @@ impl ElementMirror {
             TAG_OFFSET => Element::Offset {
                 x: clamp_extent(self.int(8)),
                 y: clamp_extent(self.int(16)),
+            },
+            TAG_LAYOUT => Element::Layout {
+                handler: HandlerId(self.int(8) as u64),
             },
             TAG_NONE => return None,
             _ => return None,
@@ -432,6 +445,10 @@ impl ElementMirror {
                 mirror.bytes[0] = TAG_OFFSET;
                 mirror.set_int(8, x);
                 mirror.set_int(16, y);
+            }
+            Element::Layout { handler } => {
+                mirror.bytes[0] = TAG_LAYOUT;
+                mirror.set_int(8, handler.0 as i64);
             }
         }
         mirror
@@ -572,7 +589,8 @@ pub fn compare_elements(
     }
     let payload_equal = old.with_handler(HandlerId(0)) == new.with_handler(HandlerId(0));
     match old.class() {
-        ElementClass::Layout => change.layout |= !payload_equal,
+        // A `Modifier.layout`'s step is its handler: another one measures again.
+        ElementClass::Layout => change.layout |= !payload_equal || !handlers_equal,
         ElementClass::Drawing => change.drawing |= !payload_equal,
         ElementClass::Input => change.input |= !payload_equal || !handlers_equal,
     }
@@ -633,6 +651,9 @@ mod tests {
                 focused: Color(0xFF67_50A4),
             },
             Element::Offset { x: -3, y: 4 },
+            Element::Layout {
+                handler: HandlerId(11 | (2 << 32)),
+            },
         ]
     }
 
@@ -650,7 +671,7 @@ mod tests {
     fn every_element_round_trips_through_memory() {
         let elements = every_element();
         let mirror = ModifierMirror::encode(&elements);
-        assert_eq!(mirror.count, 12);
+        assert_eq!(mirror.count, 13);
         assert_eq!(mirror.decode().as_slice(), &elements[..]);
     }
 

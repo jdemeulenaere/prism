@@ -1,0 +1,23 @@
+// expect: ok
+// run: 0
+// watch: edits
+// events: events.txt
+// headless: 400x300
+// entry: app/main.prism
+package app
+
+import /lib/shifts
+import /prism/compose/material3
+import /prism/compose/ui
+
+fun main() {
+    runApp(width = 400, height = 300) {
+        Text(
+            "a",
+            modifier = Modifier.layout { measurable, constraints ->
+                val p = measurable.measure(constraints)
+                layout(p.width + shift(), p.height) { p.place(shift(), 0) }
+            },
+        )
+    }
+}

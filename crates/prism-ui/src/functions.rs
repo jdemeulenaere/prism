@@ -113,6 +113,13 @@ pub static UI_FUNCTIONS: &[RuntimeFunction] = &[
         never_returns: false,
     },
     RuntimeFunction {
+        name: "prism_ui_register_layout_modifier",
+        address: address(prism_ui_register_layout_modifier as *const ()),
+        parameters: &[Pointer],
+        result: Some(I64),
+        never_returns: false,
+    },
+    RuntimeFunction {
         name: "prism_ui_set_measure_policy",
         address: address(prism_ui_set_measure_policy as *const ()),
         parameters: &[I64, I64],

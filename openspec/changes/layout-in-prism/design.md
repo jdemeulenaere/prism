@@ -152,7 +152,7 @@ In `/prism/compose/ui`:
 ```kotlin
 public fun Modifier.layout(
     measure: attached MeasureScope.(Measurable, Constraints) -> MeasureResult,
-): Modifier = append(ModifierElement.Layout(HandlerId(prism_ui_register_layout_modifier(measure))))
+): Modifier = append(ModifierElement.LayoutModifier(HandlerId(prism_ui_register_layout_modifier(measure))))
 ```
 
 - **Signature.** It is Compose's: a measurable by value, since `Measurable` is `Copy`.
@@ -160,6 +160,7 @@ public fun Modifier.layout(
 - **Equality.** The element compares by the handler ids' equality, so a chain with an equal step (same code, equal `Copy` captures) is equal, and a composable taking it skips ("Modifiers Are Stable Parameters").
 - **Dumps.** The element is dumped as `layout`.
 - **`attached`**, as a handler, since the node keeps it.
+- **The variant is `LayoutModifier`** (found while applying): an enum variant's name shares its module's scope with top-level declarations, so `ModifierElement.Layout` clashed with the composable `Layout` (`E4010`). The Rust element is still `Element::Layout`, and dumps print `layout`.
 
 **Compile-time cost.** None beyond an ordinary call. **Run-time cost.** Per pass, one registration and comparison (as `clickable`). Per measurement, one step call.
 

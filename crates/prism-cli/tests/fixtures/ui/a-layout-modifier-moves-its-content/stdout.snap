@@ -1,0 +1,5 @@
+window 400x300
+  text #1 0,0 18x20 "a" layout background(#FFFF0000)
+clear 400x300 #FFFFFFFF
+rect 10,0 8x20 #FFFF0000
+text 10,0 size 16 #FF000000 "a"

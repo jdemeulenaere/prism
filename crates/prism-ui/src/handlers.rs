@@ -43,6 +43,9 @@ pub enum HandlerKind {
     /// `MeasureScope.(&List<Measurable>, Constraints) -> MeasureResult`, a node's measure
     /// policy (D8 of `layout-primitive`).
     Measure,
+    /// `MeasureScope.(Measurable, Constraints) -> MeasureResult`, the step of a
+    /// `Modifier.layout` (D3 of `layout-in-prism`).
+    LayoutModifier,
 }
 
 /// Who holds an entry.

@@ -1,0 +1,4 @@
+package lib
+
+// How far the text moves right.
+public fun shift(): Int = 10

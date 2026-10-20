@@ -62,7 +62,7 @@ None.
 
 - **`library/prism/compose/ui.prism`**:
   - the element index in the handles;
-  - `ModifierElement.Layout(HandlerId)` and `Offset(Int, Int)`;
+  - `ModifierElement.LayoutModifier(HandlerId)` and `Offset(Int, Int)`;
   - `Modifier.layout` and its registration external;
   - the built-in steps and their dispatcher;
   - `runApp` passing the dispatcher.

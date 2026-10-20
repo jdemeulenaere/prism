@@ -107,6 +107,11 @@ package external fun prism_ui_register_measure_policy(
     policy: attached MeasureScope.(&List<Measurable>, Constraints) -> MeasureResult,
 ): Int
 
+// Moves a `Modifier.layout`'s step into the handler table, until a node claims it.
+package external fun prism_ui_register_layout_modifier(
+    measure: attached MeasureScope.(Measurable, Constraints) -> MeasureResult,
+): Int
+
 // Gives a layout node its measure policy.
 package external fun prism_ui_set_measure_policy(node: Int, policy: Int): Unit
 
@@ -271,6 +276,7 @@ public enum ModifierElement : Copy {
     Toggleable(HandlerId, Bool, Bool, Int)
     TextFieldFrame(Color, Color)
     Offset(Int, Int)
+    LayoutModifier(HandlerId)
 }
 
 // Eight elements of a chain.
@@ -570,6 +576,17 @@ public fun Placeable.placeRelative(x: Int, y: Int): Unit = prism_ui_place(
 // This size in pixels: a logical pixel is a pixel of layout.
 context(scope: MeasureScope)
 public fun Dp.roundToPx(): Int = value
+
+// This chain followed by a layout modifier whose step is `measure`: it measures the rest of the
+// chain, the elements after it then the node's content, once with `measurable.measure`, and
+// calls `layout` with the size of the chain from it, placing the rest in its block. The node
+// keeps `measure` as it keeps a click handler, so a chain with a step of the same code and equal
+// captures is equal. Compose's `Modifier.layout`.
+public fun Modifier.layout(
+    measure: attached MeasureScope.(Measurable, Constraints) -> MeasureResult,
+): Modifier = append(
+    ModifierElement.LayoutModifier(HandlerId(prism_ui_register_layout_modifier(measure))),
+)
 
 // The step of a built-in layout element, Compose's `LayoutModifierNode.measure` of `PaddingNode`,
 // `SizeNode`, `UnspecifiedConstraintsNode`, `FillNode` and `OffsetNode`: measures `measurable`,

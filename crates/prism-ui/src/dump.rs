@@ -214,6 +214,7 @@ pub fn write_element(out: &mut String, element: &Element) {
             write!(out, "textFieldFrame({} {})", unfocused, focused)
         }
         Element::Offset { x, y } => write!(out, "offset({},{})", x, y),
+        Element::Layout { .. } => write!(out, "layout"),
     };
 }
 

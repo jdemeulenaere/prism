@@ -146,6 +146,19 @@ pub unsafe extern "C" fn prism_ui_register_measure_policy(policy: *mut u8) -> u6
     or_raise(setters::register_measure_policy(policy)).word()
 }
 
+/// Registers a `Modifier.layout`'s step, taken over, and gives its id (D3 of
+/// `layout-in-prism`).
+///
+/// # Safety
+///
+/// `step` must point at a `MeasureScope.(Measurable, Constraints) -> MeasureResult` function
+/// value the caller gives up.
+#[no_mangle]
+pub unsafe extern "C" fn prism_ui_register_layout_modifier(step: *mut u8) -> u64 {
+    let step = FunctionValue::read_from(step);
+    or_raise(setters::register(HandlerKind::LayoutModifier, step)).word()
+}
+
 /// Gives a layout node its measure policy.
 #[no_mangle]
 pub extern "C" fn prism_ui_set_measure_policy(node: u64, policy: u64) {
