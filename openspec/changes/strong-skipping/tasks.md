@@ -54,11 +54,11 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 11. Documents
 
-- [ ] 11.1 Update `AGENTS.md` §3's lines for `compose` (restartable composables, borrowed identities and versions, replaceable calls without identity), `mir` (version arguments, hidden captures, `state version`), `code-generation` (version words, identity slot records) and `ui` (`dump recompositions`, `pause`); mark `compose-architecture` D9 in `docs/architecture.md` §5 as revised by `strong-skipping`; in `docs/milestone-2-review-notes.md` mark A1 done, F4's option (b) done and F3's status with the measured numbers; tick item 5 in `ROADMAP.md`.
+- [x] 11.1 Update `AGENTS.md` §3's lines for `compose` (restartable composables, borrowed identities and versions, replaceable calls without identity), `mir` (version arguments, hidden captures, `state version`), `code-generation` (version words, identity slot records) and `ui` (`dump recompositions`, `pause`); mark `compose-architecture` D9 in `docs/architecture.md` §5 as revised by `strong-skipping`; in `docs/milestone-2-review-notes.md` mark A1 done, F4's option (b) done and F3's status with the measured numbers; tick item 5 in `ROADMAP.md`.
 
 ## 12. Checks
 
-- [ ] 12.1 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace`, all clean.
+- [x] 12.1 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace`, all clean.
 
 ## Workflow follow-up
 
