@@ -24,6 +24,14 @@ The user is away. Every decision the user might take differently is marked **(au
 
 The `ui` block "Layout and Drawing After a Reload" is modified here on `layout-primitive`'s version. Task 1.1 rebases every block once `layout-primitive` is archived.
 
+**Baseline update (`layout-primitive` reviewed and archived, 2026-10-20).** What task 1.1 should know besides the archived design (`openspec/changes/archive/2026-10-20-layout-primitive/design.md`):
+
+- `Context::measure` is gone (its D21): a measurement is steps of one state borrow each (`measure`, `start`, `start_full`, `complete`, `finish` in `layout.rs`) over a `Fold` of the chain passed by reference.
+- Sizes are clamped to `geometry::MAX_EXTENT` (2,147,483,647) after the content and each padding in `finish`, modifier sizes and paddings when decoded, and `place` positions (its D23, requirement "Layout Sizes and Positions Are Bounded"); Prism measurement steps must keep that bound, or the native side must clamp what they return.
+- The containers call the package externals directly, and `Measurable.measured()` and `prism_ui_arrangement` were replaced by `prism_ui_measured(node): MeasuredChild` (size and own alignment) and `prism_ui_line_properties` (its D25).
+- `App::settle` lays out again, up to eight times, while a layout's policies invalidated scopes (its D24).
+- At archive, the main text of "Constraint Layout in Logical Pixels" and "Dumping the Laid-Out Tree" was shortened under 500 characters, with the same rules.
+
 **Current state**, once `layout-primitive` has landed:
 
 - `Context::measure` (`crates/prism-ui/src/layout.rs`) folds a node's chain in two loops over at most 16 elements:

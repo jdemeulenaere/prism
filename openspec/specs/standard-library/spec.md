@@ -173,6 +173,17 @@ Every extension it declares MUST have a built-in receiver type. Their behavior i
 - **WHEN** `prism run --watch --edits edits main.prism` runs `import /prism/system` and `fun main() { println(1); exitProcess(3); println("never") }`, with an edit script whose only step is `after exit` and changes the program to print `2` and exit with status 4
 - **THEN** stdout holds `1` and `2`, each on its own line, stderr holds `watch: main returned with status 3; waiting for changes`, `watch: running main again` and `watch: main returned with status 4; waiting for changes`, and the session's exit status is 4
 
+### Requirement: Converting Between Int and Double
+`/prism/core` MUST declare, as public intrinsics, `fun Int.toDouble(): Double` and `fun Double.toInt(): Int`. As members of built-in types, they MUST need no import. Their behavior is that of the execution requirement "Int and Double Conversions".
+
+#### Scenario: Conversions need no import
+- **WHEN** a file without imports declares `fun half(n: Int): Double = n.toDouble() / 2.0` and `fun whole(d: Double): Int = d.toInt()`
+- **THEN** it typechecks
+
+#### Scenario: Conversions in the ABI of the core module
+- **WHEN** `prism abi` prints the ABI of `/prism/core`
+- **THEN** it holds `public intrinsic fun Int.toDouble(): Double` and `public intrinsic fun Double.toInt(): Int`
+
 ### Requirement: The Library Passes Its Own Checks
 Every library module MUST pass `prism check` with no diagnostic and `prism fmt --check`, and every external MUST match the runtime's function table. The modules the executable contains MUST be exactly the `.prism` files of the top-level `library/` directory.
 
@@ -462,3 +473,7 @@ Decisions from `compose-library-in-prism` (item 10c of the review round, the com
 - **Externals take composable content** (D4). `prism_compose_start_composable`, `prism_compose_set_composable` and `prism_ui_run_app` take `compose () -> Unit` content by address, and the runtime calls it with the composer and the force bit, as Compose's `invokeComposable` does, so the transform's root content adapters went. Rejected: an `invokeComposable` intrinsic inside a word closure (an `attached` value handed on inside another closure, a path `E5010` does not cover), keeping adapters for library callers.
 - **Handles over `package` words** (D8). `NodeId` (`package`) and `HandlerId` (public) are `Copy` structs over a `package` word, so the toolkit modules of `prism.compose` build and read them and no program can (`E1008` reserves the package); `HandlerId.equals` replaces the catalog's equality entry, and the UI externals take `Int` words, so the calls into `prism-ui` are unchanged. Rejected: `private` words behind `package` wrappers (a call per setter per node per pass), `NodeId` parameters read through a pointer in `prism-ui`.
 - **Function values escape the static `E4030`** (D6, at review). A `@DrivesComposition` function named as a value and called during a pass meets the runtime's misuse `composition operation during a pass`; `runApp` checks for a pass before it makes its host, so no window opens. Closing it statically would need a flow analysis of function values, against compile speed.
+
+Decisions from `layout-primitive` (item 11a of the review round; planned autonomously on 2026-10-20 and logged in `docs/decisions-for-review.md`):
+
+- **`Int.toDouble()` and `Double.toInt()`** (D15). Weights need both conversions, which every user layout needs too, so they are public intrinsics of `/prism/core` with Kotlin's names and semantics: the nearest `Double`, and truncation toward zero with NaN giving 0 and saturation at `Int`'s bounds, lowered inline to `fcvt_from_sint` and `fcvt_to_sint_sat`. Rejected: a native weight-share helper, trapping conversions.

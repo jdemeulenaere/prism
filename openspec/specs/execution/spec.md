@@ -113,6 +113,13 @@ Output MUST appear in the order the program writes it. It MUST be written to std
 - **WHEN** a program prints `-7.5 % 2.0`, `1.0 / 0.0 > 1.0`, and, for `val n = 0.0 / 0.0`, `n == n` and `n != n`
 - **THEN** it prints `-1.5`, `true`, `false` and `true`
 
+### Requirement: Int and Double Conversions
+`n.toDouble()` MUST give the `Double` nearest to the `Int` `n`, rounding to nearest even. `d.toInt()` MUST give the `Double` `d` truncated toward zero, `0` for NaN, `Int`'s maximum for values at or above it, positive infinity included, and `Int`'s minimum for values at or below it. Neither MUST raise a runtime error.
+
+#### Scenario: Converting numbers
+- **WHEN** a file importing `/prism/core` runs `fun main() { println(7.toDouble() / 2.0); println((3.9).toInt()); println((-3.9).toInt()); println((0.0 / 0.0).toInt()); println((1.0 / 0.0).toInt()); println((-1.0 / 0.0).toInt()) }` with `--check-allocations`
+- **THEN** stdout is `3.5`, `3`, `-3`, `0`, `9223372036854775807` and `-9223372036854775808`, one per line, and the exit status is 0
+
 ### Requirement: Runtime Errors End the Program
 A runtime error MUST flush the program's output, write `panic: <message>` and then `  at <path>:<line>:<column>` to stderr, where the path is the file's path relative to the workspace root and the position is that of the failing operation, and exit with status 101. No further code of the program MUST run, and no drop MUST run. "out of memory", "stack overflow" raised inside glue, and composition misuse (compose) MUST write no location line.
 

@@ -81,11 +81,11 @@ Each row MUST be composed in `key(todo.id)`, so that removing or filtering out a
 - **THEN** in the second dump, the rows of `Eggs` and `Bread` and their checkbox, text and button nodes have the numbers they had in the first
 
 ### Requirement: The Toolkit Tour
-`examples/demo/ui/ui.prism` MUST be a runnable app that composes every composable of `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3` and uses every modifier, shape, arrangement and alignment kind at least once.
+`examples/demo/ui/ui.prism` MUST be a runnable app that composes every composable of `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3`, uses every modifier, shape, arrangement and alignment kind at least once, and declares and composes a layout of its own over `Layout`.
 
 #### Scenario: Touring the toolkit
 - **WHEN** the session `touring-the-toolkit` runs the tour with `dump` and `dump draw`
-- **THEN** the tree dump holds at least one node of each kind (`column`, `row`, `box`, `text`, `spacer`, `textfield`), a `clickable(Button)` and a `toggleable(Checkbox ...)` element, and the display list holds rectangles, rounded rectangles, borders and text
+- **THEN** the tree dump holds at least one node of each kind (`column`, `row`, `box`, `text`, `spacer`, `textfield`, `layout`), a `clickable(Button)` and a `toggleable(Checkbox ...)` element, and the display list holds rectangles, rounded rectangles, borders and text
 
 ### Requirement: A Thousand Items Run Cleanly
 `examples/apps/todo/large.prism` MUST compose the todo app's screen over 1,000 sample items in an 800 × 600 window, and free everything when it ends.
@@ -125,6 +125,17 @@ On a release build, headless, a click of the counter and the frame that shows it
 #### Scenario: Timing the apps' frames
 - **WHEN** `crates/prism-cli/tests/app_frame_timing.rs` runs on a release build with `PRISM_ASSERT_TIMING=1`
 - **THEN** it reports each app's frame, recomposition and allocation numbers, and passes only if the targets are met
+
+### Requirement: A Full Relayout of a Thousand Items
+On a release build, headless, resizing the window of `examples/apps/todo/large.prism`, which measures every node again through its measure policy, SHOULD take under 4 ms of layout at the 99th percentile. Every frame of such a resize after the first frame of the run MUST allocate nothing. The frame benchmark MUST measure and report both.
+
+#### Scenario: Resizing a thousand items allocates nothing
+- **WHEN** a test of `run_cli_tests.rs` runs `large.prism` headless with `--frame-stats`, a first `frame`, and then ten rounds of `resize 801 600`, `frame`, `resize 800 600` and `frame`
+- **THEN** stderr holds `frame stats: allocations per frame median 0` and `none in 20 of 21 frames`, and the exit status is 0
+
+#### Scenario: Timing a full relayout
+- **WHEN** `crates/prism-cli/tests/app_frame_timing.rs` runs on a release build with `PRISM_ASSERT_TIMING=1`
+- **THEN** it reports the `layout` median and 99th percentile of fifty resizes of `large.prism` between 800 × 600 and 801 × 600, and passes only if the 99th percentile is under 4 ms and the resize frames after the first allocate nothing
 
 ### Requirement: The Apps Start Quickly
 The benchmark MUST report when the todo app's first frame is ready after `prism run` starts, headless on a release build, without the build cache and with a warm one. It SHOULD be under 50 ms and under 20 ms.
@@ -169,3 +180,8 @@ Decisions from `strong-skipping` (review item A1 and option (b) of review findin
 
 - **Rows read their own state** (D17). With borrowed parameters kept by identity, `TodoRow(todo, todos)` is a restart scope, so `owned-state`'s `DoneBox` folds back into it and the row reads `todo.done.value` itself, as Compose code would: a toggle reruns that row and `LeftCount`, typing reruns `TodoScreen` and skips every row, and adding an item reruns every row once (the list's version changed). Three sessions on `large.prism` pin those counts with `dump recompositions`.
 - **Paced frame budgets** (D16). `app_frame_timing` paces the todo app's inputs 100 ms apart. Measured on a release build (M4 Pro), a toggle's recomposition takes 0.24 ms paced (target under 1 ms, met; 1.9 ms before the change back to back), but the paced toggle frame's p99 is 6.0 ms, typing's recomposition 2.2 ms and its frame p99 5.9 ms, above their targets of 4, 2 and 4 ms. Back to back the same frames take 0.17 and 0.24 ms: the misses are the clocked-down core of review finding F4 (the toggle's event dispatch alone grows from 0.06 to 1.6 ms), not recomposition work. The targets are kept as designed and reported, not loosened; less work per input outside recomposition, or per-element versions letting typing skip the loop's bodies, are follow-ups.
+
+Decisions from `layout-primitive` (item 11a of the review round; planned autonomously on 2026-10-20, measured while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **The tour shows a custom layout** (D19). Every app keeps its output while columns, rows, boxes and spacers move to Prism; the toolkit tour adds a `FlowRow` written over `Layout`, so the examples show the primitive.
+- **A full-relayout session** (D18). Resizing `large.prism` between widths 800 and 801 measures each of its about 7,000 nodes again, 5,000 of them through their policies; a one-pixel height change would not, since rows past the first screen keep their cached constraints. Measured on a release build (M4 Pro): `layout` median 0.53 ms after review (2.9× the native layout's 0.18 ms; 3.45× before), p99 under the 4 ms target, and no allocation after the first frame. The cold first frame of the todo app grew by about 7.8 ms (39.4 ms, under 50 ms), since the larger library is compiled whole without a cache; warm it grew by 0.6 ms. Compiling library functions on first use is the follow-up.
