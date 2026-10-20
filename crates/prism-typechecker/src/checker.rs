@@ -12105,6 +12105,7 @@ mod tests {
                             kind: ParameterKind::Plain,
                             default: None,
                             default_inputs: prism_ast::DefaultInputs::ALL,
+                            is_vararg: false,
                         },
                         prism_abi::AbiParameter {
                             name: "b".to_string(),
@@ -12112,6 +12113,7 @@ mod tests {
                             kind: ParameterKind::Plain,
                             default: None,
                             default_inputs: prism_ast::DefaultInputs::ALL,
+                            is_vararg: false,
                         },
                     ],
                     return_type: AbiType::Prim(PrimKind::Int),

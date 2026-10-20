@@ -14,7 +14,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 3. ABI (D14)
 
-- [ ] 3.1 In `crates/prism-abi/src/signature.rs`, add `is_vararg` to `AbiParameter`, set in Phase 1 from `Param::is_vararg`, with the parameter's recorded type the `List<E>` of its written element type; hash the flag in the ABI hash (one byte after the kind, written only when set or always, as the codec prefers; the cache key's compiler identity covers the format change); update the ABI codec/cache serialization if it encodes parameters; print `vararg name: E` in `prism abi`. Fixtures under `compilation-and-abi/` for "Vararg parameters round-trip" and "Making a parameter vararg changes the hash" (as a `cache_tests.rs` test if it needs two runs). Verify with `cargo test -p prism-abi -p prism-cli --test cache_tests`.
+- [x] 3.1 In `crates/prism-abi/src/signature.rs`, add `is_vararg` to `AbiParameter`, set in Phase 1 from `Param::is_vararg`, with the parameter's recorded type the `List<E>` of its written element type; hash the flag in the ABI hash (one byte after the kind, written only when set or always, as the codec prefers; the cache key's compiler identity covers the format change); update the ABI codec/cache serialization if it encodes parameters; print `vararg name: E` in `prism abi`. Fixtures under `compilation-and-abi/` for "Vararg parameters round-trip" and "Making a parameter vararg changes the hash" (as a `cache_tests.rs` test if it needs two runs). Verify with `cargo test -p prism-abi -p prism-cli --test cache_tests`. The hash scenarios are pinned in `prism-abi/tests/abi_scenario_tests.rs`; the `compilation-and-abi/` cases, which `prism check` must type, land with group 4.
 
 ## 4. Type checker (D2 to D9, D12)
 

@@ -28,6 +28,20 @@ pub struct AbiParameter {
     pub kind: ParameterKind,
     pub default: Option<String>,
     pub default_inputs: prism_ast::DefaultInputs,
+    /// Whether the parameter is `vararg` (D14 of `vararg`): `ty` is then the `List<E>` its
+    /// body sees, and callers pack their elements into it.
+    pub is_vararg: bool,
+}
+
+impl AbiParameter {
+    /// The parameter as written in a signature: `name: Type`, `name: escaping () -> Unit`, or
+    /// `vararg name: E` for a vararg of type `List<E>`.
+    pub fn signature_text(&self) -> String {
+        match (&self.ty, self.is_vararg) {
+            (AbiType::List(element), true) => format!("vararg {}: {}", self.name, element),
+            _ => format!("{}: {}{}", self.name, self.kind, self.ty),
+        }
+    }
 }
 
 /// What provides an exported function's code (D5 and D6 of `standard-library`).
@@ -206,11 +220,14 @@ impl ExportedSymbol {
                 for parameter in params {
                     hasher.write_str(&parameter.name);
                     parameter.ty.hash_into(hasher);
-                    // Plain and `escaping` keep the bytes they always had.
-                    hasher.write_u8(match parameter.kind {
-                        ParameterKind::Plain => 0,
-                        ParameterKind::Escaping => 1,
-                        ParameterKind::Attached => 2,
+                    // Plain and `escaping` keep the bytes they always had. A vararg is never
+                    // `escaping` or `attached` (the parser rejects both), so it takes its own
+                    // value of the same byte.
+                    hasher.write_u8(match (parameter.is_vararg, parameter.kind) {
+                        (true, _) => 3,
+                        (false, ParameterKind::Plain) => 0,
+                        (false, ParameterKind::Escaping) => 1,
+                        (false, ParameterKind::Attached) => 2,
                     });
                     if let Some(def) = &parameter.default {
                         hasher.write_u8(1);
@@ -372,7 +389,7 @@ impl ExportedSymbol {
                 }
                 let params: Vec<String> = params
                     .iter()
-                    .map(|p| format!("{}: {}{}", p.name, p.kind, p.ty))
+                    .map(|p| p.signature_text())
                     .collect();
                 text.push_str(&format!("{}({}): {}", name, params.join(", "), return_type));
                 Some(text)
@@ -1135,12 +1152,19 @@ impl FileAbi {
                                     )
                                 },
                             );
+                            // A vararg's body sees the list of its written element type.
+                            let ty = if p.is_vararg {
+                                AbiType::List(Box::new(lower(&p.ty)))
+                            } else {
+                                lower(&p.ty)
+                            };
                             AbiParameter {
                                 name: p.name.clone(),
-                                ty: lower(&p.ty),
+                                ty,
                                 kind: p.kind,
                                 default: def_str,
                                 default_inputs,
+                                is_vararg: p.is_vararg,
                             }
                         })
                         .collect();

@@ -1250,3 +1250,35 @@ fn editing_an_operator_body_recompiles_nothing_downstream() {
         "editing an operator body",
     );
 }
+
+// --- Vararg parameters (D14 of `vararg`)
+
+#[test]
+fn vararg_parameters_round_trip() {
+    let abi = extract("public fun sum(vararg xs: Int): Int = xs.size\n");
+    let ExportedSymbol::Function { params, .. } = &abi.symbols[0] else {
+        panic!("expected a function");
+    };
+    assert!(params[0].is_vararg);
+    // The recorded type is the list the body sees.
+    assert_eq!(params[0].ty.to_string(), "List<Int>");
+    assert_eq!(params[0].signature_text(), "vararg xs: Int");
+    assert_eq!(
+        abi.symbols[0].declaration_text().as_deref(),
+        Some("public fun sum(vararg xs: Int): Int")
+    );
+}
+
+#[test]
+fn making_a_parameter_vararg_changes_the_hash() {
+    assert_hash_differs(
+        "public fun sum(xs: List<Int>): Int = 0\n",
+        "public fun sum(vararg xs: Int): Int = 0\n",
+        "making a parameter vararg",
+    );
+    assert_hash_equal(
+        "public fun sum(vararg xs: Int): Int = 0\n",
+        "public fun sum(vararg xs: Int): Int = 1\n",
+        "editing a vararg function's body",
+    );
+}

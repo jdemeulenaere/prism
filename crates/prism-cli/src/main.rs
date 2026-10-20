@@ -573,12 +573,9 @@ fn run_abi(path: &str) {
                 };
                 let param_str = params
                     .iter()
-                    .map(|p| {
-                        let modifier = p.kind;
-                        match &p.default {
-                            Some(d) => format!("{}: {}{} = {}", p.name, modifier, p.ty, d),
-                            None => format!("{}: {}{}", p.name, modifier, p.ty),
-                        }
+                    .map(|p| match &p.default {
+                        Some(d) => format!("{} = {}", p.signature_text(), d),
+                        None => p.signature_text(),
                     })
                     .collect::<Vec<_>>()
                     .join(", ");

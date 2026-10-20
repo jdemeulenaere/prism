@@ -466,7 +466,12 @@ pub fn declaration_text(f: &FunctionDecl) -> String {
     let parameters: Vec<String> = f
         .params
         .iter()
-        .map(|p| format!("{}: {}{}", p.name, p.kind, p.ty))
+        .map(|p| {
+            // A vararg is compared with the catalog like the rest of the signature (D9 of
+            // `vararg`).
+            let modifier = if p.is_vararg { "vararg " } else { "" };
+            format!("{}{}: {}{}", modifier, p.name, p.kind, p.ty)
+        })
         .collect();
     let result = f
         .return_type
