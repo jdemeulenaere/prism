@@ -514,7 +514,39 @@ impl Checker<'_, '_> {
             ));
         }
         let (kind_of_error, primary) = match kind {
-            AccessKind::Drop | AccessKind::StorageDead => {
+            // The end of a state's guard, with a borrow of the state's value still in use.
+            AccessKind::Drop | AccessKind::StorageDead
+                if loan.kind == LoanKind::Borrow(BorrowOrigin::StateGuard) =>
+            {
+                related.push(Label {
+                    span,
+                    message: "the state's flag ends here".to_string(),
+                });
+                if let Some(later) = later {
+                    related.push(later.label("borrow later used here"));
+                }
+                sort_labels(&mut related);
+                notes.push(
+                    "outside composable contexts, a borrow of a state's value holds the state's flag until its statement ends, or until the end of the block of the 'val' it initializes"
+                        .to_string(),
+                );
+                helps.push(
+                    "borrow the value where it is used, or bind the borrow with 'val' in the block that uses it"
+                        .to_string(),
+                );
+                return BorrowError {
+                    kind: BorrowErrorKind::StateFlagEnded,
+                    primary: Label {
+                        span: loan.span,
+                        message: "the value of a state is borrowed here, holding its flag"
+                            .to_string(),
+                    },
+                    related,
+                    notes,
+                    helps,
+                };
+            }
+AccessKind::Drop | AccessKind::StorageDead => {
                 let name = place_name.clone();
                 let default_slot =
                     loan.mutable && loan.kind == LoanKind::Borrow(BorrowOrigin::Default);

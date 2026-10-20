@@ -66,11 +66,19 @@ For a non-`Copy` `T`, `s.value` MUST be a place of the state object `s`, reached
 - **THEN** the borrow checker emits `E5005` at `s` in `take(s)`, labelling the borrow `&s.value` and its later use
 
 ### Requirement: Borrows of a State's Value Outside Composition Hold Its Flag
-Outside composable contexts, a shared borrow of a non-`Copy` state value MUST hold the state's flag shared, and a mutable borrow, a `mut fun` call on the value or a write to part of it MUST hold it exclusively, from the borrow to the end of its statement, or to the end of the block of the `val` or `var` it initializes. A `Copy` read and a whole-value write MUST hold the flag only during their call.
+Outside composable contexts, a shared borrow of a non-`Copy` state value MUST hold the state's flag shared, and a mutable borrow, a `mut fun` call on the value or a write to part of it MUST hold it exclusively, from the borrow to the end of its statement, or to the end of the block of the `val` or `var` it initializes. A `Copy` read and a whole-value write MUST hold the flag only during their call. A borrow used after its flag ends MUST be rejected (`E5006`), and returned (`E5008`).
 
 #### Scenario: Two references to one state that conflict
 - **WHEN** `fun f(a: &MutableState<List<Int>>, b: &MutableState<List<Int>>) { val items = &a.value; b.value.add(3); println(items.size) }` is declared and `fun main() { val s = mutableStateOf(listOf(1)); f(s, s) }` runs
 - **THEN** stderr is `panic: state accessed while borrowed` and the location of `b.value`, and the exit status is 101
+
+#### Scenario: A borrow of a state's value cannot outlive its flag
+- **WHEN** `fun main() { val s = mutableStateOf(listOf("a" + "b")); var first: &String = &"z"; if (s.value.size > 0) { first = &s.value[0] }; s.value = listOf("c" + "d"); println(first) }` is checked
+- **THEN** the borrow checker emits `E5006`, saying that a borrow of a state's value outlives the state's flag, labelling the borrow, the end of the flag with its statement and the later use `println(first)`
+
+#### Scenario: Returning a borrow of a state's value from a plain function rejected
+- **WHEN** `fun first(s: &MutableState<List<String>>): &String = &s.value[0]` is checked
+- **THEN** the borrow checker emits `E5008`, saying that a function that is not composable cannot return a borrow of a state's value, with help suggesting a copy or a clone
 
 #### Scenario: A flag ends with its statement
 - **WHEN** `fun g(a: &MutableState<List<Int>>, b: &MutableState<List<Int>>) { println(a.value.size); b.value.add(2); println(a.value.size) }` is declared and `fun main() { val s = mutableStateOf(listOf(1)); g(s, s) }` runs with `--check-allocations`

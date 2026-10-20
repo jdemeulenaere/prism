@@ -1,0 +1,12 @@
+error[E5006]: a borrow of a state's value outlives the state's flag
+  --> main.prism:7:18
+    7 |         first = &s.value[0]
+      |                  ^^^^^^^ the value of a state is borrowed here, holding its flag
+  --> main.prism:7:9
+    7 |         first = &s.value[0]
+      |         ^^^^^^^^^^^^^^^^^^^ the state's flag ends here
+  --> main.prism:10:13
+   10 |     println(first)
+      |             ^^^^^ borrow later used here
+   = note: outside composable contexts, a borrow of a state's value holds the state's flag until its statement ends, or until the end of the block of the 'val' it initializes
+   = help: borrow the value where it is used, or bind the borrow with 'val' in the block that uses it

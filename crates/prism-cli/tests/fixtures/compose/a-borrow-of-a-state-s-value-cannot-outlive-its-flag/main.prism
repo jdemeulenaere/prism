@@ -1,0 +1,11 @@
+// expect: E5006
+// run: 1
+fun main() {
+    val s = mutableStateOf(listOf("a" + "b"))
+    var first: &String = &"z"
+    if (s.value.size > 0) {
+        first = &s.value[0]
+    }
+    s.value = listOf("c" + "d")
+    println(first)
+}

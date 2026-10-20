@@ -1217,6 +1217,7 @@ impl Codec for BorrowOrigin {
             BorrowOrigin::Pattern => 6,
             BorrowOrigin::Guard => 7,
             BorrowOrigin::Iteration => 8,
+            BorrowOrigin::StateGuard => 9,
         });
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1230,6 +1231,7 @@ impl Codec for BorrowOrigin {
             6 => BorrowOrigin::Pattern,
             7 => BorrowOrigin::Guard,
             8 => BorrowOrigin::Iteration,
+            9 => BorrowOrigin::StateGuard,
             _ => return None,
         })
     }

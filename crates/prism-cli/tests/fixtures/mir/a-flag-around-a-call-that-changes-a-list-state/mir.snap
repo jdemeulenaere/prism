@@ -21,7 +21,7 @@ fun main::f(_1: &MutableState<List<Int>>): Unit @2:1
     storage_live _6 @3:5
     _6 = copy _4 @3:5
     storage_live _7 @3:5
-    _7 = &_6 (argument) @3:5
+    _7 = &_6 (state guard) @3:5
     _5 = call state begin exclusive<List<Int>>(copy _6, move _7) -> bb1 @3:5
   bb1:
     storage_live _8 @3:5

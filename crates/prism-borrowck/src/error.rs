@@ -54,6 +54,9 @@ pub enum BorrowErrorKind {
     /// `E5006`: a local (`name`) or a temporary (`None`) is dropped or ends while a borrow of it
     /// is live.
     DroppedWhileBorrowed { name: Option<String> },
+    /// `E5006`: a borrow of a state's value outlives the guard that holds the state's flag
+    /// outside composable contexts (D3 of `owned-state`).
+    StateFlagEnded,
     /// `E5007`: a function value that may hold a borrow escapes; `holder` says what holds it
     /// (D6 of `escaping-closures`).
     EscapingClosure { holder: EscapingHolder },
@@ -113,6 +116,9 @@ pub enum Borrowed {
     OwnedCapture(String),
     /// A temporary value.
     Temporary,
+    /// The value of a state, whose flag a guard holds until the body returns at the latest
+    /// (D3 of `owned-state`).
+    StateValue,
 }
 
 /// Why a returned borrow's input is not one its elision rule ties the result to.
@@ -163,6 +169,7 @@ impl BorrowError {
             BorrowErrorKind::AssignToBorrowed { .. } => "E5004",
             BorrowErrorKind::MoveOutWhileBorrowed { .. } => "E5005",
             BorrowErrorKind::DroppedWhileBorrowed { .. } => "E5006",
+            BorrowErrorKind::StateFlagEnded => "E5006",
             BorrowErrorKind::EscapingClosure { .. } => "E5007",
             BorrowErrorKind::DanglingBorrowReturn { .. } => "E5008",
             BorrowErrorKind::UntiedBorrowReturn { .. } => "E5009",
@@ -198,6 +205,9 @@ impl BorrowError {
             }
             BorrowErrorKind::DroppedWhileBorrowed { name: None } => {
                 return "temporary value dropped while borrowed".to_string()
+            }
+            BorrowErrorKind::StateFlagEnded => {
+                return "a borrow of a state's value outlives the state's flag".to_string()
             }
             BorrowErrorKind::EscapingClosure { holder } => {
                 return match holder {
@@ -238,6 +248,10 @@ impl BorrowError {
                     ),
                     Borrowed::Temporary => {
                         "cannot return a borrow of a temporary value".to_string()
+                    }
+                    Borrowed::StateValue => {
+                        "cannot return a borrow of a state's value from a function that is not composable"
+                            .to_string()
                     }
                 }
             }

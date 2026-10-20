@@ -24,7 +24,7 @@ use crate::mir::{Callee, Constant, Operand, Place, Rvalue, StateOperation, Termi
 use prism_ast::Span;
 use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{
-    Argument, BinaryOperator, BorrowOrigin, BuiltinFunction, Call, ExpressionId, IntrinsicStruct,
+    Argument, BinaryOperator, BuiltinFunction, Call, ExpressionId, IntrinsicStruct,
     Type,
 };
 
@@ -200,7 +200,7 @@ impl Builder<'_> {
             Place::local(guard_borrow),
             Rvalue::Borrow {
                 mutable: false,
-                origin: BorrowOrigin::Argument.into(),
+                origin: crate::mir::BorrowOrigin::StateGuard,
                 place: Place::local(guard),
             },
             span,

@@ -22,7 +22,7 @@ fun main::g(_1: &MutableState<List<Int>>): Int @2:1
     storage_live _6 @3:18
     _6 = copy _4 @3:18
     storage_live _7 @3:18
-    _7 = &_6 (argument) @3:18
+    _7 = &_6 (state guard) @3:18
     _5 = call state begin shared<List<Int>>(copy _6, move _7) -> bb1 @3:18
   bb1:
     _2 = &(*_5) (written) @3:17

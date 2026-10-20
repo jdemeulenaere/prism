@@ -1162,6 +1162,10 @@ pub enum BorrowOrigin {
     /// The borrow of the list a `for` loop iterates, and the borrows of its elements the loop
     /// variable takes (D16 of `collections`).
     Iteration,
+    /// The borrow of a state guard's local that the guard's begin call takes, which every
+    /// reference the call gives keeps, whatever its type, so that no reference to the state's
+    /// value outlives the guard that holds its flag (D3 of `owned-state`).
+    StateGuard,
 }
 
 impl From<prism_typed_tree::BorrowOrigin> for BorrowOrigin {
@@ -1188,6 +1192,7 @@ impl BorrowOrigin {
             BorrowOrigin::Default => "default",
             BorrowOrigin::Pattern => "pattern",
             BorrowOrigin::Guard => "guard",
+            BorrowOrigin::StateGuard => "state guard",
         }
     }
 }

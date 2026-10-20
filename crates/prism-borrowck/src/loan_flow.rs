@@ -26,7 +26,7 @@
 //! read through a `&&Int`, or returned by a closure that captures a reference, holds what that
 //! reference holds, not the borrow of the reference.
 
-use crate::borrows::{BorrowSet, Item, LoanKind};
+use crate::borrows::{BorrowSet, Item, LoanId, LoanKind};
 use crate::dataflow::{Analysis, Domain, PairSet, Results};
 use crate::elision::{self, Rule, Signature};
 use crate::liveness::Liveness;
@@ -280,13 +280,21 @@ impl<'a> LoanFlow<'a> {
         }
     }
 
+    /// Whether only a value that can borrow a reference holds `loan`: a loan of a reference,
+    /// other than the borrow of a state guard's local, which every reference its begin call
+    /// gives keeps (D3 of `owned-state`).
+    fn fits_only_references(&self, loan: LoanId) -> bool {
+        let loan = &self.borrows.loans[loan];
+        loan.of_reference && loan.kind != LoanKind::Borrow(BorrowOrigin::StateGuard)
+    }
+
     /// `items` without the loans of references that a value of type `ty` cannot hold: a value
     /// that cannot borrow a reference ([`places::can_borrow_reference`]) points past a
     /// borrowed reference to what it refers to, whose loans the reference's root local holds.
     pub fn fitting(&self, mut items: Vec<usize>, ty: &Type) -> Vec<usize> {
         if !places::can_borrow_reference(ty) {
             items.retain(|item| match self.borrows.item(*item) {
-                Item::Loan(loan) => !self.borrows.loans[loan].of_reference,
+                Item::Loan(loan) => !self.fits_only_references(loan),
                 Item::Input(_) => true,
             });
         }

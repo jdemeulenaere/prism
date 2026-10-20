@@ -1,0 +1,9 @@
+error[E5008]: cannot return a borrow of a state's value from a function that is not composable
+  --> main.prism:3:54
+    3 | fun first(s: &MutableState<List<String>>): &String = &s.value[0]
+      |                                                      ^^^^^^^^^^^ returned here
+  --> main.prism:3:55
+    3 | fun first(s: &MutableState<List<String>>): &String = &s.value[0]
+      |                                                       ^^^^^^^ the value of a state is borrowed here, holding the state's flag
+   = note: outside composable contexts, a borrow of a state's value holds the state's flag until its statement or the block of its 'val' ends, and the flag ends when the body returns
+   = help: return a copy or a clone of what the caller needs, or borrow the value where it is used

@@ -20,7 +20,7 @@
 //! any rule. Each write reports at most one error: `E5008` for its earliest owned loan, else
 //! `E5009` for its first untied input, by local order.
 
-use crate::borrows::{BorrowSet, Item, LoanId};
+use crate::borrows::{BorrowSet, Item, LoanId, LoanKind};
 use crate::check::sort_labels;
 use crate::dataflow::Results;
 use crate::elision::{self, Rule, Signature};
@@ -30,7 +30,7 @@ use crate::location::locations;
 use crate::places;
 use prism_ast::Span;
 use prism_mir::{
-    Body, BodyOwner, LocalId, LocalKind, MirFile, Operand, Place, Projection, Rvalue,
+    Body, BodyOwner, BorrowOrigin, LocalId, LocalKind, MirFile, Operand, Place, Projection, Rvalue,
     StatementKind, TerminatorKind,
 };
 use prism_typed_tree::{ArenaId, Type};
@@ -337,6 +337,7 @@ impl Returns<'_> {
         let declaration = &self.body.locals[loan.place.local];
         let name = places::place_name(self.body, &self.file.types, &loan.place);
         let borrowed = match (&declaration.kind, &declaration.name) {
+            _ if loan.kind == LoanKind::Borrow(BorrowOrigin::StateGuard) => Borrowed::StateValue,
             (LocalKind::Argument, Some(_)) => Borrowed::Parameter(name.clone().unwrap_or_default()),
             (LocalKind::User, Some(_)) => Borrowed::Local(name.clone().unwrap_or_default()),
             (LocalKind::Capture, Some(capture)) => Borrowed::OwnedCapture(capture.clone()),
@@ -348,6 +349,10 @@ impl Returns<'_> {
                 span: loan.span,
                 message: match &borrowed {
                     Borrowed::Temporary => "a temporary value is borrowed here".to_string(),
+                    Borrowed::StateValue => {
+                        "the value of a state is borrowed here, holding the state's flag"
+                            .to_string()
+                    }
                     Borrowed::Local(name)
                     | Borrowed::Parameter(name)
                     | Borrowed::OwnedCapture(name) => {
@@ -364,7 +369,17 @@ impl Returns<'_> {
                 path.name
             ));
         }
+        if borrowed == Borrowed::StateValue {
+            notes.push(
+                "outside composable contexts, a borrow of a state's value holds the state's flag until its statement or the block of its 'val' ends, and the flag ends when the body returns"
+                    .to_string(),
+            );
+        }
         let help = match (&borrowed, &self.body.owner) {
+            (Borrowed::StateValue, _) => {
+                "return a copy or a clone of what the caller needs, or borrow the value where it is used"
+                    .to_string()
+            }
             // A `consuming fun` receiver: a `fun` one is a shared reference, tied by rule 2.
             (Borrowed::Parameter(_), _) if declaration.name.as_deref() == Some("this") => {
                 "declare the method with 'fun' instead of 'consuming fun', so that the receiver is a shared reference".to_string()
