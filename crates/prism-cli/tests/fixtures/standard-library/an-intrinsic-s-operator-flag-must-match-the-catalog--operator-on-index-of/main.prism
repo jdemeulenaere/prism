@@ -1,0 +1,5 @@
+// expect: E4029
+// library: lib
+import /prism/collections
+
+fun main() {}

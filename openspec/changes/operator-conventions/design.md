@@ -168,6 +168,8 @@ Indices are a list (`m[r, c]`, Kotlin's syntax) passed in order; `List` and `Str
 
 **Compile-time cost.** At most two lookups per index place and one node rewrite when a writable place is demanded; no pass over the body.
 
+**Implementation (apply).** The `mut` accessor is kept in the extension tables, and named in its declaration path, as `get#mut` (or `next#mut`), beside the shared `get` of the same receiver constructor, name and context: the two would otherwise share a symbol. The dump therefore shows `main::Bag.get#mut`, as it shows `#context(...)` for extensions differing by context. The ABI keeps the written name with the receiver mode, and sorts symbols by mode after name, receiver and context, so the pair has a fixed order. A plain call `b.get(0)` falls back to the `mut` one when it is the only `get`. The declaration checks of D5 live in `crates/prism-typechecker/src/checker/operators.rs`, a submodule of the checker so they reach its tables, rather than `src/operators.rs`.
+
 Rejected:
 - **Kotlin's value-returning `get` only, writes through `set` only**: no `x[i].field = v` without copying the element out and back (impossible for non-`Copy` elements), no `&x[i]`; the user asked for places.
 - **A `get` returning `&mut E` only**: every read would need a mutable receiver, so a shared `&Bag` could not be read by index.

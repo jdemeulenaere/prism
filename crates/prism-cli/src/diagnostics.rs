@@ -320,6 +320,9 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         }
         | TypeError::InvalidLibraryDeclaration {
             help: Some(help), ..
+        }
+        | TypeError::InvalidOperatorDeclaration {
+            help: Some(help), ..
         } => {
             out.push_str(&format!("   = help: {}\n", help));
         }

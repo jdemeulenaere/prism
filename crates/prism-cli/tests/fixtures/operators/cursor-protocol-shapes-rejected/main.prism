@@ -1,0 +1,8 @@
+// expect: E4035
+struct Item { val name: String }
+struct Bag { var items: List<Item> }
+
+operator fun Bag.iterator(): &Item = &items[0]
+operator fun Bag.hasNext(cursor: Int): Bool = cursor < items.size
+operator mut fun Bag.iterator(): Int = 0
+operator fun Bag.next(cursor: &Int): &Item = &items[0]

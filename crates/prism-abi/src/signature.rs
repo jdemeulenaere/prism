@@ -408,12 +408,17 @@ impl ExportedSymbol {
 
     /// The key symbols are sorted by: kind, name, then a function's receiver type, qualified by
     /// its module (empty for a plain function), then its context type, qualified the same way
-    /// (empty without one), so extensions sharing a name keep a fixed order.
-    fn sort_key(&self) -> (u8, &str, String, String) {
+    /// (empty without one), then its receiver mode, so extensions sharing a name keep a fixed
+    /// order (a shared and a `mut` accessor of one type, D9 of `operator-conventions`).
+    fn sort_key(&self) -> (u8, &str, String, String, u8) {
         match self {
-            ExportedSymbol::Var { name, .. } => (0, name.as_str(), String::new(), String::new()),
-            ExportedSymbol::Struct { name, .. } => (1, name.as_str(), String::new(), String::new()),
-            ExportedSymbol::Enum { name, .. } => (2, name.as_str(), String::new(), String::new()),
+            ExportedSymbol::Var { name, .. } => (0, name.as_str(), String::new(), String::new(), 0),
+            ExportedSymbol::Struct { name, .. } => {
+                (1, name.as_str(), String::new(), String::new(), 0)
+            }
+            ExportedSymbol::Enum { name, .. } => {
+                (2, name.as_str(), String::new(), String::new(), 0)
+            }
             ExportedSymbol::Function {
                 name,
                 receiver,
@@ -428,12 +433,18 @@ impl ExportedSymbol {
                 context
                     .as_ref()
                     .map_or_else(String::new, qualified_type_text),
+                receiver.as_ref().map_or(0, |r| match r.mode {
+                    ReceiverMode::Shared => 0,
+                    ReceiverMode::Mutable => 1,
+                    ReceiverMode::Consuming => 2,
+                }),
             ),
             ExportedSymbol::ExtensionProperty { name, receiver, .. } => (
                 4,
                 name.as_str(),
                 qualified_type_text(receiver),
                 String::new(),
+                0,
             ),
         }
     }

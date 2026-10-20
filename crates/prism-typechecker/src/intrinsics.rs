@@ -160,7 +160,7 @@ pub const CATALOG: &[Intrinsic] = &[
         Some("List"),
         "contains",
         BuiltinFunction::ListContains,
-        "public intrinsic fun <T> List<T>.contains(element: &T): Bool",
+        "public intrinsic operator fun <T> List<T>.contains(element: &T): Bool",
         true,
     ),
     entry(
@@ -529,6 +529,14 @@ mod tests {
                 BuiltinFunction::ListSize | BuiltinFunction::ListIndices => format!(
                     "public intrinsic val <T> List<T>.{}: {}",
                     builtin.name(),
+                    signature.result
+                ),
+                // `contains` serves `in` (D8 of `operator-conventions`).
+                BuiltinFunction::ListContains => format!(
+                    "public intrinsic operator {}fun <T> List<T>.{}({}): {}",
+                    mode,
+                    builtin.name(),
+                    parameters.join(", "),
                     signature.result
                 ),
                 _ => format!(

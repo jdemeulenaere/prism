@@ -19,7 +19,7 @@ public intrinsic fun <T> List<T>.isEmpty(): Bool
 public intrinsic fun <T> List<T>.isNotEmpty(): Bool
 
 // Whether an element equals `element`.
-public intrinsic fun <T> List<T>.contains(element: &T): Bool
+public intrinsic operator fun <T> List<T>.contains(element: &T): Bool
 
 // The index of the first element equal to `element`, or `-1`.
 public intrinsic fun <T> List<T>.indexOf(element: &T): Int

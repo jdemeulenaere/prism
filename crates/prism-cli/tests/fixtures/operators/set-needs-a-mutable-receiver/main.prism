@@ -1,0 +1,4 @@
+// expect: E4035
+struct Matrix { val columns: Int, var cells: List<Double> }
+
+operator fun Matrix.set(row: Int, column: Int, value: Double) {}

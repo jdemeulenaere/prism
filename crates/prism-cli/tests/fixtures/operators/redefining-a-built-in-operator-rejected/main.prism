@@ -1,0 +1,5 @@
+// expect: E4010
+operator fun Int.plus(other: Int): Int = 0
+operator fun Double.compareTo(other: &Double): Int = 0
+operator fun Bool.not(): Bool = true
+operator fun <T> List<T>.get(index: Int): &T = &this[0]

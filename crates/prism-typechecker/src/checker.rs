@@ -34,6 +34,7 @@ use prism_typed_tree::{
 };
 use std::collections::{HashMap, HashSet};
 
+mod operators;
 mod patterns;
 mod state;
 
@@ -383,8 +384,23 @@ impl ExtensionsOfName {
 impl Extension {
     /// The extension's declaration path.
     fn path(&self, name: &str) -> DeclarationPath {
+        let name = operators::extension_name(
+            name.trim_end_matches(operators::MUTABLE_ACCESSOR_SUFFIX),
+            self.mode,
+            self.is_operator,
+        );
         DeclarationPath::extension(self.module.clone(), self.receiver.clone(), name)
             .with_context(self.context.clone())
+    }
+
+    /// The name the extension is kept under in an extension table: `name`, or the `mut`
+    /// accessor's own name (D9 of `operator-conventions`).
+    fn table_name(&self, name: &str) -> String {
+        operators::extension_name(
+            name.trim_end_matches(operators::MUTABLE_ACCESSOR_SUFFIX),
+            self.mode,
+            self.is_operator,
+        )
     }
 }
 
@@ -2060,7 +2076,10 @@ impl TypeChecker {
                             let context_ty = context
                                 .as_ref()
                                 .map(|context| type_from_abi(context, &type_parameters));
-                            let key = (ReceiverKey::of(&receiver_ty), name.clone());
+                            let key = (
+                                ReceiverKey::of(&receiver_ty),
+                                operators::extension_name(name, receiver.mode, *is_operator),
+                            );
                             let extension = Extension {
                                 mode: receiver.mode,
                                 receiver: receiver_ty,
@@ -2870,6 +2889,9 @@ impl TypeChecker {
     }
 
     fn register_function_decl(&mut self, f: &FunctionDecl) {
+        if f.is_operator {
+            self.check_operator_declaration(f, None);
+        }
         if f.is_intrinsic() {
             let text = crate::intrinsics::declaration_text(f);
             if let Some(entry) = self.check_intrinsic(None, &f.name, &text, f.span) {
@@ -2973,7 +2995,14 @@ impl TypeChecker {
         if receiver_ty == Type::Error {
             return;
         }
-        let key = (ReceiverKey::of(&receiver_ty), f.name.clone());
+        // An operator declaration of the wrong shape is reported once, and not registered.
+        if f.is_operator && !self.check_operator_declaration(f, Some(&receiver_ty)) {
+            return;
+        }
+        let key = (
+            ReceiverKey::of(&receiver_ty),
+            operators::extension_name(&f.name, receiver.mode, f.is_operator),
+        );
         let field_clash = match &receiver_ty {
             Type::Struct { id, .. } => self
                 .struct_fields(id)
@@ -3027,6 +3056,19 @@ impl TypeChecker {
                 ),
                 span: f.span,
             });
+        } else if f.is_operator {
+            if let SymbolKind::Function {
+                fn_type: Type::Fn { params, .. },
+                ..
+            } = &symbol.kind
+            {
+                let params = params.clone();
+                self.check_builtin_operator_clash(f, &receiver_ty, &params);
+            }
+        }
+        if let SymbolKind::Function { fn_type, .. } = &symbol.kind {
+            let fn_type = fn_type.clone();
+            self.check_accessor_pair(f, &key, &context, &fn_type);
         }
         let extension = Extension {
             mode: receiver.mode,
@@ -3069,7 +3111,7 @@ impl TypeChecker {
                                 type_parameters_of(&f.type_parameters),
                                 |c| c.lower_type(&receiver.ty),
                             )),
-                            name: f.name.clone(),
+                            name: operators::extension_name(&f.name, receiver.mode, f.is_operator),
                             context: f.context.as_ref().map(|c| self.lower_type(&c.ty)),
                         },
                         None => InferenceKey::Declaration(f.name.clone()),
@@ -3352,12 +3394,14 @@ impl TypeChecker {
             .as_ref()
             .map(|c| self.lower_type(&c.ty))
             .filter(|ty| ty != &Type::Error);
-        let path = match &receiver_ty {
-            Some(receiver_ty) => {
-                DeclarationPath::extension(self.module_path.clone(), receiver_ty.clone(), &f.name)
-                    .with_context(context_ty.clone())
-            }
-            None => DeclarationPath::new(self.module_path.clone(), &f.name),
+        let path = match (&receiver_ty, &f.receiver) {
+            (Some(receiver_ty), Some(receiver)) => DeclarationPath::extension(
+                self.module_path.clone(),
+                receiver_ty.clone(),
+                operators::extension_name(&f.name, receiver.mode, f.is_operator),
+            )
+            .with_context(context_ty.clone()),
+            _ => DeclarationPath::new(self.module_path.clone(), &f.name),
         };
         let previous = self.start_body(path.clone());
         let prev_in_func = self.in_function;
@@ -3514,9 +3558,15 @@ impl TypeChecker {
                             kinds: f.params.iter().map(|p| p.kind).collect(),
                             ret: Box::new(expr_ty),
                         };
+                        if f.is_operator {
+                            self.check_operator_result(f, &return_type);
+                        }
                         match &receiver_ty {
                             Some(receiver_ty) => {
-                                let key = (ReceiverKey::of(receiver_ty), f.name.clone());
+                                let mode =
+                                    f.receiver.as_ref().map_or(ReceiverMode::Shared, |r| r.mode);
+                                let name = operators::extension_name(&f.name, mode, f.is_operator);
+                                let key = (ReceiverKey::of(receiver_ty), name);
                                 let context = f.context.as_ref().map(|c| self.lower_type(&c.ty));
                                 if let Some(extension) = self
                                     .own_extensions
@@ -7638,7 +7688,23 @@ impl TypeChecker {
         } else {
             receiver_ty.clone()
         };
-        let (lookup, reached) = self.find_extension_through_indirection(start, member, &mut layers);
+        let (mut lookup, mut reached) =
+            self.find_extension_through_indirection(start.clone(), member, &mut layers);
+        // A type with only a `mut` accessor is called by its name too (D9 of
+        // `operator-conventions`).
+        if matches!(lookup, ExtensionLookup::None) && (member == "get" || member == "next") {
+            layers.clear();
+            if through_nullable {
+                let mut outer = &receiver_ty;
+                while let Type::Reference { mutable, inner } = outer {
+                    layers.push(Layer::Reference { mutable: *mutable });
+                    outer = inner;
+                }
+            }
+            let mutable = operators::mutable_accessor_name(member);
+            (lookup, reached) =
+                self.find_extension_through_indirection(start, &mutable, &mut layers);
+        }
         match lookup {
             ExtensionLookup::Ambiguous(modules) => {
                 let call = self.give_up_call(receiver, args, span);
@@ -7676,14 +7742,15 @@ impl TypeChecker {
             }
             ExtensionLookup::Found { extension, own } => {
                 let extension = if own {
+                    let name = extension.table_name(member);
                     let key = InferenceKey::Extension {
                         receiver: ReceiverKey::of(&reached),
-                        name: member.to_string(),
+                        name: name.clone(),
                         context: extension.context.clone(),
                     };
                     self.ensure_key_inferred(&key, callee.span);
                     // Inference may have refined the return type.
-                    match self.find_extension(&reached, member) {
+                    match self.find_extension(&reached, &name) {
                         ExtensionLookup::Found { extension, .. } => extension,
                         _ => extension,
                     }

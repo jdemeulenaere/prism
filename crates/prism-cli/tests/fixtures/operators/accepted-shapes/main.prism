@@ -1,0 +1,9 @@
+// expect: ok
+struct Money : Copy { val cents: Int }
+struct Bag { val items: List<Money> }
+
+operator fun Money.plus(other: Money): Money = Money(cents + other.cents)
+operator consuming fun Bag.plus(other: Bag): Bag = this
+operator fun Money.unaryMinus(): Money = Money(-cents)
+operator fun Money.compareTo(other: &Money): Int = cents - other.cents
+operator fun Bag.contains(m: &Money): Bool = items.size > m.cents

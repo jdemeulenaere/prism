@@ -364,6 +364,17 @@ pub enum TypeError {
         span: Span,
     },
 
+    /// E4035: An `operator` declaration that is not an extension named by an operator
+    /// convention with its convention's shape: receiver modes, parameters and result, no
+    /// `compose`, context parameter or default values but on `invoke`, and an `equals` declared
+    /// with its non-generic type, in its file and with its visibility (D5 and D6 of
+    /// `operator-conventions`). `message` names the convention and the rule broken.
+    InvalidOperatorDeclaration {
+        message: String,
+        help: Option<String>,
+        span: Span,
+    },
+
     /// E4027: A generic function reaches a call of itself, or a generic struct or enum reaches
     /// itself through its fields or payloads, with a type argument that nests its own type
     /// parameter in another type, so it would need infinitely many instances (D8 and D9 of
@@ -633,6 +644,7 @@ impl TypeError {
             TypeError::InconsistentAlternativeBindings { .. } => "E4025",
             TypeError::NoTextForm { .. } => "E4026",
             TypeError::InvalidLibraryDeclaration { .. } => "E4029",
+            TypeError::InvalidOperatorDeclaration { .. } => "E4035",
             TypeError::PolymorphicRecursion { .. } => "E4027",
             TypeError::CannotCaptureByValue { .. } => "E4028",
             TypeError::MissingContext { .. } => "E4034",
@@ -689,6 +701,7 @@ impl TypeError {
             TypeError::InconsistentAlternativeBindings { span, .. } => *span,
             TypeError::NoTextForm { span, .. } => *span,
             TypeError::InvalidLibraryDeclaration { span, .. } => *span,
+            TypeError::InvalidOperatorDeclaration { span, .. } => *span,
             TypeError::PolymorphicRecursion { span, .. } => *span,
             TypeError::CannotCaptureByValue { span, .. } => *span,
             TypeError::MissingContext { span, .. } => *span,
@@ -913,6 +926,7 @@ impl TypeError {
                 }
             }
             TypeError::InvalidLibraryDeclaration { message, .. } => message.clone(),
+            TypeError::InvalidOperatorDeclaration { message, .. } => message.clone(),
             TypeError::UncallableExtension { message, .. } => message.clone(),
             TypeError::InvalidTypeParameterName { message, .. } => message.clone(),
             TypeError::BuiltinNameDeclared { name, .. } => {

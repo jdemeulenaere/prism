@@ -1,0 +1,8 @@
+// expect: E4035
+public struct P { val x: Int }
+struct Box<T> { val v: T }
+struct Q { val x: Int }
+
+operator fun P.equals(other: &P): Bool = true
+operator fun <T> Box<T>.equals(other: &Box<T>): Bool = true
+operator fun Q.equals(other: Q): Bool = true

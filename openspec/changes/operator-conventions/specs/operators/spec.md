@@ -41,7 +41,7 @@ An operator MUST use its built-in meaning whenever the built-in operator accepts
 An operator function the built-in operator always serves could never be called and MUST be rejected with `E4010`, saying that the built-in operator takes precedence: an arithmetic, unary or ordering function on `Int`, `Double`, `Char`, `Bool` or `String` whose operand types the built-in operator accepts, and `get`, `set`, `iterator`, `hasNext`, `next` or `contains` on `List` or `Range`, or `get` or `set` on `String`.
 
 #### Scenario: Redefining a built-in operator rejected
-- **WHEN** a file declares `operator fun Int.plus(other: Int): Int = 0`, `operator fun Double.compareTo(other: &Double): Int = 0`, `operator fun Bool.not(): Bool = true` and `operator fun <T> List<T>.get(index: Int): &T = this[0]`
+- **WHEN** a file declares `operator fun Int.plus(other: Int): Int = 0`, `operator fun Double.compareTo(other: &Double): Int = 0`, `operator fun Bool.not(): Bool = true` and `operator fun <T> List<T>.get(index: Int): &T = &this[0]`
 - **THEN** the type checker emits `E4010` for each, saying that the built-in operator always takes precedence
 
 #### Scenario: Operand types the built-in operator rejects
@@ -176,7 +176,7 @@ A call whose callee is a value whose type, after its `&`, `&mut` and `Heap<T>` l
 `for (x in y)` over a type other than `Range` and `List` MUST use the cursor protocol: `iterator()` (shared) returns a cursor of a type `K` holding no reference outside function types; the loop runs while `hasNext(cursor: &K): Bool` (shared) is true, binding `next(cursor: &mut K)`'s result to `x` each time. `y` MUST be evaluated once and borrowed for the whole loop, as a list is.
 
 #### Scenario: Iterating a custom collection
-- **WHEN** `struct Item { val name: String }`, `struct Bag { var items: List<Item> }`, `operator fun Bag.iterator(): Int = 0`, `operator fun Bag.hasNext(cursor: &Int): Bool = cursor < items.size` and `operator fun Bag.next(cursor: &mut Int): &Item { val i = *cursor; *cursor = i + 1; return &items[i] }` are declared and `fun f(b: &Bag) { for (item in b) { if (item.name == "stop") break; println(item.name) } }` is checked
+- **WHEN** `struct Item { val name: String }`, `struct Bag { var items: List<Item> }`, `operator fun Bag.iterator(): Int = 0`, `operator fun Bag.hasNext(cursor: &Int): Bool = cursor < items.size` and `operator fun Bag.next(cursor: &mut Int): &Item { val i: Int = cursor; *cursor = i + 1; return &items[i] }` are declared and `fun f(b: &Bag) { for (item in b) { if (item.name == "stop") break; println(item.name) } }` is checked
 - **THEN** the file typechecks, `item` has type `&Item`, and `b` is borrowed for the loop
 
 #### Scenario: Changing a collection while iterating it rejected
@@ -195,11 +195,11 @@ A call whose callee is a value whose type, after its `&`, `&mut` and `Heap<T>` l
 The loop variable MUST be a fresh immutable binding of `next`'s result type in each iteration: a `&E` borrows an element, a value is owned and dropped at the end of the iteration. `for (x in &mut y)` MUST call a `mut` `next` returning `&mut E`, a second `next` of the receiver; with none it MUST be `E4003`, naming it. The cursor MUST be dropped when the loop ends.
 
 #### Scenario: Iterating mutably through a mutable next
-- **WHEN** the `Bag` protocol above also declares `operator mut fun Bag.next(cursor: &mut Int): &mut Item { val i = *cursor; *cursor = i + 1; return &mut items[i] }` with `struct Item { var name: String }`, and `fun f(b: &mut Bag) { for (item in &mut b) { item.name = "x" } }` and `fun g(b: &mut Bag) { for (item in b) { item.name = "x" } }` are checked
+- **WHEN** the `Bag` protocol above also declares `operator mut fun Bag.next(cursor: &mut Int): &mut Item { val i: Int = cursor; *cursor = i + 1; return &mut items[i] }` with `struct Item { var name: String }`, and `fun f(b: &mut Bag) { for (item in &mut b) { item.name = "x" } }` and `fun g(b: &mut Bag) { for (item in b) { item.name = "x" } }` are checked
 - **THEN** the type checker accepts `f`, where `item` has type `&mut Item`, and emits `E4003` for `g`, whose `item` is a shared borrow, with help suggesting `for (item in &mut b)`
 
 #### Scenario: Values produced by next
-- **WHEN** `struct Countdown : Copy { val from: Int }`, `operator fun Countdown.iterator(): Int = from`, `operator fun Countdown.hasNext(cursor: &Int): Bool = cursor > 0` and `operator fun Countdown.next(cursor: &mut Int): String { val n = *cursor; *cursor = n - 1; return n.toString() }` are declared and `fun f() { for (s in Countdown(3)) println(s) }` is checked
+- **WHEN** `struct Countdown : Copy { val from: Int }`, `operator fun Countdown.iterator(): Int = from`, `operator fun Countdown.hasNext(cursor: &Int): Bool = cursor > 0` and `operator fun Countdown.next(cursor: &mut Int): String { val n: Int = cursor; *cursor = n - 1; return n.toString() }` are declared and `fun f() { for (s in Countdown(3)) println(s) }` is checked
 - **THEN** the file typechecks, `s` has type `String`, and each `s` is dropped at the end of its iteration
 
 ### Requirement: Compound Assignment Through Operator Functions

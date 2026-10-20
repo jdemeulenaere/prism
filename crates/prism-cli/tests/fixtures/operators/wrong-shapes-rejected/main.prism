@@ -1,0 +1,9 @@
+// expect: E4035
+struct P : Copy { val x: Int }
+
+operator fun P.plus(): P = this
+operator fun P.compareTo(other: &P): Bool = true
+operator fun P.size(): Int = 0
+operator fun double(p: P): P = p
+operator mut fun P.minus(other: P): P = other
+operator fun P.times(k: Int = 2): P = this
