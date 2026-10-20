@@ -203,7 +203,7 @@ The loop variable MUST be a fresh immutable binding of `next`'s result type in e
 - **THEN** the file typechecks, `s` has type `String`, and each `s` is dropped at the end of its iteration
 
 ### Requirement: Compound Assignment Through Operator Functions
-`a op= b`, where the built-in operator does not apply to `a`'s and `b`'s types, MUST be `a = a op b` with the target place evaluated once: the operator function receives the target as its receiver (borrowed, or moved for a consuming receiver), and its result, of the target's type (`E4002` otherwise), is assigned to the target. The target MUST be writable (`E4003`).
+`a op= b`, where the built-in operator does not apply to `a`'s and `b`'s types, MUST be `a = a op b` with the target place evaluated once: the operator function receives the target as its receiver (borrowed, or moved for a consuming receiver), and its result, of the target's type (`E4002` otherwise), is assigned to the target. The target MUST be writable (`E4003`), and for a consuming receiver a whole binding, which a move may take (`E4017` otherwise).
 
 #### Scenario: Accumulating vectors
 - **WHEN** `struct Vector2 : Copy { val x: Int, val y: Int }` and `operator fun Vector2.plus(other: Vector2): Vector2 = Vector2(x + other.x, y + other.y)` are declared and `fun f(vs: &List<Vector2>): Vector2 { var total = Vector2(0, 0); for (v in vs) { total += v }; return total }` and `fun g(a: Vector2) { a += a }` are checked
@@ -212,6 +212,10 @@ The loop variable MUST be a fresh immutable binding of `next`'s result type in e
 #### Scenario: A consuming operator in a compound assignment
 - **WHEN** `struct Text { val s: String }` and `operator consuming fun Text.plus(other: &Text): Text = Text(s + other.s)` are declared and `fun f(t: Text): Text { var a = Text("x"); a += t; return a }` is checked
 - **THEN** the file passes `prism check`: `a` is moved into `plus` and the result assigned back to it
+
+#### Scenario: A consuming operator on a list element rejected
+- **WHEN** the same `Text` and `plus` are declared and `fun f(xs: &mut List<Text>, i: Int, t: &Text) { xs[i] += t }` is checked
+- **THEN** the type checker emits `E4017`: the consuming `plus` would move the element out of the list
 
 ### Requirement: Operator Uses Cost a Lookup Each
 Typing an operator use MUST cost at most a constant number of extension table lookups (one per function a convention calls, two for an index place), with no search over overloads or candidate types, so checking a file stays linear in its operator uses.

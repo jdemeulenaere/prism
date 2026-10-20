@@ -1,0 +1,15 @@
+// expect: E4003
+struct Counter { var count: Int }
+
+operator mut fun Counter.invoke(step: Int = 1): Int {
+    count += step
+    return count
+}
+
+fun f(): Int {
+    var c = Counter(0)
+    c()
+    c(step = 2)
+    return c()
+}
+fun g(c: &Counter): Int = c()

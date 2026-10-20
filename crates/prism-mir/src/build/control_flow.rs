@@ -20,6 +20,50 @@ use prism_typed_tree::{
 };
 
 impl Builder<'_> {
+    /// Writes into `destination` whether `element` is in the range `range` (D8 of
+    /// `operator-conventions`): `start <= element`, then `element <= end` or `element < end` as
+    /// the range's end flag says.
+    pub(super) fn range_contains(
+        &mut self,
+        destination: Place,
+        range: Operand,
+        range_ty: Type,
+        element: Operand,
+        span: Span,
+    ) {
+        let range_local = self.new_temporary(range_ty, span);
+        self.assign(Place::local(range_local), Rvalue::Use(range), span);
+        let value = self.new_temporary(Type::Int, span);
+        self.assign(Place::local(value), Rvalue::Use(element), span);
+        let field = |index| Place::local(range_local).project(Projection::Field(index));
+        let from_start = Rvalue::Binary(
+            BinaryOperator::LessOrEqual,
+            Operand::Copy(field(0), span),
+            Operand::Copy(Place::local(value), span),
+        );
+        self.assign(destination.clone(), from_start, span);
+        let (above_start, below_start) =
+            self.switch_on_bool(Operand::Copy(destination.clone(), span), span);
+        self.current = Some(above_start);
+        let (closed, half_open) =
+            self.switch_on_bool(Operand::Copy(field(RANGE_END_INCLUSIVE), span), span);
+        let mut ends = vec![Some(below_start)];
+        for (block, operator) in [
+            (closed, BinaryOperator::LessOrEqual),
+            (half_open, BinaryOperator::Less),
+        ] {
+            self.current = Some(block);
+            let to_end = Rvalue::Binary(
+                operator,
+                Operand::Copy(Place::local(value), span),
+                Operand::Copy(field(1), span),
+            );
+            self.assign(destination.clone(), to_end, span);
+            ends.push(self.current);
+        }
+        self.join(&ends, span);
+    }
+
     /// Evaluates a `Bool` into a result temporary with `evaluate`, in its own temporary scope,
     /// and branches on it: returns the blocks reached when it is `true` and when it is `false`,
     /// or `None` when the evaluation diverges. There is no current block afterwards.

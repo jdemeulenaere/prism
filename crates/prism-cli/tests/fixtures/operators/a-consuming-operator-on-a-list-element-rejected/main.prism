@@ -1,0 +1,8 @@
+// expect: E4017
+struct Text { val s: String }
+
+operator consuming fun Text.plus(other: &Text): Text = Text(s + other.s)
+
+fun f(xs: &mut List<Text>, i: Int, t: &Text) {
+    xs[i] += t
+}

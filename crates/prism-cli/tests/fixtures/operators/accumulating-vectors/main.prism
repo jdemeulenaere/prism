@@ -1,0 +1,15 @@
+// expect: E4003
+struct Vector2 : Copy { val x: Int, val y: Int }
+
+operator fun Vector2.plus(other: Vector2): Vector2 = Vector2(x + other.x, y + other.y)
+
+fun f(vs: &List<Vector2>): Vector2 {
+    var total = Vector2(0, 0)
+    for (v in vs) {
+        total += v
+    }
+    return total
+}
+fun g(a: Vector2) {
+    a += a
+}

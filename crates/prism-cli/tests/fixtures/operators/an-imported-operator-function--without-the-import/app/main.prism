@@ -1,0 +1,9 @@
+// expect: E4002
+// entry: app/main.prism
+package app
+
+import /lib/source
+
+fun f() {
+    val v = make() + make()
+}

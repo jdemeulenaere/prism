@@ -708,9 +708,15 @@ impl Builder<'_> {
                 operator,
                 target,
                 value,
+                function,
             } => {
                 self.push_scope(span);
-                self.lower_compound_assign(*operator, *target, *value, span);
+                match function {
+                    Some(function) => {
+                        self.lower_compound_through_function(function, *target, *value, span)
+                    }
+                    None => self.lower_compound_assign(*operator, *target, *value, span),
+                }
                 self.pop_scope();
             }
             TreeStatementKind::Expression { value } => {

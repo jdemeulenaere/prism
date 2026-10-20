@@ -1,0 +1,6 @@
+// expect: ok
+struct Tags { val names: List<String> }
+
+operator fun Tags.contains(name: &String): Bool = names.contains(name)
+
+fun f(t: &Tags, xs: &List<Int>, n: Int): Bool = "a" in t && n !in xs && n in 0..<10

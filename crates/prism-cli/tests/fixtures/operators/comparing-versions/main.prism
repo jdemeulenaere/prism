@@ -1,0 +1,7 @@
+// expect: ok
+struct Version : Copy { val major: Int, val minor: Int }
+
+operator fun Version.compareTo(other: &Version): Int =
+    if (major != other.major) major - other.major else minor - other.minor
+
+fun f(a: Version, b: Version): Bool = a < b || a >= b

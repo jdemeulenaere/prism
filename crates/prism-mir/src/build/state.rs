@@ -366,6 +366,57 @@ impl Builder<'_> {
         );
     }
 
+    /// `s.value op= value` through the operator function `function` (D13 of
+    /// `operator-conventions`): the state's `Copy` value is read, passed to the function with
+    /// the value, and the result written back.
+    pub(super) fn lower_state_compound_through_function(
+        &mut self,
+        function: &prism_typed_tree::CompoundFunction,
+        handle: ExpressionId,
+        value: ExpressionId,
+        target_span: Span,
+        span: Span,
+    ) {
+        let (handle, kind, value_ty) = self.held_handle(handle);
+        let reference = Type::Reference {
+            mutable: false,
+            inner: Box::new(value_ty.clone()),
+        };
+        let pointer = self.new_temporary(reference, target_span);
+        self.state_call(
+            StateOperation::Read,
+            kind,
+            &value_ty,
+            vec![handle.clone()],
+            Place::local(pointer),
+            target_span,
+        );
+        let current = self.new_temporary(value_ty.clone(), target_span);
+        let read = Operand::Copy(Self::deref(Place::local(pointer)), target_span);
+        self.assign(Place::local(current), Rvalue::Use(read), target_span);
+        let argument = self.operand(value);
+        if self.current.is_none() {
+            return;
+        }
+        let receiver =
+            self.compound_receiver(function, Place::local(current), &value_ty, target_span);
+        let result = self.new_temporary(value_ty.clone(), span);
+        self.call_compound_function(function, receiver, argument, Place::local(result), span);
+        if self.current.is_none() {
+            return;
+        }
+        let unit = self.new_temporary(Type::Unit, span);
+        let moved = Operand::Move(Place::local(result), span);
+        self.state_call(
+            StateOperation::Write,
+            kind,
+            &value_ty,
+            vec![handle, moved],
+            Place::local(unit),
+            span,
+        );
+    }
+
     /// A call of one of the state built-ins (D6, D17 of `state-handles`, D11 of
     /// `owned-state`): `mutableStateOf`, a `Copy` read of `value`, `update`, `weak` or `get`.
     pub(super) fn lower_state_call(

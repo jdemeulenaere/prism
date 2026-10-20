@@ -364,6 +364,20 @@ pub enum TypeError {
         span: Span,
     },
 
+    /// E4002: An operator use (`a * b`, `-a`, `a < b`, `a in b`, `a[i]`, `a(...)`, a `for`
+    /// loop) whose receiver's type has no built-in meaning for it and no `operator` function
+    /// serving it in scope (D3 and D4 of `operator-conventions`). `message` names the operator
+    /// and the operand types, `receiver` and `function` the function to declare, which the
+    /// library index may find in a library module (`import_suggestions`).
+    MissingOperatorFunction {
+        message: String,
+        receiver: Type,
+        function: String,
+        help: Option<String>,
+        span: Span,
+        import_suggestions: Vec<String>,
+    },
+
     /// E4035: An `operator` declaration that is not an extension named by an operator
     /// convention with its convention's shape: receiver modes, parameters and result, no
     /// `compose`, context parameter or default values but on `invoke`, and an `equals` declared
@@ -645,6 +659,7 @@ impl TypeError {
             TypeError::NoTextForm { .. } => "E4026",
             TypeError::InvalidLibraryDeclaration { .. } => "E4029",
             TypeError::InvalidOperatorDeclaration { .. } => "E4035",
+            TypeError::MissingOperatorFunction { .. } => "E4002",
             TypeError::PolymorphicRecursion { .. } => "E4027",
             TypeError::CannotCaptureByValue { .. } => "E4028",
             TypeError::MissingContext { .. } => "E4034",
@@ -702,6 +717,7 @@ impl TypeError {
             TypeError::NoTextForm { span, .. } => *span,
             TypeError::InvalidLibraryDeclaration { span, .. } => *span,
             TypeError::InvalidOperatorDeclaration { span, .. } => *span,
+            TypeError::MissingOperatorFunction { span, .. } => *span,
             TypeError::PolymorphicRecursion { span, .. } => *span,
             TypeError::CannotCaptureByValue { span, .. } => *span,
             TypeError::MissingContext { span, .. } => *span,
@@ -927,6 +943,7 @@ impl TypeError {
             }
             TypeError::InvalidLibraryDeclaration { message, .. } => message.clone(),
             TypeError::InvalidOperatorDeclaration { message, .. } => message.clone(),
+            TypeError::MissingOperatorFunction { message, .. } => message.clone(),
             TypeError::UncallableExtension { message, .. } => message.clone(),
             TypeError::InvalidTypeParameterName { message, .. } => message.clone(),
             TypeError::BuiltinNameDeclared { name, .. } => {

@@ -1,0 +1,7 @@
+// expect: ok
+struct Dp : Copy { val value: Double }
+struct Ratio : Copy { val value: Double }
+
+operator fun Dp.div(other: Dp): Ratio = Ratio(value / other.value)
+
+fun f(a: Dp, b: Dp): Ratio = a / b

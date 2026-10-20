@@ -1,0 +1,8 @@
+// expect: ok
+fun take(s: String) {}
+
+fun f(names: &List<String>, n: String): Bool {
+    val found = n in names && "x" !in names
+    take(n)
+    return found
+}

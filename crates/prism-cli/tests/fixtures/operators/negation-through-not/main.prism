@@ -1,0 +1,6 @@
+// expect: ok
+struct Flags : Copy { val bits: Int }
+
+operator fun Flags.not(): Flags = Flags(-1 - bits)
+
+fun f(a: Flags): Flags = !a

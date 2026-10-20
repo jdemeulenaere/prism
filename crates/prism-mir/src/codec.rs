@@ -793,6 +793,7 @@ impl Codec for BuiltinFunction {
             BuiltinFunction::RunApp => 37,
             BuiltinFunction::DpOfInt => 38,
             BuiltinFunction::TextUnitOfInt => 39,
+            BuiltinFunction::RangeContains => 40,
         });
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -837,6 +838,7 @@ impl Codec for BuiltinFunction {
             37 => BuiltinFunction::RunApp,
             38 => BuiltinFunction::DpOfInt,
             39 => BuiltinFunction::TextUnitOfInt,
+            40 => BuiltinFunction::RangeContains,
             _ => return None,
         })
     }

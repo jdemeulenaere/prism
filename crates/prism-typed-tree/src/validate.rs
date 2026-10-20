@@ -348,6 +348,7 @@ impl Validator<'_> {
                 operator,
                 target,
                 value,
+                function,
             } => {
                 self.note_state_target(*target);
                 self.expression(*target);
@@ -360,9 +361,21 @@ impl Validator<'_> {
                         operator.as_str()
                     ));
                 }
-                // The operator's result has the target's type (D3 of `compound-assignment`).
-                if let Some(ty) = self.type_of(*target).cloned() {
-                    self.expect_type(*value, &ty, "compound assignment value");
+                // The operator's result has the target's type (D3 of `compound-assignment`);
+                // an operator function's value has its parameter's type (D13 of
+                // `operator-conventions`).
+                match function
+                    .as_ref()
+                    .and_then(|function| function.parameter_type(1))
+                {
+                    Some(parameter) => {
+                        self.expect_type(*value, &parameter, "compound assignment argument")
+                    }
+                    None => {
+                        if let Some(ty) = self.type_of(*target).cloned() {
+                            self.expect_type(*value, &ty, "compound assignment value");
+                        }
+                    }
                 }
             }
             StatementKind::Expression { value } => self.expression(*value),
@@ -1781,6 +1794,7 @@ mod tests {
                 operator: BinaryOperator::Equal,
                 target,
                 value,
+                function: None,
             },
             span: Span::dummy(),
         });
@@ -1935,6 +1949,7 @@ mod tests {
                 has_receiver: false,
                 has_context: false,
                 is_compose: false,
+                operator: None,
             }),
             Type::Int,
         );
@@ -2038,6 +2053,7 @@ mod tests {
                 has_receiver: false,
                 has_context: false,
                 is_compose: false,
+                operator: None,
             }),
             Type::Int,
         );
@@ -2087,6 +2103,7 @@ mod tests {
                 has_receiver: false,
                 has_context: false,
                 is_compose: false,
+                operator: None,
             }),
             boxed.clone(),
         );
@@ -2102,6 +2119,7 @@ mod tests {
                 has_receiver: true,
                 has_context: false,
                 is_compose: false,
+                operator: None,
             }),
             contents,
         );
@@ -2161,6 +2179,7 @@ mod tests {
                 has_receiver: false,
                 has_context: false,
                 is_compose: false,
+                operator: None,
             }),
             Type::Int,
         );

@@ -96,6 +96,7 @@ impl TypeChecker {
                 has_receiver: true,
                 has_context: false,
                 is_compose: false,
+                operator: None,
             };
             return self.add(ExpressionKind::Call(call), value, span);
         }

@@ -6,9 +6,14 @@
 //! `(&mut T)?` is reborrowed through a tag test.
 
 use super::Builder;
-use crate::mir::{BorrowOrigin, Constant, Operand, Place, Projection, Rvalue, TemplatePart};
-use prism_ast::Span;
-use prism_typed_tree::{BinaryOperator, CoercionKind, ExpressionId, ExpressionKind, Type};
+use crate::mir::{
+    BorrowOrigin, Callee, Constant, Operand, Place, Projection, Rvalue, TemplatePart,
+};
+use prism_ast::{ReceiverMode, Span};
+use prism_typed_tree::{
+    BinaryOperator, CoercionKind, CompoundFunction, ExpressionId, ExpressionKind, ParameterKind,
+    Type,
+};
 
 /// The subject of a `when` with value patterns: its place and, when its type is not `Copy`, the
 /// place holding its (optional) borrow, evaluated once (D14).
@@ -173,6 +178,101 @@ impl Builder<'_> {
         } else {
             self.assign(place, rvalue, target_span);
         }
+    }
+
+    /// `target op= value` through the operator function `function` (D13 of
+    /// `operator-conventions`): the target's place is evaluated once, then the value, then the
+    /// function is called with the place as its receiver, borrowed shared or moved, and the
+    /// result is assigned to the place, dropping the old value first unless it was moved.
+    pub(super) fn lower_compound_through_function(
+        &mut self,
+        function: &CompoundFunction,
+        target: ExpressionId,
+        value: ExpressionId,
+        span: Span,
+    ) {
+        let target_expression = self.expression(target);
+        let (ty, target_span) = (target_expression.ty.clone(), target_expression.span);
+        if let ExpressionKind::StatePlace { handle } = target_expression.kind {
+            return self.lower_state_compound_through_function(
+                function,
+                handle,
+                value,
+                target_span,
+                span,
+            );
+        }
+        let place = self.place_with_access(target, super::state::StateAccess::Exclusive);
+        let argument = self.operand(value);
+        if self.current.is_none() {
+            return;
+        }
+        let moved = function.mode == ReceiverMode::Consuming;
+        let receiver = self.compound_receiver(function, place.clone(), &ty, target_span);
+        let result = self.new_temporary(ty.clone(), span);
+        self.call_compound_function(function, receiver, argument, Place::local(result), span);
+        if self.current.is_none() {
+            return;
+        }
+        if !moved && self.needs_drop(&ty) {
+            self.emit_drop(place.clone(), span);
+        }
+        let result = Operand::Move(Place::local(result), span);
+        self.assign(place, Rvalue::Use(result), target_span);
+    }
+
+    /// The receiver operand of a compound assignment's operator function: a shared borrow of
+    /// `place`, or the value at `place`, moved (copied when `Copy`).
+    pub(super) fn compound_receiver(
+        &mut self,
+        function: &CompoundFunction,
+        place: Place,
+        ty: &Type,
+        span: Span,
+    ) -> Operand {
+        if function.mode == ReceiverMode::Consuming {
+            return if self.is_copy(ty) {
+                Operand::Copy(place, span)
+            } else {
+                Operand::Move(place, span)
+            };
+        }
+        let borrow = self.new_temporary(shared(ty.clone()), span);
+        let rvalue = Rvalue::Borrow {
+            mutable: false,
+            origin: BorrowOrigin::Receiver,
+            place,
+        };
+        self.assign(Place::local(borrow), rvalue, span);
+        Operand::Move(Place::local(borrow), span)
+    }
+
+    /// Calls a compound assignment's operator function with `receiver` and `argument` into
+    /// `destination`.
+    pub(super) fn call_compound_function(
+        &mut self,
+        function: &CompoundFunction,
+        receiver: Operand,
+        argument: Operand,
+        destination: Place,
+        span: Span,
+    ) {
+        let parameters = function
+            .parameters
+            .iter()
+            .map(|(_, ty)| ty.clone())
+            .collect();
+        self.emit_call(
+            Callee::Function(function.path.clone()),
+            vec![receiver, argument],
+            parameters,
+            vec![ParameterKind::Plain, ParameterKind::Plain],
+            function.type_arguments.clone(),
+            destination,
+            false,
+            true,
+            span,
+        );
     }
 
     /// `place`, the place of the compound assignment target `target`, reached through a mutable

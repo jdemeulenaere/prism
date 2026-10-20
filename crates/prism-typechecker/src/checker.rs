@@ -270,6 +270,24 @@ struct MethodCall<'a> {
     expected: Option<&'a Type>,
 }
 
+/// An extension found for a method call, with what the call passes its receiver from.
+struct FoundExtension<'a> {
+    extension: Box<Extension>,
+    /// Whether it is the file's own extension, whose type may still be inferred.
+    own: bool,
+    /// The type the extension was found on, at the layer whose type constructor has it.
+    reached: Type,
+    /// The receiver's node, a place read in place or a consumed temporary.
+    receiver: ExpressionId,
+    receiver_ty: Type,
+    is_place: bool,
+    writable: bool,
+    /// The layers looked through to reach `reached`, outermost first.
+    layers: &'a [Layer],
+    /// Whether the extension is called on the payload of a nullable.
+    through_nullable: bool,
+}
+
 /// A call `target.unbox()` whose receiver, already typed as the node `receiver`, is a box.
 struct UnboxCall<'a> {
     target: &'a Expr,
@@ -621,6 +639,11 @@ pub struct TypeChecker {
     /// Whether the expression currently being typed is consumed. Its pass-through children
     /// (`if`/`when` branches, a block tail, `?:` operands) are consumed too.
     parent_consuming: bool,
+    /// Operands already inferred before an operator function was looked up, by the address of
+    /// the argument expression standing for them in the operator's call, with whether each is a
+    /// place read in place (D4 of `operator-conventions`). An argument check takes its entry
+    /// instead of inferring the expression again.
+    preinferred_arguments: HashMap<usize, (ExpressionId, bool)>,
     /// Unannotated private top-level declarations and extensions, and how far their inference is.
     inference: HashMap<InferenceKey, Inference>,
     /// Declarations already reported as depending on themselves (`E4013`).
@@ -724,6 +747,7 @@ impl TypeChecker {
             origin: Origin::Value,
             consuming: false,
             parent_consuming: false,
+            preinferred_arguments: HashMap::new(),
             inference: HashMap::new(),
             recursive_inference: HashSet::new(),
             own_extensions: HashMap::new(),
@@ -3651,6 +3675,17 @@ impl TypeChecker {
     /// temporary. The argument is inferred rather than checked, because it may already be a
     /// reference (`greet(longest(&a, &b))`) or be a value to borrow.
     fn check_argument(&mut self, expr: &Expr, param_ty: &Type, origin: Origin) -> ExpressionId {
+        if let Some((found, is_place)) = self.take_preinferred(expr) {
+            let reference = is_reference_parameter(param_ty);
+            let site = if reference {
+                Site::Argument { is_place }
+            } else {
+                Site::Value
+            };
+            return self.with_origin(origin, |c| {
+                c.fit(expr, found, param_ty, site, !reference && is_place)
+            });
+        }
         if !is_reference_parameter(param_ty) {
             return self.check_expr_at(expr, param_ty, origin);
         }
@@ -4683,37 +4718,15 @@ impl TypeChecker {
             checker.add(kind, ty, span)
         };
         match op {
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
-                let left_id = self.infer_operand(left);
-                let right_id = self.infer_operand(right);
-                let (left_ty, right_ty) = (self.ty(left_id), self.ty(right_id));
-
-                let ty = if left_ty == Type::Error || right_ty == Type::Error {
-                    Type::Error
-                } else if let Some(ty) = arithmetic_result(op, &left_ty, &right_ty) {
-                    ty
-                } else if let Some(help) = type_parameter_operator_help(op, &left_ty, &right_ty) {
-                    // The operator, not an operand, does not apply (D5 of `generics`).
-                    self.errors.push(TypeError::OperatorMismatch {
-                        operator: operator_text(op).to_string(),
-                        left: left_ty,
-                        right: right_ty,
-                        span,
-                        help: Some(help),
-                    });
-                    Type::Error
-                } else {
-                    // Strict typing: no implicit widening (e.g. Int + Float rejected)
-                    self.errors.push(TypeError::TypeMismatch {
-                        expected: left_ty,
-                        found: right_ty,
-                        span,
-                        help: None,
-                    });
-                    Type::Error
-                };
-                binary(self, left_id, right_id, ty)
-            }
+            BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Mod
+            | BinaryOp::Lt
+            | BinaryOp::LtEq
+            | BinaryOp::Gt
+            | BinaryOp::GtEq => self.infer_operator_binary(op, left, right, span),
 
             BinaryOp::Eq | BinaryOp::NotEq => {
                 let left_id = self.infer_operand(left);
@@ -4757,39 +4770,6 @@ impl TypeChecker {
                     });
                     binary(self, left_id, right_id, Type::Error)
                 }
-            }
-
-            BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq => {
-                let left_id = self.infer_operand(left);
-                let right_id = self.infer_operand(right);
-                let (left_ty, right_ty) = (self.ty(left_id), self.ty(right_id));
-
-                let comparable = left_ty == Type::Error
-                    || right_ty == Type::Error
-                    || (left_ty == Type::Int && right_ty == Type::Int)
-                    || (left_ty == Type::Float && right_ty == Type::Float)
-                    || (left_ty == Type::Char && right_ty == Type::Char);
-                let ty = if comparable {
-                    Type::Bool
-                } else {
-                    // Two `Bool`s or two `String`s must not read "expected 'Bool', found
-                    // 'Bool'": the operator, not an operand, does not apply.
-                    let help = type_parameter_operator_help(op, &left_ty, &right_ty).or_else(|| {
-                        Some(format!(
-                            "'{}' needs two operands that are both 'Int', both 'Double' or both 'Char'",
-                            operator_text(op)
-                        ))
-                    });
-                    self.errors.push(TypeError::OperatorMismatch {
-                        operator: operator_text(op).to_string(),
-                        left: left_ty,
-                        right: right_ty,
-                        span,
-                        help,
-                    });
-                    Type::Error
-                };
-                binary(self, left_id, right_id, ty)
             }
 
             BinaryOp::And | BinaryOp::Or => {
@@ -4869,19 +4849,7 @@ impl TypeChecker {
                 self.add(kind, ty, span)
             }
 
-            BinaryOp::In | BinaryOp::NotIn => {
-                let left_id = self.infer_operand(left);
-                let right_id = self.infer_operand(right);
-                let (left_ty, right_ty) = (self.ty(left_id), self.ty(right_id));
-                self.errors.push(TypeError::OperatorMismatch {
-                    operator: operator_text(op).to_string(),
-                    left: left_ty,
-                    right: right_ty,
-                    span,
-                    help: None,
-                });
-                self.error_node(vec![left_id, right_id], span)
-            }
+            BinaryOp::In | BinaryOp::NotIn => self.infer_membership(op, left, right, span),
 
             // A half-open range has the same type; whether it excludes its end is a property
             // of the runtime value.
@@ -4895,6 +4863,83 @@ impl TypeChecker {
                 };
                 self.add(kind, Type::plain_struct(NominalId::builtin_range()), span)
             }
+        }
+    }
+
+    /// The built-in arithmetic or ordering operation `op` of the operands `left_id` and
+    /// `right_id`, read through their layers, reporting operand types it does not accept.
+    fn builtin_binary(
+        &mut self,
+        op: BinaryOp,
+        left_id: ExpressionId,
+        right_id: ExpressionId,
+        span: Span,
+    ) -> ExpressionId {
+        let binary = |checker: &mut Self, l: ExpressionId, r: ExpressionId, ty: Type| {
+            let kind = ExpressionKind::Binary {
+                operator: binary_operator(op),
+                left: l,
+                right: r,
+            };
+            checker.add(kind, ty, span)
+        };
+        let (left_ty, right_ty) = (self.ty(left_id), self.ty(right_id));
+        if matches!(
+            op,
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
+        ) {
+            let ty = if left_ty == Type::Error || right_ty == Type::Error {
+                Type::Error
+            } else if let Some(ty) = arithmetic_result(op, &left_ty, &right_ty) {
+                ty
+            } else if let Some(help) = type_parameter_operator_help(op, &left_ty, &right_ty) {
+                // The operator, not an operand, does not apply (D5 of `generics`).
+                self.errors.push(TypeError::OperatorMismatch {
+                    operator: operator_text(op).to_string(),
+                    left: left_ty,
+                    right: right_ty,
+                    span,
+                    help: Some(help),
+                });
+                Type::Error
+            } else {
+                // Strict typing: no implicit widening (e.g. Int + Float rejected)
+                self.errors.push(TypeError::TypeMismatch {
+                    expected: left_ty,
+                    found: right_ty,
+                    span,
+                    help: None,
+                });
+                Type::Error
+            };
+            binary(self, left_id, right_id, ty)
+        } else {
+            let comparable = left_ty == Type::Error
+                || right_ty == Type::Error
+                || (left_ty == Type::Int && right_ty == Type::Int)
+                || (left_ty == Type::Float && right_ty == Type::Float)
+                || (left_ty == Type::Char && right_ty == Type::Char);
+            let ty = if comparable {
+                Type::Bool
+            } else {
+                // Two `Bool`s or two `String`s must not read "expected 'Bool', found
+                // 'Bool'": the operator, not an operand, does not apply.
+                let help = type_parameter_operator_help(op, &left_ty, &right_ty).or_else(|| {
+                    Some(format!(
+                        "'{}' needs two operands that are both 'Int', both 'Double' or both 'Char'",
+                        operator_text(op)
+                    ))
+                });
+                self.errors.push(TypeError::OperatorMismatch {
+                    operator: operator_text(op).to_string(),
+                    left: left_ty,
+                    right: right_ty,
+                    span,
+                    help,
+                });
+                Type::Error
+            };
+            binary(self, left_id, right_id, ty)
         }
     }
 
@@ -4939,39 +4984,50 @@ impl TypeChecker {
         self.add(kind, ty, span)
     }
 
+    /// The built-in `-` of an `Int` or `Double`, or `!` of a `Bool`, of `operand`, read through
+    /// its layers, reporting another operand type.
+    fn builtin_unary(&mut self, op: UnaryOp, operand: ExpressionId, span: Span) -> ExpressionId {
+        let ty = self.ty(operand);
+        if op == UnaryOp::Not {
+            let operand = if ty.is_assignable_to(&Type::Bool) {
+                self.coerce_to(operand, &Type::Bool)
+            } else {
+                if ty != Type::Error {
+                    let span = self.builder.span_of(operand);
+                    self.with_origin(Origin::Value, |c| c.report_mismatch(&Type::Bool, ty, span));
+                }
+                self.wrap_error(operand)
+            };
+            let kind = ExpressionKind::Unary {
+                operator: UnaryOperator::Not,
+                operand,
+            };
+            return self.add(kind, Type::Bool, span);
+        }
+        let ty = if ty == Type::Int || ty == Type::Float || ty == Type::Error {
+            ty
+        } else {
+            self.errors.push(TypeError::TypeMismatch {
+                expected: Type::Int,
+                found: ty,
+                span,
+                help: None,
+            });
+            Type::Error
+        };
+        let kind = ExpressionKind::Unary {
+            operator: UnaryOperator::Negate,
+            operand,
+        };
+        self.add(kind, ty, span)
+    }
+
     fn infer_unary_op(&mut self, op: UnaryOp, inner: &Expr, span: Span) -> ExpressionId {
         if let Some(field) = self.implicit_this_field(inner) {
             return self.infer_unary_op(op, &field, span);
         }
         match op {
-            UnaryOp::Neg => {
-                let operand = self.infer_operand(inner);
-                let ty = self.ty(operand);
-                let ty = if ty == Type::Int || ty == Type::Float || ty == Type::Error {
-                    ty
-                } else {
-                    self.errors.push(TypeError::TypeMismatch {
-                        expected: Type::Int,
-                        found: ty,
-                        span,
-                        help: None,
-                    });
-                    Type::Error
-                };
-                let kind = ExpressionKind::Unary {
-                    operator: UnaryOperator::Negate,
-                    operand,
-                };
-                self.add(kind, ty, span)
-            }
-            UnaryOp::Not => {
-                let operand = self.check_operand(inner, &Type::Bool);
-                let kind = ExpressionKind::Unary {
-                    operator: UnaryOperator::Not,
-                    operand,
-                };
-                self.add(kind, Type::Bool, span)
-            }
+            UnaryOp::Neg | UnaryOp::Not => self.infer_operator_unary(op, inner, span),
             // The parser produces `*` only at the top of an assignment target, which
             // `check_assignment` handles; reads through references are implicit.
             UnaryOp::Deref => {
@@ -5298,9 +5354,42 @@ impl TypeChecker {
         }
         let (target_id, target_ty, is_mutable) = self.assignment_target(target, span);
         self.check_state_write(target_id, true, span);
-        let value_id = self.with_consuming(false, |c| c.infer_operand(value));
-        let value_ty = self.ty(value_id);
         let compound = format!("{}=", operator.as_str());
+        // A target of a type without built-in operators calls an operator function (D13 of
+        // `operator-conventions`).
+        if !operators::has_builtin_operators(&target_ty)
+            && !matches!(target_ty, Type::Reference { .. })
+        {
+            return self.check_compound_through_function(
+                operator,
+                target,
+                (target_id, target_ty, is_mutable),
+                value,
+                None,
+                span,
+            );
+        }
+        let (value_raw, value_in_place) =
+            self.with_consuming(false, |c| c.infer_operator_operand(value));
+        let value_peeled = peel_indirection(&self.ty(value_raw)).clone();
+        if target_ty != Type::Error
+            && value_peeled != Type::Error
+            && !matches!(target_ty, Type::Reference { .. })
+            && arithmetic_result(operator, &target_ty, &value_peeled).is_none()
+            && self.has_operator_function(&target_ty, operators::arithmetic_name(operator))
+        {
+            // An operator function of a built-in type (`String.times(Int)`).
+            return self.check_compound_through_function(
+                operator,
+                target,
+                (target_id, target_ty, is_mutable),
+                value,
+                Some((value_raw, value_in_place)),
+                span,
+            );
+        }
+        let value_id = self.peel_indirection_nodes(value_raw);
+        let value_ty = self.ty(value_id);
         let checked = target_ty != Type::Error && value_ty != Type::Error;
 
         let fits = match (binding_name(target), &target_ty) {
@@ -5353,6 +5442,87 @@ impl TypeChecker {
             operator: binary_operator(operator),
             target: target_id,
             value: value_id,
+            function: None,
+        };
+        self.builder.add_statement(kind, span)
+    }
+
+    /// Whether the type `ty` has an operator function `name`, as an operator use finds it.
+    fn has_operator_function(&self, ty: &Type, name: &str) -> bool {
+        let mut layers = Vec::new();
+        matches!(
+            self.find_extension_through_indirection(ty.clone(), name, &mut layers).0,
+            ExtensionLookup::Found { extension, .. } if extension.is_operator
+        )
+    }
+
+    /// `target op= value` through an operator function (D13 of `operator-conventions`): the
+    /// target, typed as `typed` (its node, type and writability), must be writable (`E4003`), and
+    /// the function of the operator's convention on its type is called with the target as its
+    /// receiver and the result assigned back; no function is `E4002`.
+    fn check_compound_through_function(
+        &mut self,
+        operator: BinaryOp,
+        target: &Expr,
+        typed: (ExpressionId, Type, bool),
+        value: &Expr,
+        preinferred: Option<(ExpressionId, bool)>,
+        span: Span,
+    ) -> StatementId {
+        let (target_id, target_ty, is_mutable) = typed;
+        if !is_mutable && target_ty != Type::Error {
+            if let Some(name) = binding_name(target) {
+                self.errors.push(TypeError::ImmutabilityViolation {
+                    message: format!("cannot reassign to immutable 'val' binding '{}'", name),
+                    span,
+                    help: None,
+                });
+            }
+        }
+        let resolved = if target_ty == Type::Error {
+            Err(None)
+        } else {
+            self.compound_function(operator, target, &target_ty, value, preinferred, span)
+        };
+        let (value_id, function) = match resolved {
+            Ok((value_id, function)) => {
+                self.check_state_compound_value(target_id, operator.as_str(), value, span);
+                (value_id, Some(Box::new(function)))
+            }
+            Err(miss) => {
+                let value_id = match preinferred {
+                    Some((node, _)) => self.peel_indirection_nodes(node),
+                    None => self.with_consuming(false, |c| c.infer_operand(value)),
+                };
+                let value_ty = self.ty(value_id);
+                if let (Some(miss), false) = (miss, value_ty == Type::Error) {
+                    let name = operators::arithmetic_name(operator);
+                    self.report_missing_operator(
+                        miss,
+                        format!(
+                            "operator '{}=' cannot be applied to '{}' and '{}'",
+                            operator.as_str(),
+                            target_ty,
+                            value_ty
+                        ),
+                        &target_ty,
+                        name,
+                        format!(
+                            "operator fun {}.{}(other: {}): {}",
+                            target_ty, name, value_ty, target_ty
+                        ),
+                        format!("{}?.{}({})", target, name, value),
+                        span,
+                    );
+                }
+                (self.wrap_error(value_id), None)
+            }
+        };
+        let kind = TreeStatementKind::CompoundAssign {
+            operator: binary_operator(operator),
+            target: target_id,
+            value: value_id,
+            function,
         };
         self.builder.add_statement(kind, span)
     }
@@ -6193,7 +6363,35 @@ impl TypeChecker {
                 };
                 self.intrinsic_call = false;
                 self.generic_callee = false;
-                (Some(id), self.ty(id))
+                // A value of a type that is not a function type calls its `invoke` (D12 of
+                // `operator-conventions`).
+                let callee_ty = self.ty(id);
+                if operators::calls_invoke(&callee_ty) {
+                    let (is_place, writable) = match &callee.kind {
+                        ExprKind::Ident(name) => (
+                            self.is_place(callee),
+                            matches!(
+                                self.env.lookup(name).map(|sym| &sym.kind),
+                                Some(SymbolKind::Variable {
+                                    mutability: Mutability::Var,
+                                    ..
+                                })
+                            ),
+                        ),
+                        ExprKind::This => (true, false),
+                        _ => (self.is_place(callee), true),
+                    };
+                    return self.invoke_value(
+                        callee,
+                        id,
+                        is_place,
+                        writable,
+                        args,
+                        expected.as_ref(),
+                        span,
+                    );
+                }
+                (Some(id), callee_ty)
             }
         };
         self.call_with_type(
@@ -6276,6 +6474,7 @@ impl TypeChecker {
                     has_receiver: false,
                     has_context: false,
                     is_compose: false,
+                    operator: None,
                 };
                 self.add(ExpressionKind::Call(call), ty, span)
             }
@@ -6408,6 +6607,7 @@ impl TypeChecker {
                     has_receiver: false,
                     has_context: false,
                     is_compose: true,
+                    operator: None,
                 };
                 self.add(ExpressionKind::Call(call), ty, span)
             }
@@ -6475,6 +6675,7 @@ impl TypeChecker {
             has_receiver: false,
             has_context: false,
             is_compose: false,
+            operator: None,
         };
         self.add(ExpressionKind::Call(call), Type::Unit, span)
     }
@@ -6545,6 +6746,7 @@ impl TypeChecker {
                     has_receiver: false,
                     has_context: false,
                     is_compose: false,
+                    operator: None,
                 };
                 self.add(ExpressionKind::Call(call), ty, span)
             }
@@ -6975,11 +7177,21 @@ impl TypeChecker {
             let ty = declared.substitute(&state.unknowns.partial());
             return Some(self.check_argument(expr, &ty, Origin::Argument));
         }
-        if matches!(expr.kind, ExprKind::Closure { .. }) && closure_signature(&declared).is_some() {
+        if matches!(expr.kind, ExprKind::Closure { .. })
+            && closure_signature(&declared).is_some()
+            && !self.is_preinferred(expr)
+        {
             state.deferred.push((index, expr));
             return None;
         }
-        let (found, site, deferred_move) = if is_reference_parameter(&declared) {
+        let preinferred = self.take_preinferred(expr);
+        let (found, site, deferred_move) = if let Some((found, is_place)) = preinferred {
+            if is_reference_parameter(&declared) {
+                (found, Site::Argument { is_place }, false)
+            } else {
+                (found, Site::Value, is_place)
+            }
+        } else if is_reference_parameter(&declared) {
             let is_place = self.is_place(expr);
             let found = self.with_origin(Origin::Value, |c| {
                 c.with_consuming(!is_place, |c| c.infer_expr(expr))
@@ -7221,6 +7433,7 @@ impl TypeChecker {
                     has_receiver: false,
                     has_context,
                     is_compose,
+                    operator: None,
                 };
                 self.builder
                     .replace(callee_node, ExpressionKind::Call(call), ret, span);
@@ -7266,6 +7479,7 @@ impl TypeChecker {
                     has_receiver: false,
                     has_context: false,
                     is_compose,
+                    operator: None,
                 };
                 self.add(ExpressionKind::Call(call), ret, span)
             }
@@ -7606,8 +7820,15 @@ impl TypeChecker {
 
         // 1. A field takes precedence over everything else.
         if self.has_field(&receiver_ty, member) {
-            let (field, _) = self.build_member_access(receiver, member, is_safe_nav, callee.span);
+            let (field, is_var) =
+                self.build_member_access(receiver, member, is_safe_nav, callee.span);
             let field_ty = self.ty(field);
+            // A field of a type that is not a function type calls its `invoke` (D12 of
+            // `operator-conventions`).
+            if !is_safe_nav && operators::calls_invoke(&field_ty) {
+                let writable = is_var.unwrap_or(true) && contents_writable(&receiver_ty, writable);
+                return self.invoke_value(callee, field, true, writable, args, expected, span);
+            }
             return self.call_with_type(
                 callee,
                 Some(field),
@@ -7740,97 +7961,29 @@ impl TypeChecker {
                 });
                 call
             }
-            ExtensionLookup::Found { extension, own } => {
-                let extension = if own {
-                    let name = extension.table_name(member);
-                    let key = InferenceKey::Extension {
-                        receiver: ReceiverKey::of(&reached),
-                        name: name.clone(),
-                        context: extension.context.clone(),
-                    };
-                    self.ensure_key_inferred(&key, callee.span);
-                    // Inference may have refined the return type.
-                    match self.find_extension(&reached, &name) {
-                        ExtensionLookup::Found { extension, .. } => extension,
-                        _ => extension,
-                    }
-                } else {
-                    extension
-                };
-                if !self.check_visibility(&extension.symbol, callee.span) {
-                    return self.give_up_call(receiver, args, span);
-                }
-                // The receiver must match the declared one, at the layer whose type constructor
-                // has the extension (D10 of `generics`).
-                if !self.receiver_matches(&extension, &reached) {
-                    let call = self.give_up_call(receiver, args, span);
-                    self.errors.push(TypeError::UnknownField {
-                        target_type: reached.clone(),
-                        field_name: member.to_string(),
-                        span: callee.span,
-                        help: Some(format!(
-                            "the extension '{}' is declared on '{}', not on '{}'",
-                            member, extension.receiver, reached
-                        )),
-                        import_suggestions: Vec::new(),
-                    });
-                    return call;
-                }
-                let receiver_site = ReceiverSite {
-                    expr: target,
-                    ty: &receiver_ty,
+            ExtensionLookup::Found { extension, own } => self.call_found_extension(
+                MethodCall {
+                    callee,
+                    target,
+                    member,
+                    is_safe_nav,
+                    type_arguments,
+                    args,
+                    expected,
+                },
+                FoundExtension {
+                    extension,
+                    own,
+                    reached,
+                    receiver,
+                    receiver_ty,
                     is_place,
                     writable,
                     layers: &layers,
                     through_nullable,
-                };
-                let adjustment = self.pass_receiver(
-                    &receiver_site,
-                    extension.mode,
-                    extension.builtin.is_some(),
-                    member,
-                );
-                let (joined, receiver_argument) =
-                    self.apply_receiver_adjustment(receiver, adjustment, &reached);
-                // A `MutableState<T>` receiver of a member of `State<T>` converts (D3 of
-                // `state-handles`).
-                let receiver_argument = match self.ty(receiver_argument) {
-                    Type::Reference { mutable, inner }
-                        if *inner != reached && state::state_handle(&inner).is_some() =>
-                    {
-                        let expected = Type::Reference {
-                            mutable,
-                            inner: Box::new(reached.clone()),
-                        };
-                        self.coerce_to(receiver_argument, &expected)
-                    }
-                    found if found != reached && state::state_handle(&found).is_some() => {
-                        self.coerce_to(receiver_argument, &reached)
-                    }
-                    _ => receiver_argument,
-                };
-                let call = self.call_extension(
-                    MethodCall {
-                        callee,
-                        target,
-                        member,
-                        is_safe_nav,
-                        type_arguments,
-                        args,
-                        expected,
-                    },
-                    &extension,
-                    &reached,
-                    receiver_argument,
-                    span,
-                );
-                if through_nullable {
-                    // A safe call evaluates its arguments inside the chain (D7 of `typed-tree`).
-                    self.close_chain(joined, call, SafeNavigationOrigin::Written, span)
-                } else {
-                    call
-                }
-            }
+                },
+                span,
+            ),
             // 5. Nothing matched.
             ExtensionLookup::None if member == "clone" => {
                 self.infer_clone_call(receiver, is_safe_nav, args, span)
@@ -7863,6 +8016,127 @@ impl TypeChecker {
                     span,
                 )
             }
+        }
+    }
+
+    /// Calls the extension `found` found for the method call `call` on its receiver: refines an
+    /// own extension's inferred type, checks visibility and the receiver's type, passes the
+    /// receiver by its mode and checks the arguments (`call_extension`), inside the `?.` chain
+    /// of a safe call.
+    fn call_found_extension(
+        &mut self,
+        call: MethodCall,
+        found: FoundExtension,
+        span: Span,
+    ) -> ExpressionId {
+        let MethodCall {
+            callee,
+            target,
+            member,
+            is_safe_nav,
+            type_arguments,
+            args,
+            expected,
+        } = call;
+        let FoundExtension {
+            extension,
+            own,
+            reached,
+            receiver,
+            receiver_ty,
+            is_place,
+            writable,
+            layers,
+            through_nullable,
+        } = found;
+        let extension = if own {
+            let name = extension.table_name(member);
+            let key = InferenceKey::Extension {
+                receiver: ReceiverKey::of(&reached),
+                name: name.clone(),
+                context: extension.context.clone(),
+            };
+            self.ensure_key_inferred(&key, callee.span);
+            // Inference may have refined the return type.
+            match self.find_extension(&reached, &name) {
+                ExtensionLookup::Found { extension, .. } => extension,
+                _ => extension,
+            }
+        } else {
+            extension
+        };
+        if !self.check_visibility(&extension.symbol, callee.span) {
+            return self.give_up_call(receiver, args, span);
+        }
+        // The receiver must match the declared one, at the layer whose type constructor
+        // has the extension (D10 of `generics`).
+        if !self.receiver_matches(&extension, &reached) {
+            let call = self.give_up_call(receiver, args, span);
+            self.errors.push(TypeError::UnknownField {
+                target_type: reached.clone(),
+                field_name: member.to_string(),
+                span: callee.span,
+                help: Some(format!(
+                    "the extension '{}' is declared on '{}', not on '{}'",
+                    member, extension.receiver, reached
+                )),
+                import_suggestions: Vec::new(),
+            });
+            return call;
+        }
+        let receiver_site = ReceiverSite {
+            expr: target,
+            ty: &receiver_ty,
+            is_place,
+            writable,
+            layers,
+            through_nullable,
+        };
+        let adjustment = self.pass_receiver(
+            &receiver_site,
+            extension.mode,
+            extension.builtin.is_some(),
+            member,
+        );
+        let (joined, receiver_argument) =
+            self.apply_receiver_adjustment(receiver, adjustment, &reached);
+        // A `MutableState<T>` receiver of a member of `State<T>` converts (D3 of
+        // `state-handles`).
+        let receiver_argument = match self.ty(receiver_argument) {
+            Type::Reference { mutable, inner }
+                if *inner != reached && state::state_handle(&inner).is_some() =>
+            {
+                let expected = Type::Reference {
+                    mutable,
+                    inner: Box::new(reached.clone()),
+                };
+                self.coerce_to(receiver_argument, &expected)
+            }
+            found if found != reached && state::state_handle(&found).is_some() => {
+                self.coerce_to(receiver_argument, &reached)
+            }
+            _ => receiver_argument,
+        };
+        let call = self.call_extension(
+            MethodCall {
+                callee,
+                target,
+                member,
+                is_safe_nav,
+                type_arguments,
+                args,
+                expected,
+            },
+            &extension,
+            &reached,
+            receiver_argument,
+            span,
+        );
+        if through_nullable {
+            // A safe call evaluates its arguments inside the chain (D7 of `typed-tree`).
+            self.close_chain(joined, call, SafeNavigationOrigin::Written, span)
+        } else {
+            call
         }
     }
 
@@ -7948,6 +8222,7 @@ impl TypeChecker {
             has_receiver: true,
             has_context: false,
             is_compose: false,
+            operator: None,
         };
         self.add(ExpressionKind::Call(call), contents, span)
     }
@@ -7962,7 +8237,11 @@ impl TypeChecker {
     ) -> ExpressionId {
         let mut children = vec![receiver];
         for arg in args {
-            children.push(self.infer_expr(&arg.value));
+            let child = match self.take_preinferred(&arg.value) {
+                Some((child, _)) => child,
+                None => self.infer_expr(&arg.value),
+            };
+            children.push(child);
         }
         self.error_node(children, span)
     }
@@ -8416,6 +8695,7 @@ impl TypeChecker {
                     has_receiver: true,
                     has_context,
                     is_compose,
+                    operator: None,
                 };
                 self.add(ExpressionKind::Call(call), ret, span)
             }
@@ -9573,6 +9853,7 @@ impl TypeChecker {
             has_receiver: true,
             has_context: false,
             is_compose: false,
+            operator: None,
         };
         let call = self.add(ExpressionKind::Call(call), cloned, span);
         if nullable {
@@ -9609,6 +9890,7 @@ impl TypeChecker {
             has_receiver: true,
             has_context: false,
             is_compose: false,
+            operator: None,
         };
         self.add(ExpressionKind::Call(call), ty, span)
     }
@@ -9641,6 +9923,7 @@ impl TypeChecker {
             has_receiver: true,
             has_context: false,
             is_compose: false,
+            operator: None,
         };
         self.add(ExpressionKind::Call(call), result, span)
     }
@@ -9670,6 +9953,7 @@ impl TypeChecker {
             has_receiver: true,
             has_context: false,
             is_compose: false,
+            operator: None,
         };
         self.add(ExpressionKind::Call(call), result, span)
     }
@@ -9717,6 +10001,7 @@ impl TypeChecker {
             has_receiver: true,
             has_context: false,
             is_compose: false,
+            operator: None,
         };
         let call = self.add(ExpressionKind::Call(call), Type::String, span);
         if nullable {

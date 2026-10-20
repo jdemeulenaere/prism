@@ -323,6 +323,9 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         }
         | TypeError::InvalidOperatorDeclaration {
             help: Some(help), ..
+        }
+        | TypeError::MissingOperatorFunction {
+            help: Some(help), ..
         } => {
             out.push_str(&format!("   = help: {}\n", help));
         }
@@ -658,6 +661,11 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         } => (name, import_suggestions),
         TypeError::UnknownField {
             field_name,
+            import_suggestions,
+            ..
+        }
+        | TypeError::MissingOperatorFunction {
+            function: field_name,
             import_suggestions,
             ..
         } => (field_name, import_suggestions),

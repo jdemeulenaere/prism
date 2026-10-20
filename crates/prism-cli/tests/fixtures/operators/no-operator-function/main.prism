@@ -1,0 +1,4 @@
+// expect: E4002
+struct Point : Copy { val x: Int }
+
+fun f(a: Point, b: Point): Point = a * b

@@ -1,0 +1,2 @@
+// expect: E4002
+fun <T> has(xs: &List<T>, x: &T): Bool = x in xs

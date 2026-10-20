@@ -581,6 +581,82 @@ pub struct Call {
     pub has_context: bool,
     /// Whether the callee is a `compose fun` or composable function value.
     pub is_compose: bool,
+    /// The operator the call spells, when operator syntax calls an operator function (D14 of
+    /// `operator-conventions`): `a + b` is a call of `plus` marked `+`.
+    pub operator: Option<SpelledOperator>,
+}
+
+/// The operator function a compound assignment `target op= value` calls when its operator is
+/// not built in (D13 of `operator-conventions`): `target = target.op(value)`, with the target
+/// evaluated once and passed as the receiver by `mode`, borrowed shared or moved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompoundFunction {
+    pub path: DeclarationPath,
+    pub mode: ReceiverMode,
+    /// The parameters as a call records them: `this` (`&T` or `T`), then the value's.
+    pub parameters: Vec<(Option<String>, Type)>,
+    /// The type arguments of a generic function, empty otherwise.
+    pub type_arguments: Vec<Type>,
+}
+
+impl CompoundFunction {
+    /// The type of parameter `index`, with the type arguments substituted.
+    pub fn parameter_type(&self, index: usize) -> Option<Type> {
+        self.parameters
+            .get(index)
+            .map(|(_, ty)| ty.substitute(&self.type_arguments))
+    }
+}
+
+/// The operator syntax a call of an operator function was written as (D14 of
+/// `operator-conventions`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpelledOperator {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
+    /// Prefix `-`.
+    Negate,
+    /// Prefix `!`.
+    Not,
+    Less,
+    LessOrEqual,
+    Greater,
+    GreaterOrEqual,
+    In,
+    NotIn,
+    /// `a[i]`, a read, borrow or write through `get`.
+    Index,
+    /// `a[i] = v` through `set`.
+    IndexAssign,
+    /// `a(...)` through `invoke`.
+    Invoke,
+}
+
+impl SpelledOperator {
+    /// The operator as written.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SpelledOperator::Add => "+",
+            SpelledOperator::Subtract => "-",
+            SpelledOperator::Multiply => "*",
+            SpelledOperator::Divide => "/",
+            SpelledOperator::Remainder => "%",
+            SpelledOperator::Negate => "prefix -",
+            SpelledOperator::Not => "prefix !",
+            SpelledOperator::Less => "<",
+            SpelledOperator::LessOrEqual => "<=",
+            SpelledOperator::Greater => ">",
+            SpelledOperator::GreaterOrEqual => ">=",
+            SpelledOperator::In => "in",
+            SpelledOperator::NotIn => "!in",
+            SpelledOperator::Index => "[]",
+            SpelledOperator::IndexAssign => "[]=",
+            SpelledOperator::Invoke => "()",
+        }
+    }
 }
 
 impl Call {
@@ -617,6 +693,9 @@ pub enum BuiltinFunction {
     Print,
     /// `println(x)` or `println()`: writes the text of its argument, if any, then a newline.
     PrintLine,
+    /// `a in r` on a `Range`, called with the range by value and the `Int`: whether `a` is in
+    /// it (D8 of `operator-conventions`). MIR lowering expands it into comparisons.
+    RangeContains,
     /// `s.length` of a `String`, called with a shared receiver borrow: its number of characters
     /// (D6 of `runtime-strings-and-drops`).
     StringLength,
@@ -739,6 +818,7 @@ impl BuiltinFunction {
             BuiltinFunction::Print => "print",
             BuiltinFunction::PrintLine => "println",
             BuiltinFunction::StringLength => "length",
+            BuiltinFunction::RangeContains => "contains",
             // The name Kotlin gives the `[]` operator.
             BuiltinFunction::StringCharacter => "get",
             BuiltinFunction::ToString => "toString",
@@ -1531,11 +1611,14 @@ pub enum StatementKind {
     /// A compound assignment `target op= value` (D4 of `compound-assignment`): the target is a
     /// place, read in place and then written with `target op value`; the value is an operand of
     /// the target's type, read in place when it is a place and never consumed. `operator` is
-    /// arithmetic (`Add` to `Remainder`).
+    /// arithmetic (`Add` to `Remainder`). With `function`, the operator is not built in and
+    /// calls that operator function instead (D13 of `operator-conventions`): the value is then
+    /// the function's argument, of its parameter's type.
     CompoundAssign {
         operator: BinaryOperator,
         target: ExpressionId,
         value: ExpressionId,
+        function: Option<Box<CompoundFunction>>,
     },
     /// An expression whose value is discarded.
     Expression { value: ExpressionId },

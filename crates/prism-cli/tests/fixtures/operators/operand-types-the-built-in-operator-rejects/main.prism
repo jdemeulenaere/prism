@@ -1,0 +1,6 @@
+// expect: ok
+operator fun String.times(count: Int): String = this.clone()
+operator fun String.compareTo(other: &String): Int = length - other.length
+
+fun f(): String = "a" * 3
+fun g(): Bool = "a" < "bc"

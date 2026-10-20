@@ -1,0 +1,7 @@
+// expect: ok
+// entry: app/main.prism
+package app
+
+import /geometry/vector
+
+fun f(a: Vector2, b: Vector2): Vector2 = a + b

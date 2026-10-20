@@ -1,0 +1,7 @@
+// expect: ok
+struct Vector2 : Copy { val x: Int, val y: Int }
+
+operator fun Vector2.plus(other: Vector2): Vector2 = Vector2(x + other.x, y + other.y)
+
+fun f(a: Vector2, b: Vector2): Vector2 = a + b
+fun g(a: Vector2, b: Vector2): Vector2 = a.plus(b)

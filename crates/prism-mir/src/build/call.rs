@@ -250,6 +250,16 @@ impl Builder<'_> {
             .into_iter()
             .map(|operand| operand.expect("every argument is evaluated"))
             .collect();
+        // `a in r` on a `Range` is a test of the range's bounds, with no call (D8 of
+        // `operator-conventions`).
+        if let (TreeCallee::Builtin(BuiltinFunction::RangeContains), [range, element]) =
+            (&call.callee, arguments.as_slice())
+        {
+            let destination = self.destination_or_temporary(destination, ty, span);
+            let range_ty = call.parameters[0].1.clone();
+            self.range_contains(destination, range.clone(), range_ty, element.clone(), span);
+            return;
+        }
         let parameters = call.parameters.iter().map(|(_, ty)| ty.clone()).collect();
         let destination = self.destination_or_temporary(destination, ty, span);
         self.emit_call(

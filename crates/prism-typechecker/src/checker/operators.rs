@@ -7,12 +7,17 @@
 //! and the names under which the `mut` accessors (`get`, `next`) are kept beside the shared
 //! ones. Each check is a fixed amount of work per declaration.
 
-use super::{ReceiverKey, TypeChecker};
+use super::{ExtensionLookup, FoundExtension, MethodCall, Origin, ReceiverKey, TypeChecker};
 use crate::error::TypeError;
 use crate::scope::SymbolKind;
 use crate::types::Type;
 use prism_ast::decl::{FunctionBody, FunctionDecl, ReceiverMode};
-use prism_ast::Visibility;
+use prism_ast::expr::{BinaryOp, CallArg, Expr, ExprKind, Literal, UnaryOp};
+use prism_ast::{Span, Visibility};
+use prism_typed_tree::{
+    Argument, BuiltinFunction, Call, Callee, ExpressionId, ExpressionKind, ParameterKind,
+    SpelledOperator, UnaryOperator,
+};
 
 /// An operator convention: what a function of its name serves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -556,6 +561,821 @@ impl TypeChecker {
                 )),
                 span: f.span,
             });
+        }
+    }
+}
+
+/// An operator use whose function is looked up on its receiver: the receiver already inferred,
+/// the other operands as the arguments of the call it spells (D4).
+pub(super) struct OperatorUse<'a> {
+    /// The operator the call is marked with.
+    pub(super) operator: SpelledOperator,
+    /// The convention's name (`plus`), or the `mut` accessor's table name (`get#mut`).
+    pub(super) name: &'a str,
+    /// The receiver as written, and its node: a place read in place or a consumed temporary.
+    pub(super) target: &'a Expr,
+    pub(super) receiver: ExpressionId,
+    pub(super) is_place: bool,
+    pub(super) writable: bool,
+    pub(super) args: &'a [CallArg],
+    pub(super) span: Span,
+    pub(super) expected: Option<&'a Type>,
+}
+
+/// Why no operator function served an operator use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum OperatorMiss {
+    /// No function of the convention's name on the receiver's type.
+    Missing,
+    /// A function of that name not declared `operator`.
+    Unmarked,
+    /// A nullable receiver, whose payload's type has the operator function.
+    Nullable,
+}
+
+impl TypeChecker {
+    /// Whether `expr` stands for an operand already inferred.
+    pub(super) fn is_preinferred(&self, expr: &Expr) -> bool {
+        self.preinferred_arguments
+            .contains_key(&(expr as *const Expr as usize))
+    }
+
+    /// The node of the operand `expr` stands for, if it was inferred before its operator
+    /// function was looked up, with whether it is a place read in place.
+    pub(super) fn take_preinferred(&mut self, expr: &Expr) -> Option<(ExpressionId, bool)> {
+        if self.preinferred_arguments.is_empty() {
+            return None;
+        }
+        self.preinferred_arguments
+            .remove(&(expr as *const Expr as usize))
+    }
+
+    /// Infers an operand of an operator as `infer_read` does (a place read in place, anything
+    /// else a consumed temporary), without peeling its `&`, `&mut` and `Heap<T>` layers, and
+    /// says whether it was read in place.
+    pub(super) fn infer_operator_operand(&mut self, expr: &Expr) -> (ExpressionId, bool) {
+        let read_in_place = self.is_place(expr)
+            || self.implicit_this_field(expr).is_some()
+            || matches!(&expr.kind, ExprKind::MemberAccess { target, .. }
+                if self.type_name_symbol(target).is_none());
+        let id = self.with_origin(Origin::Value, |c| c.infer_read(expr));
+        (id, read_in_place)
+    }
+
+    /// Calls the operator function `use_.name` of the receiver's type, found as a method call
+    /// finds an extension (members, then the file's own extensions, then its imports', through
+    /// `&`, `&mut` and `Heap<T>` layers), and marks the call with the operator. A function of
+    /// that name not declared `operator`, none at all, or a nullable receiver is a miss, which
+    /// the caller reports; an ambiguous import is `E4012`.
+    pub(super) fn call_operator(
+        &mut self,
+        use_: OperatorUse,
+    ) -> Result<ExpressionId, OperatorMiss> {
+        let receiver_ty = self.ty(use_.receiver);
+        if let Type::Nullable(payload) = super::peel_references(&receiver_ty) {
+            let mut layers = Vec::new();
+            let (lookup, _) = self.find_extension_through_indirection(
+                payload.as_ref().clone(),
+                use_.name,
+                &mut layers,
+            );
+            return Err(match lookup {
+                ExtensionLookup::Found { extension, .. } if extension.is_operator => {
+                    OperatorMiss::Nullable
+                }
+                _ => OperatorMiss::Missing,
+            });
+        }
+        let mut layers = Vec::new();
+        let (lookup, reached) =
+            self.find_extension_through_indirection(receiver_ty.clone(), use_.name, &mut layers);
+        let (extension, own) = match lookup {
+            ExtensionLookup::None | ExtensionLookup::MissingContext(_) => {
+                return Err(OperatorMiss::Missing)
+            }
+            ExtensionLookup::Ambiguous(modules) => {
+                let call = self.give_up_call(use_.receiver, use_.args, use_.span);
+                self.errors.push(TypeError::AmbiguousImport {
+                    name: format!("{}.{}", reached, use_.name),
+                    modules,
+                    span: use_.span,
+                });
+                return Ok(call);
+            }
+            ExtensionLookup::Found { extension, .. } if !extension.is_operator => {
+                return Err(OperatorMiss::Unmarked)
+            }
+            ExtensionLookup::Found { extension, own } => (extension, own),
+        };
+        let member = use_
+            .name
+            .trim_end_matches(MUTABLE_ACCESSOR_SUFFIX)
+            .to_string();
+        let callee = Expr::new(ExprKind::Ident(member.clone()), use_.span);
+        let call = self.call_found_extension(
+            MethodCall {
+                callee: &callee,
+                target: use_.target,
+                member: &member,
+                is_safe_nav: false,
+                type_arguments: &[],
+                args: use_.args,
+                expected: use_.expected,
+            },
+            FoundExtension {
+                extension,
+                own,
+                reached,
+                receiver: use_.receiver,
+                receiver_ty,
+                is_place: use_.is_place,
+                writable: use_.writable,
+                layers: &layers,
+                through_nullable: false,
+            },
+            use_.span,
+        );
+        if let ExpressionKind::Call(call) = &mut self.builder.expression_mut(call).kind {
+            call.operator = Some(use_.operator);
+        }
+        Ok(call)
+    }
+
+    /// Reports `E4002` for the operator use `use_text` (`a * b`) whose receiver of type
+    /// `receiver` has no operator function `function` serving it: with help naming the
+    /// declaration to add (`declaration`), saying to mark an existing function `operator`, or
+    /// suggesting a safe call `safe_call` on a nullable receiver.
+    pub(super) fn report_missing_operator(
+        &mut self,
+        miss: OperatorMiss,
+        message: String,
+        receiver: &Type,
+        function: &str,
+        declaration: String,
+        safe_call: String,
+        span: Span,
+    ) {
+        let reached = super::peel_indirection(receiver).clone();
+        let help = match miss {
+            OperatorMiss::Missing => format!("declare '{}'", declaration),
+            OperatorMiss::Unmarked => format!(
+                "'{}' must be declared 'operator fun {}.{}' to serve {}",
+                function,
+                reached,
+                function,
+                served(function)
+            ),
+            OperatorMiss::Nullable => format!(
+                "the receiver may be null: call the operator function with a safe call, '{}'",
+                safe_call
+            ),
+        };
+        self.errors.push(TypeError::MissingOperatorFunction {
+            message,
+            receiver: reached,
+            function: function.to_string(),
+            help: Some(help),
+            span,
+            import_suggestions: Vec::new(),
+        });
+    }
+
+    /// Registers `node`, inferred from `operand`, as the argument `argument` stands for (a
+    /// clone of `operand` in the operator's call), returning its address key.
+    fn preinfer(&mut self, argument: &Expr, node: ExpressionId, is_place: bool) -> usize {
+        let key = argument as *const Expr as usize;
+        self.preinferred_arguments.insert(key, (node, is_place));
+        key
+    }
+
+    /// Infers `left op right` for an arithmetic or ordering operator (D3, D4 and D7): the
+    /// built-in operator when it accepts the operand types, else the operator function of the
+    /// left operand's type (`plus`, or `compareTo` compared with `0`). The left operand is the
+    /// receiver; the right one is checked as the function's argument, or, when the left one
+    /// has a built-in type, was inferred before and is passed on as it is.
+    pub(super) fn infer_operator_binary(
+        &mut self,
+        op: BinaryOp,
+        left: &Expr,
+        right: &Expr,
+        span: Span,
+    ) -> ExpressionId {
+        let (left_raw, left_in_place) = self.infer_operator_operand(left);
+        let left_ty = super::peel_indirection(&self.ty(left_raw)).clone();
+        let name = match op {
+            BinaryOp::Add => "plus",
+            BinaryOp::Sub => "minus",
+            BinaryOp::Mul => "times",
+            BinaryOp::Div => "div",
+            BinaryOp::Mod => "rem",
+            _ => "compareTo",
+        };
+        let spelled = spelled_binary(op);
+        let ordering = name == "compareTo";
+        let argument = CallArg {
+            name: None,
+            value: right.clone(),
+            span: right.span,
+            is_trailing_lambda: false,
+        };
+        let args = std::slice::from_ref(&argument);
+        if has_builtin_operators(&left_ty) {
+            let (right_raw, right_in_place) = self.infer_operator_operand(right);
+            let right_ty = super::peel_indirection(&self.ty(right_raw)).clone();
+            let builtin = left_ty == Type::Error
+                || right_ty == Type::Error
+                || if ordering {
+                    left_ty == right_ty && matches!(left_ty, Type::Int | Type::Float | Type::Char)
+                } else {
+                    super::arithmetic_result(op, &left_ty, &right_ty).is_some()
+                };
+            if !builtin {
+                // An operator function of a built-in type for other operand types
+                // (`Int.times(Dp)`), with the right operand already inferred.
+                let key = self.preinfer(&argument.value, right_raw, right_in_place);
+                let called = self.call_operator(OperatorUse {
+                    operator: spelled,
+                    name,
+                    target: left,
+                    receiver: left_raw,
+                    is_place: left_in_place,
+                    writable: true,
+                    args,
+                    span,
+                    expected: None,
+                });
+                self.preinferred_arguments.remove(&key);
+                match called {
+                    Ok(call) => return self.finish_ordering(op, call, ordering, span),
+                    Err(OperatorMiss::Unmarked) => {
+                        let (left_id, right_id) = (
+                            self.peel_indirection_nodes(left_raw),
+                            self.peel_indirection_nodes(right_raw),
+                        );
+                        self.report_missing_operator(
+                            OperatorMiss::Unmarked,
+                            operator_message(op, &left_ty, &right_ty),
+                            &left_ty,
+                            name,
+                            String::new(),
+                            String::new(),
+                            span,
+                        );
+                        return self.error_node(vec![left_id, right_id], span);
+                    }
+                    Err(_) => {}
+                }
+            }
+            let left_id = self.peel_indirection_nodes(left_raw);
+            let right_id = self.peel_indirection_nodes(right_raw);
+            return self.builtin_binary(op, left_id, right_id, span);
+        }
+        let called = self.call_operator(OperatorUse {
+            operator: spelled,
+            name,
+            target: left,
+            receiver: left_raw,
+            is_place: left_in_place,
+            writable: true,
+            args,
+            span,
+            expected: None,
+        });
+        match called {
+            Ok(call) => self.finish_ordering(op, call, ordering, span),
+            Err(miss) => {
+                let right_id = self.infer_operand(right);
+                let right_ty = self.ty(right_id);
+                let left_id = self.peel_indirection_nodes(left_raw);
+                if left_ty != Type::Error && right_ty != Type::Error {
+                    let parameter = if ordering {
+                        format!("&{}", right_ty)
+                    } else {
+                        right_ty.to_string()
+                    };
+                    let result = if ordering {
+                        ": Int".to_string()
+                    } else {
+                        String::new()
+                    };
+                    self.report_missing_operator(
+                        miss,
+                        operator_message(op, &left_ty, &right_ty),
+                        &left_ty,
+                        name,
+                        format!(
+                            "operator fun {}.{}(other: {}){}",
+                            left_ty, name, parameter, result
+                        ),
+                        format!("{}?.{}({})", left, name, right),
+                        span,
+                    );
+                }
+                self.error_node(vec![left_id, right_id], span)
+            }
+        }
+    }
+
+    /// The value of an operator use whose call is `call`: the call itself, or for an ordering
+    /// operator the built-in comparison of the call's `Int` with `0` (D7).
+    fn finish_ordering(
+        &mut self,
+        op: BinaryOp,
+        call: ExpressionId,
+        ordering: bool,
+        span: Span,
+    ) -> ExpressionId {
+        if !ordering || self.ty(call) == Type::Error {
+            return call;
+        }
+        let zero = self.add(ExpressionKind::Literal(Literal::Int(0)), Type::Int, span);
+        let kind = ExpressionKind::Binary {
+            operator: super::binary_operator(op),
+            left: call,
+            right: zero,
+        };
+        self.add(kind, Type::Bool, span)
+    }
+
+    /// Infers `left in right` or `left !in right` (D8): the built-in range test on a `Range`,
+    /// else `right.contains(left)` (a list's intrinsic member or an operator function), with
+    /// `left` evaluated first; `!in` negates it.
+    pub(super) fn infer_membership(
+        &mut self,
+        op: BinaryOp,
+        left: &Expr,
+        right: &Expr,
+        span: Span,
+    ) -> ExpressionId {
+        let spelled = if op == BinaryOp::In {
+            SpelledOperator::In
+        } else {
+            SpelledOperator::NotIn
+        };
+        let (right_raw, right_in_place) = self.infer_operator_operand(right);
+        let right_ty = super::peel_indirection(&self.ty(right_raw)).clone();
+        let test = if right_ty == Type::Error {
+            let left_id = self.infer_operand(left);
+            let right_id = self.peel_indirection_nodes(right_raw);
+            return self.error_node(vec![left_id, right_id], span);
+        } else if matches!(&right_ty, Type::Struct { id, .. } if *id == prism_typed_tree::NominalId::builtin_range())
+        {
+            let element = self.check_operand(left, &Type::Int);
+            let range = self.peel_indirection_nodes(right_raw);
+            let range = self.consume(range);
+            let range_ty = self.ty(range);
+            let call = Call {
+                callee: Callee::Builtin(BuiltinFunction::RangeContains),
+                arguments: vec![Argument::Written(range), Argument::Written(element)],
+                parameters: vec![
+                    (Some(super::THIS.to_string()), range_ty),
+                    (Some("element".to_string()), Type::Int),
+                ],
+                parameter_kinds: vec![ParameterKind::Plain, ParameterKind::Plain],
+                type_arguments: Vec::new(),
+                // The element is written first.
+                evaluation_order: vec![1, 0],
+                has_receiver: false,
+                has_context: false,
+                is_compose: false,
+                operator: Some(spelled),
+            };
+            self.add(ExpressionKind::Call(call), Type::Bool, span)
+        } else {
+            let argument = CallArg {
+                name: None,
+                value: left.clone(),
+                span: left.span,
+                is_trailing_lambda: false,
+            };
+            let called = self.call_operator(OperatorUse {
+                operator: spelled,
+                name: "contains",
+                target: right,
+                receiver: right_raw,
+                is_place: right_in_place,
+                writable: true,
+                args: std::slice::from_ref(&argument),
+                span,
+                expected: None,
+            });
+            match called {
+                Ok(call) => {
+                    // `a in b` evaluates `a` first, as written (D4).
+                    if let ExpressionKind::Call(call) = &mut self.builder.expression_mut(call).kind
+                    {
+                        let receiver = usize::from(call.has_context);
+                        call.evaluation_order.retain(|&index| index != receiver);
+                        call.evaluation_order.push(receiver);
+                    }
+                    call
+                }
+                Err(miss) => {
+                    let left_id = self.infer_operand(left);
+                    let left_ty = self.ty(left_id);
+                    let right_id = self.peel_indirection_nodes(right_raw);
+                    if left_ty != Type::Error {
+                        self.report_missing_operator(
+                            miss,
+                            format!(
+                                "operator '{}' cannot be applied to '{}' and '{}'",
+                                op.as_str(),
+                                left_ty,
+                                right_ty
+                            ),
+                            &right_ty,
+                            "contains",
+                            format!(
+                                "operator fun {}.contains(element: &{}): Bool",
+                                right_ty, left_ty
+                            ),
+                            format!("{}?.contains({})", right, left),
+                            span,
+                        );
+                    }
+                    return self.error_node(vec![left_id, right_id], span);
+                }
+            }
+        };
+        if op == BinaryOp::NotIn && self.ty(test) != Type::Error {
+            let kind = ExpressionKind::Unary {
+                operator: UnaryOperator::Not,
+                operand: test,
+            };
+            return self.add(kind, Type::Bool, span);
+        }
+        test
+    }
+
+    /// Infers `-operand` or `!operand` (D4): the built-in negation of an `Int` or `Double` or
+    /// `!` of a `Bool`, else `unaryMinus()` or `not()` of the operand's type.
+    pub(super) fn infer_operator_unary(
+        &mut self,
+        op: UnaryOp,
+        operand: &Expr,
+        span: Span,
+    ) -> ExpressionId {
+        let (raw, in_place) = self.infer_operator_operand(operand);
+        let ty = super::peel_indirection(&self.ty(raw)).clone();
+        let negate = op == UnaryOp::Neg;
+        let builtin = match ty {
+            Type::Error | Type::Nothing => true,
+            Type::Int | Type::Float => negate,
+            Type::Bool => !negate,
+            _ => false,
+        };
+        if builtin || has_builtin_operators(&ty) {
+            let id = self.peel_indirection_nodes(raw);
+            return self.builtin_unary(op, id, span);
+        }
+        let (name, spelled) = if negate {
+            ("unaryMinus", SpelledOperator::Negate)
+        } else {
+            ("not", SpelledOperator::Not)
+        };
+        let called = self.call_operator(OperatorUse {
+            operator: spelled,
+            name,
+            target: operand,
+            receiver: raw,
+            is_place: in_place,
+            writable: true,
+            args: &[],
+            span,
+            expected: None,
+        });
+        match called {
+            Ok(call) => call,
+            Err(miss) => {
+                let id = self.peel_indirection_nodes(raw);
+                self.report_missing_operator(
+                    miss,
+                    format!("operator '{}' cannot be applied to '{}'", op.as_str(), ty),
+                    &ty,
+                    name,
+                    format!("operator fun {}.{}(): {}", ty, name, ty),
+                    format!("{}?.{}()", operand, name),
+                    span,
+                );
+                self.error_node(vec![id], span)
+            }
+        }
+    }
+}
+
+/// Whether a built-in operator may accept operands of type `ty`, so its own diagnostics apply
+/// when no operator function serves the use: the scalars, `String`, and the types that stand
+/// for none (errors, `Nothing`, type parameters, unresolved names).
+pub(super) fn has_builtin_operators(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Int
+            | Type::Float
+            | Type::Bool
+            | Type::Char
+            | Type::String
+            | Type::Unit
+            | Type::Error
+            | Type::Nothing
+            | Type::Parameter(_)
+            | Type::Opaque(_)
+    )
+}
+
+/// The marked operator of an arithmetic or ordering operator.
+fn spelled_binary(op: BinaryOp) -> SpelledOperator {
+    match op {
+        BinaryOp::Add => SpelledOperator::Add,
+        BinaryOp::Sub => SpelledOperator::Subtract,
+        BinaryOp::Mul => SpelledOperator::Multiply,
+        BinaryOp::Div => SpelledOperator::Divide,
+        BinaryOp::Mod => SpelledOperator::Remainder,
+        BinaryOp::Lt => SpelledOperator::Less,
+        BinaryOp::LtEq => SpelledOperator::LessOrEqual,
+        BinaryOp::Gt => SpelledOperator::Greater,
+        _ => SpelledOperator::GreaterOrEqual,
+    }
+}
+
+/// `operator '*' cannot be applied to 'Point' and 'Point'`.
+fn operator_message(op: BinaryOp, left: &Type, right: &Type) -> String {
+    format!(
+        "operator '{}' cannot be applied to '{}' and '{}'",
+        op.as_str(),
+        left,
+        right
+    )
+}
+
+/// The convention name of an arithmetic operator (`plus` for `+`).
+pub(super) fn arithmetic_name(op: BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::Add => "plus",
+        BinaryOp::Sub => "minus",
+        BinaryOp::Mul => "times",
+        BinaryOp::Div => "div",
+        _ => "rem",
+    }
+}
+
+impl TypeChecker {
+    /// The operator function a compound assignment `target op= value` calls on a target of type
+    /// `target_ty` when its operator is not built in (D13): the function of the convention on
+    /// the target's type, its argument checked from `value` (or the operand `preinferred`
+    /// already inferred), and its result of the target's type (`E4002` otherwise). The target
+    /// is the receiver, borrowed or moved by the function's mode. A miss is the caller's to
+    /// report; `Err(None)` means a diagnostic was reported here.
+    pub(super) fn compound_function(
+        &mut self,
+        operator: BinaryOp,
+        target: &Expr,
+        target_ty: &Type,
+        value: &Expr,
+        preinferred: Option<(ExpressionId, bool)>,
+        span: Span,
+    ) -> Result<(ExpressionId, prism_typed_tree::CompoundFunction), Option<OperatorMiss>> {
+        let name = arithmetic_name(operator);
+        if let Type::Nullable(payload) = target_ty {
+            let mut layers = Vec::new();
+            let (lookup, _) = self.find_extension_through_indirection(
+                payload.as_ref().clone(),
+                name,
+                &mut layers,
+            );
+            return Err(Some(match lookup {
+                ExtensionLookup::Found { extension, .. } if extension.is_operator => {
+                    OperatorMiss::Nullable
+                }
+                _ => OperatorMiss::Missing,
+            }));
+        }
+        let mut layers = Vec::new();
+        let (lookup, reached) =
+            self.find_extension_through_indirection(target_ty.clone(), name, &mut layers);
+        let extension = match lookup {
+            // The target is the receiver itself, never reached through a reference or box.
+            ExtensionLookup::Found { .. } if !layers.is_empty() => {
+                return Err(Some(OperatorMiss::Missing))
+            }
+            ExtensionLookup::Found { extension, .. } if !extension.is_operator => {
+                return Err(Some(OperatorMiss::Unmarked))
+            }
+            ExtensionLookup::Found { extension, own } => {
+                if own {
+                    let key = super::InferenceKey::Extension {
+                        receiver: ReceiverKey::of(&reached),
+                        name: name.to_string(),
+                        context: extension.context.clone(),
+                    };
+                    self.ensure_key_inferred(&key, span);
+                    match self.find_extension(&reached, name) {
+                        ExtensionLookup::Found { extension, .. } => extension,
+                        _ => extension,
+                    }
+                } else {
+                    extension
+                }
+            }
+            ExtensionLookup::Ambiguous(modules) => {
+                self.errors.push(TypeError::AmbiguousImport {
+                    name: format!("{}.{}", reached, name),
+                    modules,
+                    span,
+                });
+                return Err(None);
+            }
+            ExtensionLookup::None | ExtensionLookup::MissingContext(_) => {
+                return Err(Some(OperatorMiss::Missing))
+            }
+        };
+        if !self.check_visibility(&extension.symbol, span)
+            || !self.receiver_matches(&extension, &reached)
+        {
+            return Err(None);
+        }
+        // A consuming function moves the target out and the result is assigned back: only a
+        // whole binding can be moved (no partial moves, and none out of a borrow or a list).
+        if extension.mode == ReceiverMode::Consuming {
+            let before = self.errors.len();
+            self.check_move_source(target, target_ty);
+            if self.errors.len() > before {
+                if let Some(TypeError::CannotMoveOut {
+                    source,
+                    borrow,
+                    clone,
+                    destructure,
+                    remove,
+                    ..
+                }) = self.errors.last_mut()
+                {
+                    *source = format!(
+                        "{}, which the consuming '{}' would take for '{}='",
+                        source,
+                        name,
+                        operator.as_str()
+                    );
+                    (*borrow, *clone, *destructure, *remove) = (None, None, None, None);
+                }
+                return Err(None);
+            }
+        }
+        let SymbolKind::Function {
+            fn_type: Type::Fn { params, ret, .. },
+            param_names,
+            defaults,
+            type_parameters,
+            ..
+        } = &extension.symbol.kind
+        else {
+            return Err(None);
+        };
+        let (params, param_names, defaults, ret, type_parameters) = (
+            params.clone(),
+            param_names.clone(),
+            defaults.clone(),
+            (**ret).clone(),
+            type_parameters.clone(),
+        );
+        let argument = CallArg {
+            name: None,
+            value: value.clone(),
+            span: value.span,
+            is_trailing_lambda: false,
+        };
+        let key =
+            preinferred.map(|(node, is_place)| self.preinfer(&argument.value, node, is_place));
+        let args = std::slice::from_ref(&argument);
+        let checked = if type_parameters.is_empty() {
+            self.check_call_arguments(&params, &param_names, &defaults, args, span)
+                .map(|normalized| (normalized, params.clone(), ret.clone(), Vec::new()))
+        } else {
+            let signature = super::GenericSignature {
+                owner: format!("extension '{}.{}'", extension.receiver, name),
+                type_parameters,
+                params: params.clone(),
+                ret: ret.clone(),
+                receiver: Some((extension.receiver.clone(), reached.clone())),
+            };
+            self.check_generic_call_arguments(
+                &signature,
+                &[],
+                Some(target_ty),
+                &param_names,
+                &defaults,
+                args,
+                span,
+            )
+            .map(|(normalized, solution)| {
+                let ret = signature.ret.substitute(&solution);
+                (normalized, signature.params, ret, solution)
+            })
+        };
+        if let Some(key) = key {
+            self.preinferred_arguments.remove(&key);
+        }
+        let (normalized, params, ret, type_arguments) = match checked {
+            Ok(checked) => checked,
+            Err(_) => return Err(None),
+        };
+        let Some(Argument::Written(value_node)) = normalized.arguments.first().cloned() else {
+            return Err(None);
+        };
+        if &ret != target_ty && ret != Type::Error {
+            self.errors.push(TypeError::TypeMismatch {
+                expected: target_ty.clone(),
+                found: ret.clone(),
+                span,
+                help: Some(format!(
+                    "'{}=' assigns the result of '{}.{}' to its target, so the function must return '{}'",
+                    operator.as_str(),
+                    extension.receiver,
+                    name,
+                    target_ty
+                )),
+            });
+            return Err(None);
+        }
+        let this_ty = match extension.mode {
+            ReceiverMode::Shared => Type::Reference {
+                mutable: false,
+                inner: Box::new(extension.receiver.clone()),
+            },
+            ReceiverMode::Mutable => Type::Reference {
+                mutable: true,
+                inner: Box::new(extension.receiver.clone()),
+            },
+            ReceiverMode::Consuming => extension.receiver.clone(),
+        };
+        let mut parameters = vec![(Some(super::THIS.to_string()), this_ty)];
+        parameters.extend(super::parameter_list(&param_names, &params));
+        Ok((
+            value_node,
+            prism_typed_tree::CompoundFunction {
+                path: extension.path(name),
+                mode: extension.mode,
+                parameters,
+                type_arguments,
+            },
+        ))
+    }
+}
+
+/// Whether a call of a value of type `ty` calls its `invoke` (D12): a type that is not a
+/// function type after its `&`, `&mut` and `Heap<T>` layers, nor one that cannot be called at
+/// all for another reason (an error, `Nothing`, a scalar or `String`, which have no `invoke`).
+pub(super) fn calls_invoke(ty: &Type) -> bool {
+    !matches!(
+        super::peel_indirection(ty),
+        Type::Fn { .. } | Type::Error | Type::Nothing
+    ) && !has_builtin_operators(super::peel_indirection(ty))
+}
+
+impl TypeChecker {
+    /// The call `callee(args)` of the value `node` of a type that is not a function type,
+    /// through that type's `invoke` (D12): the value is the receiver, borrowed or moved by the
+    /// function's mode (`is_place` and `writable` describe it), and the call's arguments are
+    /// `invoke`'s. Without one, the value cannot be called (`E4004`).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn invoke_value(
+        &mut self,
+        callee: &Expr,
+        node: ExpressionId,
+        is_place: bool,
+        writable: bool,
+        args: &[CallArg],
+        expected: Option<&Type>,
+        span: Span,
+    ) -> ExpressionId {
+        let called = self.call_operator(OperatorUse {
+            operator: SpelledOperator::Invoke,
+            name: "invoke",
+            target: callee,
+            receiver: node,
+            is_place,
+            writable,
+            args,
+            span,
+            expected,
+        });
+        match called {
+            Ok(call) => call,
+            Err(miss) => {
+                let ty = self.ty(node);
+                let reason = match miss {
+                    OperatorMiss::Missing => String::new(),
+                    OperatorMiss::Unmarked => {
+                        ": its 'invoke' is not declared 'operator'".to_string()
+                    }
+                    OperatorMiss::Nullable => {
+                        format!(": it may be null; call '{}?.invoke(...)'", callee)
+                    }
+                };
+                self.errors.push(TypeError::CallSignatureMismatch {
+                    message: format!("type '{}' cannot be called as a function{}", ty, reason),
+                    span,
+                });
+                self.error_node(vec![node], span)
+            }
         }
     }
 }

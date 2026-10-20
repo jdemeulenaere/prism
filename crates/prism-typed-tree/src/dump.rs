@@ -327,8 +327,12 @@ impl Printer<'_> {
                     Callee::Value(_) => "value".to_string(),
                 };
                 let mut text = format!(
-                    "call {}{}",
+                    "call {}{}{}",
                     if call.is_compose { "compose " } else { "" },
+                    call.operator.map_or(String::new(), |operator| format!(
+                        "operator {} ",
+                        operator.as_str()
+                    )),
                     callee
                 );
                 if !is_ascending(&call.evaluation_order) {
@@ -684,8 +688,16 @@ impl Printer<'_> {
                 operator,
                 target,
                 value,
+                function,
             } => {
-                let text = format!("compound-assign {} {}", operator.as_str(), at);
+                let through = function.as_ref().map_or(String::new(), |function| {
+                    format!(
+                        " through {}{}",
+                        function.path,
+                        render_type_arguments(&function.type_arguments)
+                    )
+                });
+                let text = format!("compound-assign {}{} {}", operator.as_str(), through, at);
                 self.line(depth, "", &text);
                 self.expression(*target, depth + 1, "target");
                 self.expression(*value, depth + 1, "value");

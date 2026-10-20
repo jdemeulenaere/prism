@@ -1,0 +1,7 @@
+// expect: ok
+struct Dp : Copy { val value: Double }
+
+operator fun Int.times(other: Dp): Dp = Dp(other.value * 2.0)
+
+fun f(d: Dp): Dp = 2 * d
+fun g(): Int = 2 * 3

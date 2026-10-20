@@ -1,0 +1,10 @@
+// expect: ok
+struct Text { val s: String }
+
+operator consuming fun Text.plus(other: &Text): Text = Text(s + other.s)
+
+fun f(t: Text): Text {
+    var a = Text("x")
+    a += t
+    return a
+}

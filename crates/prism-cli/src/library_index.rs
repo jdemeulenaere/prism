@@ -258,6 +258,7 @@ pub(crate) fn suggest_library_imports(library: &Library, errors: &mut [TypeError
             TypeError::UnresolvedSymbol { .. }
                 | TypeError::UnresolvedTypeName { .. }
                 | TypeError::UnknownField { .. }
+                | TypeError::MissingOperatorFunction { .. }
         )
     });
     if !needs_index {
@@ -288,6 +289,16 @@ pub(crate) fn suggest_library_imports(library: &Library, errors: &mut [TypeError
             } => {
                 let receiver = type_constructor_name(target_type);
                 *import_suggestions = index.modules_extending(receiver.as_deref(), field_name);
+            }
+            // An operator function a library module declares (D3 of `operator-conventions`).
+            TypeError::MissingOperatorFunction {
+                receiver,
+                function,
+                import_suggestions,
+                ..
+            } => {
+                let receiver = type_constructor_name(receiver);
+                *import_suggestions = index.modules_extending(receiver.as_deref(), function);
             }
             _ => {}
         }

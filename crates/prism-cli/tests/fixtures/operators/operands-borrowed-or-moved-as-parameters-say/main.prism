@@ -1,0 +1,12 @@
+// expect: ok
+struct Name { val text: String }
+
+operator fun Name.plus(other: &Name): Name = Name(text + other.text)
+fun take(n: Name) {}
+
+fun f(a: Name, b: Name) {
+    val c = a + b
+    take(a)
+    take(b)
+    take(c)
+}

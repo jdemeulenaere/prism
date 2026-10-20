@@ -1,0 +1,3 @@
+// expect: ok
+fun f(x: Int, xs: List<Int>, a: Int?, b: Int, k: Int, n: Int): Bool =
+    (x in xs == true) && (a ?: b in xs) && (n in 0..<k + 1) && !(x in xs)

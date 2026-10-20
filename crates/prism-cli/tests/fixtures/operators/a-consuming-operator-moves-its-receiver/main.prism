@@ -1,0 +1,10 @@
+// expect: E5001
+struct Name { val text: String }
+
+operator consuming fun Name.plus(other: &Name): Name = Name(text + other.text)
+fun take(n: Name) {}
+
+fun f(a: Name, b: Name) {
+    val c = a + b
+    take(a)
+}
