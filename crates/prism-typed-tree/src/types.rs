@@ -42,13 +42,13 @@ impl NominalId {
 /// The compose runtime module, `/prism/compose/runtime` (D15 of `compose-transform`).
 pub const COMPOSE_RUNTIME_MODULE: &str = "prism/compose/runtime";
 
-/// The UI toolkit's base module, `/prism/compose/ui` (D21 of `ui-toolkit`).
-pub const COMPOSE_UI_MODULE: &str = "prism/compose/ui";
-
 /// A struct whose representation, glue and operations the compiler provides, declared in the
-/// bundled library as an `intrinsic struct` without fields (D16 of `compose-transform`). No
-/// program constructs one, reads a field of one or takes one apart: its intrinsic functions
-/// make and use its values. Each is one word, a runtime handle, which `==` compares.
+/// bundled library as an `intrinsic struct` without fields (D16 of `compose-transform`): the
+/// state core of `/prism/compose/runtime`, which needs `T`'s type record and the compiler's
+/// capture rules (D11 of `compose-library-in-prism`). No program constructs one, reads a field
+/// of one or takes one apart: its intrinsic functions make and use its values. Each is one
+/// word, a runtime handle, which `==` compares. [`IntrinsicStruct::of`] is the only comparison
+/// of a library declaration's module and name in the compiler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicStruct {
     /// `State<T>`, an owned, read-only state object: one word naming the state cell it owns,

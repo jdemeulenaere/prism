@@ -40,8 +40,8 @@ pub(crate) type SharedMarks = Rc<RefCell<ComposableMarks>>;
 
 impl ComposableMarks {
     /// Whether `id` of `tree` contains a composable call outside closures: a call of a `compose
-    /// fun`, of a composable function value or of an intrinsic composable (`remember`, `key`,
-    /// `currentRecomposeScope`).
+    /// fun`, of a composable function value or of an intrinsic composable (`remember`, `key`);
+    /// `currentComposer()` is none, since it adds no group.
     pub(crate) fn expression(&mut self, tree: &prism_typed_tree::Body, id: ExpressionId) -> bool {
         let index = id.0 as usize;
         if self.expressions.len() <= index {

@@ -1,10 +1,10 @@
 ## ADDED Requirements
 
 ### Requirement: The Current Composer Is a Built-In Call
-A call of `currentComposer()` of `/prism/composer` MUST be a call of its built-in, of type `Int`, with no argument.
+A call of `currentComposer()` of `/prism/compose/runtime` MUST be a call of its built-in, of type `Int`, with no argument.
 
 #### Scenario: The current composer in the tree
-- **WHEN** `compose fun C(): Int = currentComposer()` is checked with `import /prism/composer` and its typed tree dumped
+- **WHEN** `compose fun C(): Int = currentComposer()` is checked with `import /prism/compose/runtime` and its typed tree dumped
 - **THEN** the body is a call of the built-in `currentComposer` of type `Int`
 
 ## MODIFIED Requirements

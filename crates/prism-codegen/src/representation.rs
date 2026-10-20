@@ -3,8 +3,8 @@
 //!
 //! An `Int` is an `i64`, a `Double` an `f64`, a `Bool` an `i8` holding 0 or 1, a `Char` an
 //! `i32` holding a Unicode scalar value, and a reference, a `Heap<T>` and a nullable of either a
-//! pointer (0 for `null`). A one-word intrinsic struct (a `Composition`, a state handle, a
-//! `NodeId`) is an `i64` holding its handle. A `String`, a struct, an enum, a function value (a descriptor address
+//! pointer (0 for `null`). A one-word intrinsic struct (a state handle or a weak reference) is
+//! an `i64` holding its handle. A `String`, a struct, an enum, a function value (a descriptor address
 //! and an environment address, D2 of `closures`) and any other nullable live in memory, laid out
 //! as [`crate::layout`] says. `Unit` and `Nothing` have no representation: they are left out of
 //! signatures. A value in memory is passed as its address, and returned through an address the

@@ -19,7 +19,7 @@ In a library module, an annotation of another name, an annotation on a kind of d
 - **THEN** the type checker emits `E4029` for each of the five
 
 ### Requirement: The Current Composer
-`/prism/composer` MUST declare `public intrinsic compose fun currentComposer(): Int`, which gives the composer word of the body running it, the word the protocol functions take. Its call MUST add no group and make no region need one.
+`/prism/compose/runtime` MUST declare `public intrinsic compose fun currentComposer(): Int`, Compose's `currentComposer`, which gives the composer word of the body running it, the word the protocol functions of `/prism/composer` take. Its call MUST add no group and make no region need one.
 
 #### Scenario: Protocol calls inside a composable
 - **WHEN** `compose fun Cell(n: Int) { val k = currentComposer(); val v = rememberInt(k, 7) { println("computed"); 42 }; println(v) }` and `fun main() { val n = mutableStateOf(1); val c = composition { Cell(n.value) }; n.value = 2; c.recompose() }` run with `import /prism/composer`, `import /prism/compose/runtime` and `import /prism/core`, under `--check-allocations`
@@ -72,11 +72,11 @@ An `intrinsic struct` MUST declare a type whose representation, glue and operati
 - **THEN** the type checker rejects each, saying that `MutableState` and `WeakReference` have no constructor and no fields
 
 ### Requirement: The Compose Module
-`/prism/compose/runtime` MUST declare the composables `remember` and `key` as intrinsics, and in Prism: `Composition`, a `@Keeper` struct with a private handle and a drop hook disposing it; `composition`, `setContent` and `recompose`, annotated `@DrivesComposition`; `dump`; `RecomposeScope : Copy` over a private word, with `invalidate`; and `currentRecomposeScope`, annotated `@ExplicitGroupsComposable`.
+`/prism/compose/runtime` MUST declare the composables `remember`, `key` and `currentComposer` as intrinsics, and in Prism: `Composition`, a `@Keeper` struct with a private handle and a drop hook disposing it; `composition`, `setContent` and `recompose`, annotated `@DrivesComposition`; `dump`; `RecomposeScope : Copy` over a private word, with `invalidate`; and `currentRecomposeScope`, annotated `@ExplicitGroupsComposable`.
 
 #### Scenario: Signatures of the compose module
 - **WHEN** `prism abi` prints the ABI of `/prism/compose/runtime`
-- **THEN** it holds `@Keeper public struct Composition` with the private field `handle: Int`, `@DrivesComposition public fun composition(content: attached compose () -> Unit): Composition`, `@DrivesComposition public fun Composition.setContent(content: attached compose () -> Unit): Unit`, `@DrivesComposition public fun Composition.recompose(): Bool`, `public fun Composition.dump(): String`, `public intrinsic compose fun <T> remember(calculation: () -> T): T`, `public intrinsic compose fun key(value: Int, content: compose () -> Unit)`, `public struct RecomposeScope : Copy` with the private field `word: Int`, `public compose fun currentRecomposeScope(): RecomposeScope` and `public fun RecomposeScope.invalidate(): Unit`
+- **THEN** it holds `@Keeper public struct Composition` with the private field `handle: Int`, `@DrivesComposition public fun composition(content: attached compose () -> Unit): Composition`, `@DrivesComposition public fun Composition.setContent(content: attached compose () -> Unit): Unit`, `@DrivesComposition public fun Composition.recompose(): Bool`, `public fun Composition.dump(): String`, `public intrinsic compose fun <T> remember(calculation: () -> T): T`, `public intrinsic compose fun key(value: Int, content: compose () -> Unit)`, `public intrinsic compose fun currentComposer(): Int`, `public struct RecomposeScope : Copy` with the private field `word: Int`, `public compose fun currentRecomposeScope(): RecomposeScope` and `public fun RecomposeScope.invalidate(): Unit`
 
 #### Scenario: Members of a composition
 - **WHEN** a file declares `import /prism/compose/runtime`, `import /prism/core`, `fun Composition.recompose(): Bool = false` and `fun main() { val c = composition { }; println(c.recompose()) }`, and runs with `--check-allocations`
@@ -93,17 +93,6 @@ An `intrinsic struct` MUST declare a type whose representation, glue and operati
 - **WHEN** a file declaring `import /prism/compose/runtime` declares `compose fun Counter() { val count = remember { mutableStateOf(0) }; SideEffect { } }` and `public fun counter(): MutableState<Int> = mutableStateOf(0)`
 - **THEN** it typechecks, and `prism abi` writes the signature of `counter` as `public fun counter(): MutableState<Int>`
 
-### Requirement: Library Modules Compile Like Workspace Files
-A library module MUST go through every stage a workspace file does: Phase 1 extracts its ABI, Phase 2 checks its bodies, its generics are instantiated per program, and its code is a unit of its own, cached like a workspace file's. A program MUST parse only the library modules it reaches: the member module `/prism/core`, and the modules imported, directly or transitively.
-
-#### Scenario: Unreached modules are not parsed
-- **WHEN** `prism check --explain-cache main.prism` runs on a file without imports
-- **THEN** its file lines name `prism/core.prism` and `main.prism`, and no other library module
-
-#### Scenario: An imported module is parsed
-- **WHEN** `prism check --explain-cache main.prism` runs on a file that declares `import /prism/compose/runtime`
-- **THEN** its file lines name `prism/core.prism`, `prism/composer.prism`, which the compose runtime module imports, `prism/compose/runtime.prism` and `main.prism`, and no other library module
-
 ### Requirement: The UI Modules Are Bundled
 The compiler MUST ship `/prism/compose/ui`, `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3` as bundled modules, all files of the package `prism.compose` beside `/prism/compose/runtime`. Their files MUST be checked, formatted and compiled by the library tests like every bundled module, and their externals MUST match `prism-ui`'s and `prism-compose`'s entry points.
 
@@ -113,7 +102,7 @@ The compiler MUST ship `/prism/compose/ui`, `/prism/compose/foundation`, `/prism
 
 #### Scenario: The UI modules are not in the prelude
 - **WHEN** `prism check --explain-cache` runs on a file without imports, and then on the same file with `import /prism/compose/material3`
-- **THEN** the first lists no file of `prism/compose/` and no `prism/composer.prism`, and the second lists `prism/composer.prism`, `prism/compose/ui.prism`, `prism/compose/foundation.prism`, `prism/compose/layout.prism` and `prism/compose/material3.prism`, and not `prism/compose/runtime.prism`
+- **THEN** the first lists no file of `prism/compose/`, and the second lists `prism/compose/ui.prism`, `prism/compose/foundation.prism`, `prism/compose/layout.prism`, `prism/compose/material3.prism` and `prism/compose/runtime.prism`, which the UI base module imports for `currentComposer`, and not `prism/composer.prism`
 
 ## REMOVED Requirements
 

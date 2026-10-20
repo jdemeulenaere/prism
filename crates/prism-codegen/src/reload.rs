@@ -105,7 +105,7 @@ impl ReloadWrites {
 pub struct PreparedReload {
     writes: ReloadWrites,
     /// The symbols whose slot the reload splits and that get a note, in the order they were
-    /// defined: restart functions and root content adapters split only with their composable,
+    /// defined: restart functions split only with their composable,
     /// whose note covers them (D8 of `compose-hot-reload`).
     pub splits: Vec<(String, SlotKind)>,
     /// The slot each split symbol, restart functions included, was mapped to before the reload.

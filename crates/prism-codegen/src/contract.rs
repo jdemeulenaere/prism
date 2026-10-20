@@ -347,7 +347,7 @@ pub fn slot_contract(
             // and its fields' names (`t.id`), which says what the environment's value is: two
             // paths of one type (`t.id`, `t.count`) are different captures, so a value made
             // before a reload never runs code that reads its copy of one path as the other.
-            // A restart function's or root content adapter's captures are its composable's
+            // A restart function's captures are its composable's
             // arguments, matched by position as a function's parameters are.
             if matches!(body.owner, BodyOwner::Closure { .. }) {
                 hasher.write_str(body.locals[local].name.as_deref().unwrap_or(""));

@@ -6,8 +6,6 @@
 // library is written over `currentComposer`.
 package prism.compose
 
-import /prism/composer
-
 // A composition: the groups, slots and nodes of one tree of composables. It is owned, neither
 // `Copy` nor `Clone`, and dropping it disposes everything it holds. It keeps the content it
 // was given, so the states that content captures stay borrowed while it is used.
@@ -39,6 +37,10 @@ public fun Composition.recompose(): Bool = prism_compose_recompose(handle)
 
 // The text dump of this composition: its groups and slots, then its nodes.
 public fun Composition.dump(): String = prism_compose_dump(handle)
+
+// The composer of the composable body running this call: the word the composer protocol of
+// `/prism/composer` takes. Compose's `currentComposer`. It adds no group.
+public intrinsic compose fun currentComposer(): Int
 
 // The value `calculation` gave the first time this position of the composition was composed,
 // computed again when one of the keys written before `calculation` changed: a copy of a `Copy`

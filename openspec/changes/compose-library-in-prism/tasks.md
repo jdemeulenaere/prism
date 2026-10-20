@@ -51,7 +51,7 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 ## 3. The composer primitive (D3, D4)
 
 - [x] 3.1 `currentComposer`:
-  - catalog entry `public intrinsic compose fun currentComposer(): Int` of `prism/composer`, declared in `library/prism/composer.prism`;
+  - catalog entry `public intrinsic compose fun currentComposer(): Int` of `prism/compose/runtime`, declared in `library/prism/compose/runtime.prism` (moved from `prism/composer` at task 7.3, design D3);
   - `BuiltinFunction::CurrentComposer` with a codec tag and dump name;
   - the transform lowers it to a copy of `$composer`, and treats it as no composable call for regions and call-site groups.
 
@@ -97,7 +97,7 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
   - the UI externals take and return `Int` words;
   - `Node` and `LeafNode` with `@ExplicitGroupsComposable`, starting node groups with key 125 through private externals of the compose runtime;
   - `runApp` with `@DrivesComposition` over `prism_ui_run_app`;
-  - `import /prism/composer`.
+  - `import runtime`, for `currentComposer` (design D3).
 
   Update `foundation.prism`, `layout.prism` and `material3.prism` (`node.word`, `HandlerId(...)` around registrations).
 - [x] 6.2 Remove:
@@ -113,19 +113,19 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 7. Catalog, timing and verification (D11, D14 to D16)
 
-- [ ] 7.1 Catalog (D11):
+- [x] 7.1 Catalog (D11):
   - `IntrinsicStruct` holds `State`, `MutableState` and `WeakReference`, and `IntrinsicStruct::of` is the only comparison of a library declaration's module and name in the compiler;
   - `stability.rs` builds `WeakReference`'s id through the catalog;
   - the compose function catalog holds the 10 entries of D11.
 
   Grep the type checker, borrow checker, transform and backend for the removed names, and record what remains in "Implementation Notes".
-- [ ] 7.2 Diagnostics catalog (`openspec/specs/diagnostics/spec.md`): widen `E2001` (malformed annotations), `E3002` (annotations in the workspace), `E4029` (annotation rules and explicit-groups bodies) and `E4030` (`@DrivesComposition` functions).
-- [ ] 7.3 Timing (D15): on an idle machine, re-run the measurements of task 1.2 and record them beside the baseline in `design.md`. Investigate any regression of more than 5 % in a cold, warm or frame median before archiving, and check the four compile-timing shapes stay within ×4.6 per ×4.
-- [ ] 7.4 Run the apply checks of `openspec/config.yaml`:
+- [x] 7.2 Diagnostics catalog (`openspec/specs/diagnostics/spec.md`): widen `E2001` (malformed annotations), `E3002` (annotations in the workspace), `E4029` (annotation rules and explicit-groups bodies) and `E4030` (`@DrivesComposition` functions).
+- [x] 7.3 Timing (D15): on an idle machine, re-run the measurements of task 1.2 and record them beside the baseline in `design.md`. Investigate any regression of more than 5 % in a cold, warm or frame median before archiving, and check the four compile-timing shapes stay within ×4.6 per ×4.
+- [x] 7.4 Run the apply checks of `openspec/config.yaml`:
   - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace`, reading the `test result:` lines;
   - `prism check` on every file under `examples/`, and `prism fmt --check examples/`;
   - `prism run --check-allocations examples/run/main.prism`, and each UI entry with `--headless` (status 0, empty stderr).
-- [ ] 7.5 Update `ROADMAP.md`:
+- [x] 7.5 Update `ROADMAP.md`:
   - tick item 10c, and item 10 once all its sub-items are done;
   - mark the `drop-and-clone-hooks` follow-up "Replace `Composition`'s compiler drop ... by hooks written in Prism" done for `Composition`;
   - add the follow-ups of the proposal's "Not in scope" list and of design "Open Questions" as unchecked items naming this change.

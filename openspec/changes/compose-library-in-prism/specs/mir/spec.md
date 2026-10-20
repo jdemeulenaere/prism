@@ -4,7 +4,7 @@
 In composed MIR, a call of `currentComposer()` MUST be an assignment of a copy of the body's `$composer` argument, with no call and no group.
 
 #### Scenario: The composer read in a composable
-- **WHEN** `prism dump-mir --composed` runs on `compose fun C(): Int = currentComposer()` with `import /prism/composer`
+- **WHEN** `prism dump-mir --composed` runs on `compose fun C(): Int = currentComposer()` with `import /prism/compose/runtime`
 - **THEN** the body of `main::C` assigns a copy of `$composer` to its return place, and calls no composer operation for it
 
 ### Requirement: Bodies With Explicit Groups Start No Group

@@ -47,14 +47,10 @@ fn compile(source: &str) -> Program {
     compile_files(vec![lower_source(source)])
 }
 
-/// The program of `source` with the compose runtime module and the composer protocol it is
-/// written over (D6 and D7 of `compose-library-in-prism`).
+/// The program of `source` with the compose runtime module (D6 and D7 of
+/// `compose-library-in-prism`).
 fn compile_with_compose_runtime(source: &str) -> Program {
     compile_files(lower_files(&[
-        (
-            "prism/composer",
-            include_str!("../../../library/prism/composer.prism"),
-        ),
         (
             "prism/compose/runtime",
             include_str!("../../../library/prism/compose/runtime.prism"),
@@ -1245,8 +1241,8 @@ fn comparing_handler_ids() {
         public fun pairs(a: Pair, b: Pair): Bool = a == b\n";
     let files = lower_files(&[
         (
-            "prism/composer",
-            include_str!("../../../library/prism/composer.prism"),
+            "prism/compose/runtime",
+            include_str!("../../../library/prism/compose/runtime.prism"),
         ),
         (
             "prism/compose/ui",

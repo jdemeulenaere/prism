@@ -6,7 +6,7 @@ use prism_mir::{Body, Place, Projection};
 use prism_typed_tree::{Type, TypeTable};
 
 /// Whether a value of type `ty` can hold loans: a reference or a function type outside a
-/// nominal type (`&T`, `&mut T`, `() -> Int`), a keeper (`Composition`, which holds the loans of
+/// nominal type (`&T`, `&mut T`, `() -> Int`), a keeper (a `@Keeper` struct such as `Composition`, which holds the loans of
 /// the weak captures of the content it keeps, D24 of `owned-state`), or a nullable or `Heap<T>`
 /// of one. Other structs and enums never carry loans, since their fields and payloads cannot be
 /// borrows and a capturing closure cannot be stored in them. Neither does a value of a type

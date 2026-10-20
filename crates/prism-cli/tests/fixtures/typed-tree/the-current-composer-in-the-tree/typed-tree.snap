@@ -1,3 +1,7 @@
 module main
+import struct prism/compose/runtime::Composition
+  field 0 val handle: Int
+import struct prism/compose/runtime::RecomposeScope : Copy
+  field 0 val word: Int
 compose fun main::C(): Int @4:1
   call compose builtin currentComposer: Int @4:24

@@ -7,7 +7,7 @@
 // plain data, an ordered chain of elements that its node applies; no modifier composes.
 package prism.compose
 
-import /prism/composer
+import runtime
 
 // A node of the UI tree: one word naming a node of the UI runtime, `Copy`.
 package struct NodeId : Copy { package val word: Int }

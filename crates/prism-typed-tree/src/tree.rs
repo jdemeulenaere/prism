@@ -765,7 +765,7 @@ pub enum BuiltinFunction {
     /// borrow of a state object reaching it, the reference's own word viewed as one (D11 of
     /// `owned-state`). Its type argument is the state object's type `S`.
     WeakGet,
-    /// `currentComposer()` of `/prism/composer`, a composable: the composer word of the body
+    /// `currentComposer()` of `/prism/compose/runtime`, a composable: the composer word of the body
     /// running it, which the compose transform reads from the body's `$composer` argument (D3
     /// of `compose-library-in-prism`). It adds no group.
     CurrentComposer,

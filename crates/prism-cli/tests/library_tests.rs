@@ -363,6 +363,7 @@ fn signatures_of_the_compose_module() {
         "public fun Composition.dump(): String",
         "public intrinsic compose fun <T> remember(calculation: () -> T): T",
         "public intrinsic compose fun key(value: Int, content: compose () -> Unit): Unit",
+        "public intrinsic compose fun currentComposer(): Int",
         "public compose fun currentRecomposeScope(): RecomposeScope",
         "public fun RecomposeScope.invalidate(): Unit",
         // standard-library: "Signatures of the state declarations" (`owned-state`).
@@ -418,7 +419,7 @@ fn signatures_of_the_compose_module() {
             "RecomposeScope [\"word: Int\"] [Private]",
         ]
     );
-    assert_eq!(texts.len(), 19, "{:?}", texts);
+    assert_eq!(texts.len(), 20, "{:?}", texts);
 }
 
 /// `ui-toolkit` task 11.1: `prism-ui`'s mirrors of `Modifier`, `ModifierElements` and

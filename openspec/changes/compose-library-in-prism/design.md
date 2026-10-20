@@ -126,12 +126,12 @@ Rejected:
 
 ### D3. The composer primitive, first half: `currentComposer()` (autonomous)
 
-`/prism/composer` declares `public intrinsic compose fun currentComposer(): Int`. It gives the composer word of the running body, the same word the protocol functions take.
+`/prism/compose/runtime` declares `public intrinsic compose fun currentComposer(): Int`. It gives the composer word of the running body, the same word the protocol functions of `/prism/composer` take. (Revised at implementation, see "Placement".)
 
 - **Lowering.** The transform replaces the call by a copy of the body's `$composer` argument: no runtime call.
 - **Groups.** It is not a composable call for grouping purposes: it adds no group, and no region needs a group because of it.
 - **Compose's surface.** Compose declares `val currentComposer: Composer` as a composable property. Prism has no top-level computed properties, so it is a function, as `currentRecomposeScope()` already is.
-- **Placement.** It lives in the protocol module, whose words it returns, not in `/prism/compose/runtime`. Application code never needs it.
+- **Placement (autonomous, revised at implementation).** It lives in `/prism/compose/runtime`, where Compose declares `currentComposer` (`androidx.compose.runtime`), and `/prism/compose/ui` imports that module for it. As proposed it lived in the protocol module `/prism/composer`, whose words it returns, but then every program importing the compose runtime or a UI module also parsed, checked and compiled the protocol's twenty wrappers and externals: measured on `examples/run/main.prism` (task 7.3), 1.0 ms of a cold run and 0.19 ms of a warm one, a regression of about 11 %. The program needs none of them, since `currentComposer` is an intrinsic. Rejected: keeping it in `/prism/composer` (that cost on every compose program, against compile speed as the primary criterion); a module of its own for the one intrinsic (a module that Compose does not have, for one name). Hand-lowered protocol code imports both modules.
 
 **Compile-time cost.** A catalog entry, and one copy per call.
 
@@ -413,7 +413,7 @@ Every program keeps its output and exit status, under `--check-allocations` incl
   - Composition dumps show node group keys of 125.
   - The typed tree and MIR name the declarations (`call prism/compose/runtime::composition`).
 - **`prism abi`** of `/prism/compose/runtime` and `/prism/compose/ui`: Prism signatures with annotations, the structs with their fields.
-- **`--explain-cache`** lists `prism/composer.prism` for a program importing `/prism/compose/runtime` or a UI module, since both now import it.
+- **`--explain-cache`** lists `prism/compose/runtime.prism` for a program importing a UI module, since `/prism/compose/ui` imports it for `currentComposer` (D3).
 - **Shadowing.** A workspace extension named like a moved member (`fun Composition.recompose(): Bool`) shadows the import instead of being `E4010`, as for `Int.dp` in `core-library-in-prism` D7.
 - **Forgery.** Constructing or taking apart `Composition` or `RecomposeScope` in a workspace file is `E4007` (hidden field) instead of "no constructor and no fields".
 
@@ -429,7 +429,7 @@ Every program keeps its output and exit status, under `--check-allocations` incl
 
 **Expected effect.**
 
-- Cold runs compile about 15 more small Prism functions once per cache. A program importing `/prism/compose/runtime` or a UI module also parses and checks `/prism/composer` (142 lines). Warm runs load them cached.
+- Cold runs compile about 15 more small Prism functions once per cache, and a program importing a UI module also reaches `/prism/compose/runtime` (D3). Warm runs load them cached.
 - Frames gain one call per node and per handler comparison, the costs of D8 and D9.
 
 A regression of more than 5 % in a cold, warm or frame median is investigated before archiving. One remedy, if a node's extra call shows: declare the hot externals in the calling module, which D9 already does for node groups.
@@ -456,6 +456,27 @@ A regression of more than 5 % in a cold, warm or frame median is investigated be
 
 `compile_timing` (`PRISM_ASSERT_TIMING=1`, passed): `many-composables` 256/1024/4096 lower 9.2/40.8/167.3 ms, compose 2.1/9.5/39.4 ms; `ui-calls` compose 3.4/16.3/75.3 ms, borrow 11.5/51.7/226.5 ms; `composable-calls` 4096 compose 2.9 ms; `nested-compose-ui` 128 compose 16.6 ms, lower 50.0 ms (all stages ×1.9 to ×2.05 per ×2).
 
+**After (task 7.3)**, on the last implementation commit, same machine and build, idle (2026-10-20):
+
+| Measurement | Before | After | Change |
+|---|---|---|---|
+| `run_timing` cold, total to main (median / p90) | 11.07 / 12.30 ms | 11.85 / 12.52 ms | +7 % |
+| `run_timing` warm, total to main (median / p90) | 2.10 / 2.14 ms | 2.30 / 2.54 ms | +9 % |
+| `warm_run_timing` `many_files` 1024 cold / warm front end (no compose code) | 219.8 / 79.2 ms | 225.3 / 83.1 ms | +2.5 % / +5 % |
+| `ui_run_timing`, a click among 1000 texts | 0.222 ms | 0.220 ms | none |
+| `app_frame_timing` counter click frame (median / p99) | 0.003 / 0.004 ms | 0.003 / 0.004 ms | none |
+| `app_frame_timing` todo toggle recomposition (median / p99) | 0.142 / 0.362 ms | 0.129 to 0.140 / 0.27 to 0.29 ms | none |
+| `app_frame_timing` todo toggle frame (median / p99) | 1.876 / 3.424 ms | 1.91 to 2.04 / 3.33 to 4.36 ms | +2 to +9 %, all in the display list (0.72 → 0.77 to 0.79 ms), which this change does not touch |
+| `app_frame_timing` todo typing recomposition / frame (median) | 1.499 / 2.408 ms | 1.45 to 1.55 / 2.38 to 2.47 ms | within ±3 % |
+| `app_frame_timing` todo idle click recomposition | 4.541 ms | 4.46 to 4.54 ms | none |
+| `app_frame_timing` first frame cold / warm | 31.1 / 3.06 ms | 31.5 to 32.3 / 3.12 to 3.20 ms | +1 to +4 % |
+| allocations per frame (counter, toggle, typing, idle) | 3, 12, 4, 0; nothing in frames that change nothing | the same | none |
+| `list_timing`, a million adds | 7.55 ms | 7.21 ms | none |
+
+Ranges are over three runs. `compile_timing` passed under `PRISM_ASSERT_TIMING=1`, every stage within ×4.6 per ×4 (`many-composables` 4096: compose 40.1 ms, lower 169.7 ms; `ui-calls` 4096: compose 75.3 ms; `composable-calls` 4096: compose 2.8 ms; `nested-compose-ui` 128: compose 16.9 ms), all within a few percent of the baseline.
+
+**Investigation of the startup regression.** The first measurement after group 6 gave +11 % cold and warm on `examples/run/main.prism`. Its largest part was `/prism/composer`, which the runtime and UI modules imported for `currentComposer`: measured alone, importing it cost 1.0 ms of a cold run and 0.19 ms of a warm one. `currentComposer` moved to `/prism/compose/runtime` (D3), which removed it. What is left is the runtime module's own code, the expected cost of D1: importing `/prism/compose/runtime` into an empty program now costs 0.65 ms cold and 0.18 ms warm (1.07 → 1.72 ms and 0.52 → 0.70 ms), its eight small functions, a drop hook and their glue compiled once and then loaded from the cache. The frame paths show no regression: a node's extra call, its `NodeId` by address and the handler comparisons through `equals` are within run-to-run variance, and the steady state still allocates nothing. The 15 ms startup target is met. Possible remedies, as follow-ups: loading cached library code lazily, per function, and Tier 2 inlining.
+
 ### D16. No new error code (autonomous)
 
 - **`E2001`**: a malformed annotation (`@` alone, `@` before a non-identifier, an annotation inside a body).
@@ -479,9 +500,9 @@ A regression of more than 5 % in a cold, warm or frame median is investigated be
 
 Programs keep their meaning, apart from D14's shadowing and forgery errors. The library sources change as follows:
 
-- `composer.prism` gains `currentComposer`.
+- `compose/runtime.prism` gains `currentComposer` (D3).
 - `compose/runtime.prism` writes D6 and D7 over private externals.
-- `compose/ui.prism` writes D8 to D10, and imports `/prism/composer`.
+- `compose/ui.prism` writes D8 to D10, and imports `runtime` for `currentComposer`.
 - `foundation.prism`, `layout.prism` and `material3.prism` pass `node.word` to setters and wrap registrations in `HandlerId(...)`.
 
 Runtime crates gain two entries and change `prism_ui_run_app`'s content. The build cache is keyed by the compiler identity, so nothing cached is reused. Rollback: revert the commits.
@@ -504,5 +525,6 @@ Runtime crates gain two entries and change `prism_ui_run_app`'s content. The bui
 - **Two more dump differences** (group 5, beside D14's list, both dump-only):
   - the group key of a composable lambda given to a library function hashes the callee's declaration path, as for any declared function, rather than the built-in's name: the root lambda of `composition { ... }` is `argument 0 of prism/compose/runtime::composition call 0`, so composition dumps show another key for it (`compose/a-dump-of-a-composable` and two more re-blessed);
   - typed-tree dumps of files importing `/prism/compose/runtime` list the imported structs `Composition` and `RecomposeScope` with their fields, as for any imported struct; `prism dump-layout` names `RecomposeScope`'s field `word`.
-- **Library tests compile the runtime module** (group 5). The backend's `composed_bodies_run` test compiles `/prism/composer` and `/prism/compose/runtime` beside its source, since `composition` and `currentRecomposeScope` are now code of those modules; the CLIF scenarios "The drop glue of a composition calls its hook" and "A weak reference passed as a word" are `run_cli_tests.rs` tests over `prism dump-clif`.
+- **Library tests compile the runtime module** (group 5). The backend's `composed_bodies_run` test compiles `/prism/compose/runtime` beside its source, since `composition` and `currentRecomposeScope` are now code of those modules; the CLIF scenarios "The drop glue of a composition calls its hook" and "A weak reference passed as a word" are `run_cli_tests.rs` tests over `prism dump-clif`.
 - **The UI module** (group 6). `Node` and `LeafNode` write the node key 125 as a literal, not a top-level `val`, so a node call reads no value table entry. The text field's edit handler stays an `Int` word between `prism_ui_register_text` and `prism_ui_set_on_value_change`, since no modifier element holds it; the click and toggle registrations are wrapped in `HandlerId(...)` for their elements. No re-blessed dump showed a node group key: composition dumps of UI programs come from `prism-ui`'s tree dump, which shows nodes, not groups. The "Comparing handler ids" scenario now says "the comparison of the two `Pair`s", since the backend compares a small struct inline rather than through glue; its test is `comparing_handler_ids` in `crates/prism-codegen/src/lowering_tests.rs`.
+- **What the catalog keeps** (task 7.1). `IntrinsicStruct` holds `State`, `MutableState` and `WeakReference`, all of `/prism/compose/runtime`, and `IntrinsicStruct::of` is the only comparison of a library declaration's module and name (`COMPOSE_UI_MODULE` is gone); `stability.rs` builds `WeakReference`'s id through it. The compose part of the function catalog has D11's ten entries, `currentComposer` among them in `/prism/compose/runtime`. A grep of the type checker, borrow checker, transform, MIR and backend finds no test of `Composition`, `RecomposeScope`, `NodeId`, `HandlerId`, `runApp`, `SideEffect`, `Node` or `LeafNode` by name; what mentions them is the `E4030` error's name (`CompositionInComposable`), the borrow checker's `AttachedHolder::Composition` label for keepers in its messages, and doc comments.

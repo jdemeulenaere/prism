@@ -1095,9 +1095,6 @@ fn an_imported_module_is_parsed() {
     assert_eq!(
         all_explanation_lines(&output),
         lines(&[
-            // The compose runtime module imports the composer protocol
-            // (`compose-library-in-prism` D14).
-            "checked prism/composer.prism",
             "checked prism/compose/runtime.prism",
             "checked prism/core.prism",
             "checked main.prism",
@@ -1187,7 +1184,9 @@ fn the_composer_module_is_not_in_the_prelude() {
 
 /// standard-library: "The UI modules are not in the prelude" (`ui-toolkit`,
 /// `explicit-library`): a file without imports reaches no module of `prism/compose/`, and one
-/// importing material3 reaches the four toolkit modules and not the runtime module.
+/// importing material3 reaches the four toolkit modules and the runtime module, which
+/// `/prism/compose/ui` imports for `currentComposer` (`compose-library-in-prism` D3), and not the
+/// composer protocol.
 #[test]
 fn the_ui_modules_are_not_in_the_prelude() {
     let base = unique_temp_dir("ui_modules");
@@ -1220,8 +1219,16 @@ fn the_ui_modules_are_not_in_the_prelude() {
             "prism/compose/foundation.prism",
             "prism/compose/layout.prism",
             "prism/compose/material3.prism",
+            "prism/compose/runtime.prism",
             "prism/compose/ui.prism",
         ]
+    );
+    assert!(
+        !with
+            .iter()
+            .any(|line| line.ends_with("prism/composer.prism")),
+        "{:?}",
+        with
     );
     fs::remove_dir_all(&base).ok();
 }
@@ -1256,7 +1263,6 @@ fn library_entries_are_shared_between_workspaces() {
         lines(&[
             "checked prism/core.prism",
             "checked prism/collections.prism",
-            "checked prism/composer.prism",
             "checked prism/compose/runtime.prism",
             "checked main.prism",
             // `listOf` is a library generic (D10 of `vararg`), instantiated for the program.
@@ -1268,7 +1274,6 @@ fn library_entries_are_shared_between_workspaces() {
         lines(&[
             "reused prism/core.prism",
             "reused prism/collections.prism",
-            "reused prism/composer.prism",
             "reused prism/compose/runtime.prism",
             "checked main.prism",
             // A check plans instances without caching their code.

@@ -112,7 +112,7 @@ impl CodeUnit {
                 continue;
             }
             let symbol = context.symbol(body_id).to_string();
-            // Restart functions and root content adapters are closures too (D19 of
+            // Restart functions are closures too (D19 of
             // `compose-transform`).
             let signature = if body.owner.is_closure() {
                 closure_signature(body, context.call_conv, context.pointer)

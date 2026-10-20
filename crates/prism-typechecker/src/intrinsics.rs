@@ -36,7 +36,6 @@ const CORE: &str = "prism/core";
 /// type, intrinsic or written in Prism, is a member of that type.
 pub(crate) const MEMBER_MODULE: &str = CORE;
 const COMPOSE_RUNTIME: &str = prism_typed_tree::COMPOSE_RUNTIME_MODULE;
-const COMPOSER: &str = "prism/composer";
 
 const fn entry(
     module: &'static str,
@@ -236,10 +235,10 @@ pub const CATALOG: &[Intrinsic] = &[
         "public intrinsic fun <T> WeakReference<T>.get(): (&T)?",
         false,
     ),
-    // `/prism/composer` (D3 of `compose-library-in-prism`): the composer of the running body,
-    // Compose's `currentComposer`, the one composer-access primitive.
+    // The composer of the running body, Compose's `currentComposer`: the one composer-access
+    // primitive (D3 of `compose-library-in-prism`).
     entry(
-        COMPOSER,
+        COMPOSE_RUNTIME,
         None,
         "currentComposer",
         BuiltinFunction::CurrentComposer,

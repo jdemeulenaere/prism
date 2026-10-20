@@ -695,7 +695,7 @@ impl Linker {
     /// it gives is applied on the program thread ([`PreparedReload`]).
     pub fn prepare(mut self) -> Result<PreparedReload, BackendError> {
         let writes = self.finalize()?;
-        // A restart function or root content adapter splits only with its composable, whose
+        // A restart function splits only with its composable, whose
         // own note says so (D8 of `compose-hot-reload`).
         let splits = self
             .defined

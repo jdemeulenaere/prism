@@ -29,7 +29,7 @@ Jetpack Compose writes almost all of this in library code over `currentComposer`
 ## What Changes
 
 - **The composer primitive.** It has two halves.
-  - `currentComposer()`, a composable intrinsic of `/prism/composer` and Compose's `currentComposer`, gives the running body's composer word. The transform reads it from the body's composer argument.
+  - `currentComposer()`, a composable intrinsic of `/prism/compose/runtime` and Compose's `currentComposer`, gives the running body's composer word (placed in the protocol module `/prism/composer` when proposed, moved at implementation: design D3). The transform reads it from the body's composer argument.
   - Composable content (`compose () -> Unit`) can be given to externals. The compose runtime runs it for a composer by calling it with that composer and the force bit, as Compose's runtime does in `invokeComposable`. The transform's root content adapters (`<symbol>#root-content`) are removed.
 - **Library annotations**, Kotlin's syntax `@Name` before a declaration, as the declared markers that replace the name tests. All are library-only for now: a workspace file using one gets `E3002`.
   - `@ExplicitGroupsComposable` (Compose's name): a composable that starts no group of its own, never skips and is no restart scope, so it runs in its caller's group. Its body makes no composable call inside a branch or loop and uses no `remember` or `key` (`E4029`).
@@ -58,7 +58,7 @@ Jetpack Compose writes almost all of this in library code over `currentComposer`
 - **Behaviour is unchanged**: every fixture and example keeps its output, and executable fixtures run under `--check-allocations`. The accepted differences:
   - dumps: no `#root-content` closures, calls of the library composables as ordinary calls, node groups keyed by the node key;
   - `prism abi` of the two modules;
-  - `--explain-cache` listing `prism/composer.prism` for programs importing `/prism/compose/runtime` or the UI modules;
+  - `--explain-cache` listing `prism/compose/runtime.prism` for programs importing the UI modules, since `/prism/compose/ui` imports it for `currentComposer`;
   - a file's own extension named like a moved member (`fun Composition.recompose()`) now shadows the import instead of being `E4010`.
 - **No new error code**: `E3002`, `E4029`, `E4030` and `E2001` are widened.
 - **BREAKING (small)**: as listed under behaviour. A workspace file can no longer construct or read the handle structs (`E4007`), which were already unconstructible as intrinsics.

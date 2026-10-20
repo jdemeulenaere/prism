@@ -4,8 +4,7 @@
 //! `(Int) -> Unit`: it reads each kept argument from the slots of its scope's group, in
 //! parameter order, and calls `F` with them, the composer it was given and change words with
 //! the force bit and every parameter the same. Ending a restart group with it allocates
-//! nothing. A body calling `composition` or `setContent` gets `<symbol>#root-content`, a closure
-//! owning the content, which it calls with the composer and the force bit.
+//! nothing.
 
 use crate::rewrite::{bit_position, word_count, FORCE, SAME};
 use prism_ast::Span;
