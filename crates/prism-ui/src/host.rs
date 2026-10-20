@@ -170,6 +170,41 @@ pub fn configured_host(title: &str, width: i64, height: i64) -> Option<Box<dyn H
     }
 }
 
+/// The body key and declaration path of each composable function of the program, which
+/// `dump recompositions` names its counts by (D14 of `strong-skipping`).
+static RECOMPOSITION_NAMES: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
+
+/// Sets the composable functions every later app of the process counts the recompositions of
+/// when its event script holds `dump recompositions`: the program's own, by body key.
+pub fn set_recomposition_names(names: Vec<(u64, String)>) {
+    *RECOMPOSITION_NAMES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = names;
+}
+
+/// The names [`set_recomposition_names`] set.
+pub(crate) fn recomposition_names() -> Vec<(u64, String)> {
+    RECOMPOSITION_NAMES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+/// Whether the configured host is headless with a script that dumps recompositions: only
+/// then does an app count them.
+pub(crate) fn counts_recompositions() -> bool {
+    match &*CONFIGURATION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    {
+        HostConfiguration::Headless { commands, .. } => commands.iter().any(|line| {
+            line.command
+                == crate::script::ScriptCommand::Dump(crate::script::DumpKind::Recompositions)
+        }),
+        _ => false,
+    }
+}
+
 static RELOAD_WAKER: Mutex<Option<fn()>> = Mutex::new(None);
 static RELOAD_SIGNAL: (Mutex<()>, Condvar) = (Mutex::new(()), Condvar::new());
 static RELOAD_TIMINGS: AtomicBool = AtomicBool::new(false);

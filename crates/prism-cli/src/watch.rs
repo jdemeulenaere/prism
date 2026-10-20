@@ -477,6 +477,9 @@ impl WatchSession {
             &mut linker,
         )?;
         let (program, linking, _) = link_build(linker, &build)?;
+        // A session counts the recompositions of the composables of the program it started
+        // (D14 of `strong-skipping`).
+        prism_ui::host::set_recomposition_names(build.composable_functions.clone());
         Ok((graph, build, program, graph_time, linking))
     }
 

@@ -296,6 +296,17 @@ fn summaries_list_the_body_keys_of_composable_bodies() {
         generic[0],
         prism_compose_transform::keys::body_key("main::Each")
     );
+    // The composable functions, generic ones included, are named by their declaration paths
+    // (D14 of `strong-skipping`); closures are not.
+    let key = prism_compose_transform::keys::body_key;
+    assert_eq!(
+        summary.composable_functions,
+        [
+            (key("main::Wrap"), "main::Wrap".to_string()),
+            (key("main::Show"), "main::Show".to_string()),
+            (key("main::Each"), "main::Each".to_string()),
+        ]
+    );
     let decoded = prism_mir::FileSummary::decode(&summary.encode()).expect("it decodes");
     assert_eq!(decoded, summary);
 }

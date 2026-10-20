@@ -580,6 +580,7 @@ mod tests {
             }],
             generics: Vec::new(),
             composable_bodies: vec![0x1234_5678_9abc_def0, 7],
+            composable_functions: vec![(7, "app/main::Screen".to_string())],
         }
     }
 

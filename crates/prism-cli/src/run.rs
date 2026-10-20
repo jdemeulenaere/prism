@@ -192,6 +192,9 @@ pub struct CompiledProgram {
     pub compiled_functions: usize,
     /// The program's build plan, when a cache keyed its units (D12 of `instance-cache`).
     pub plan: Option<BuildPlan>,
+    /// The body key and declaration path of each composable function of the program's own
+    /// files (D14 of `strong-skipping`).
+    pub composable_functions: Vec<(u64, String)>,
 }
 
 /// The import graph of the program whose entry file is `entry` and the elaborated MIR of every
@@ -327,6 +330,10 @@ pub(crate) struct Build {
     /// The generic of each instance of the plan, by the instance's symbol, whose composable
     /// bodies a reload of the instance affects (D4 of `compose-hot-reload`).
     pub instance_generics: HashMap<String, DeclarationPath>,
+    /// The body key and declaration path of each composable function of the program's own
+    /// files, not the bundled library's: what `dump recompositions` counts (D14 of
+    /// `strong-skipping`).
+    pub composable_functions: Vec<(u64, String)>,
 }
 
 /// One file of a program being built.
@@ -581,11 +588,17 @@ pub(crate) fn build_program(
             })
             .collect(),
     };
+    let composable_functions = files
+        .iter()
+        .filter(|file| !file.module.starts_with("prism/"))
+        .flat_map(|file| file.summary.composable_functions.iter().cloned())
+        .collect();
     Ok(Build {
         main,
         plan,
         kept,
         units,
+        composable_functions,
         files: files
             .iter()
             .map(|file| (file.path.clone(), file.outcome))
@@ -676,6 +689,7 @@ pub fn compile_program_with(
         instances: build.instances,
         compiled_functions,
         plan: Some(build.plan),
+        composable_functions: build.composable_functions,
     })
 }
 
@@ -892,6 +906,7 @@ pub fn prepare_run(entry: &Path, options: &RunOptions) -> Result<CompiledProgram
         print_load_timings(compiled.timings, options);
     }
     options.configure_ui();
+    prism_ui::host::set_recomposition_names(compiled.composable_functions.clone());
     Ok(compiled)
 }
 

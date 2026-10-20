@@ -10,7 +10,11 @@
 //! - `key backspace` and `key enter`;
 //! - `resize <width> <height>`;
 //! - `frame`;
-//! - `dump`, `dump tree` and `dump draw`;
+//! - `pause <milliseconds>`, which sleeps outside every frame, to pace inputs as a person does
+//!   (D15 of `strong-skipping`);
+//! - `dump`, `dump tree`, `dump draw` and `dump recompositions`, the last printing how many
+//!   times each composable function of the program ran and was skipped since the previous one
+//!   (D14 of `strong-skipping`);
 //! - under `--watch` only, `edit <target> <replacement>` and `wait reload` (D12 of
 //!   `compose-hot-reload`). An `edit` makes the session read `<target>` as the content of
 //!   `<replacement>`, both relative to the script's directory; the replacement is read when the
@@ -37,6 +41,9 @@ pub enum DumpKind {
     Tree,
     /// The display list (`dump draw`).
     Draw,
+    /// The runs and skips of each composable function of the program since the run started or
+    /// the previous `dump recompositions` (D14 of `strong-skipping`).
+    Recompositions,
 }
 
 /// What a kind target names.
@@ -96,6 +103,9 @@ pub enum ScriptCommand {
     Key(Key),
     Resize(i64, i64),
     Frame,
+    /// `pause <milliseconds>`: the program thread sleeps, outside every frame (D15 of
+    /// `strong-skipping`).
+    Pause(u64),
     Dump(DumpKind),
     /// One group of consecutive `edit` lines, applied as one reload.
     Edit(Vec<ScriptedEdit>),
@@ -297,12 +307,25 @@ fn command(tokens: &[Token], context: &ScriptContext) -> Result<ScriptCommand, S
             at_most(0)?;
             ScriptCommand::Frame
         }
+        "pause" => {
+            let milliseconds = match arguments.first().and_then(number) {
+                Some(milliseconds) if milliseconds >= 0 => milliseconds as u64,
+                _ => return Err("expected a number of milliseconds after 'pause'".to_string()),
+            };
+            at_most(1)?;
+            ScriptCommand::Pause(milliseconds)
+        }
         "dump" => {
             let kind = match arguments.first() {
                 None => DumpKind::Tree,
                 Some(Token::Word(word)) if word == "tree" => DumpKind::Tree,
                 Some(Token::Word(word)) if word == "draw" => DumpKind::Draw,
-                Some(_) => return Err("expected 'tree' or 'draw' after 'dump'".to_string()),
+                Some(Token::Word(word)) if word == "recompositions" => DumpKind::Recompositions,
+                Some(_) => {
+                    return Err(
+                        "expected 'tree', 'draw' or 'recompositions' after 'dump'".to_string()
+                    )
+                }
             };
             at_most(1)?;
             ScriptCommand::Dump(kind)
@@ -424,7 +447,8 @@ mod tests {
             parsed(
                 "click \"+\"\nclick \"item\" 2\nclick 10 -5\npress \"a\"\npress 1 2\n\
                  release \"a\" 3\nrelease 3 4\ntype \"ab\"\nkey backspace\nkey enter\n\
-                 resize 200 100\nframe\ndump\ndump tree\ndump draw\n"
+                 resize 200 100\nframe\ndump\ndump tree\ndump draw\npause 100\n\
+                 dump recompositions\n"
             ),
             [
                 ScriptCommand::Click(text("+", 1)),
@@ -442,6 +466,8 @@ mod tests {
                 ScriptCommand::Dump(DumpKind::Tree),
                 ScriptCommand::Dump(DumpKind::Tree),
                 ScriptCommand::Dump(DumpKind::Draw),
+                ScriptCommand::Pause(100),
+                ScriptCommand::Dump(DumpKind::Recompositions),
             ]
         );
     }
@@ -552,8 +578,17 @@ mod tests {
         assert_eq!(error("frame now"), "1: unexpected 'now' after 'frame'");
         assert_eq!(
             error("dump layout"),
-            "1: expected 'tree' or 'draw' after 'dump'"
+            "1: expected 'tree', 'draw' or 'recompositions' after 'dump'"
         );
+        assert_eq!(
+            error("pause"),
+            "1: expected a number of milliseconds after 'pause'"
+        );
+        assert_eq!(
+            error("pause -5"),
+            "1: expected a number of milliseconds after 'pause'"
+        );
+        assert_eq!(error("pause 5 6"), "1: unexpected '6' after 'pause'");
         assert_eq!(
             error("edit main.prism main.prism.v2"),
             "1: the edit command needs --watch"

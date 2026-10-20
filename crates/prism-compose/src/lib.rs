@@ -24,6 +24,7 @@
 pub mod applier;
 pub mod composer;
 pub mod composition;
+pub mod counts;
 mod dump;
 mod entry;
 mod functions;

@@ -2419,6 +2419,49 @@ fn two_clicks_and_one_frame() {
     );
 }
 
+/// ui: "Paced clicks" (`strong-skipping`): a pause sleeps the program thread outside every
+/// frame. The fastest of three runs with the pause is at least 50 ms slower than the fastest of
+/// three without it, and no frame holds the pause.
+#[test]
+fn paced_clicks() {
+    let paced = "click \"+\"\nframe\npause 50\nclick \"+\"\nframe\n";
+    let unpaced = "click \"+\"\nframe\nclick \"+\"\nframe\n";
+    let fastest = |name: &str, script: &str| {
+        (0..3)
+            .map(|run| {
+                let started = std::time::Instant::now();
+                let stderr = counter_frame_stats(&format!("{}_{}", name, run), script);
+                (started.elapsed(), stderr)
+            })
+            .min_by_key(|(elapsed, _)| *elapsed)
+            .unwrap()
+    };
+    let (unpaced_time, _) = fastest("paced_clicks_without", unpaced);
+    let (paced_time, stderr) = fastest("paced_clicks_with", paced);
+    assert!(
+        paced_time >= unpaced_time + std::time::Duration::from_millis(50),
+        "{:?} against {:?}",
+        paced_time,
+        unpaced_time
+    );
+    assert!(
+        stderr.starts_with("frame stats: frames 2, events 4, passes 3, "),
+        "{}",
+        stderr
+    );
+    let frame = report_lines(&stderr)
+        .into_iter()
+        .find(|line| line.starts_with("frame median "))
+        .unwrap();
+    let maximum: f64 = frame
+        .rsplit("max ")
+        .next()
+        .and_then(|rest| rest.strip_suffix(" ms"))
+        .and_then(|number| number.parse().ok())
+        .unwrap_or_else(|| panic!("no maximum in {}", frame));
+    assert!(maximum < 50.0, "{}", frame);
+}
+
 /// ui: "Dumps are not measured".
 #[test]
 fn dumps_are_not_measured() {

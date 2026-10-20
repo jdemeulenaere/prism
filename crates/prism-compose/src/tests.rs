@@ -804,6 +804,58 @@ fn skipping_and_skipping_to_the_group_end() {
     Composition::dispose(c).unwrap();
 }
 
+/// D14 of `strong-skipping`: counting the runs and skips of the bodies of registered keys.
+#[test]
+fn counting_runs_and_skips() {
+    let c = Composition::start(
+        tree(),
+        content(move |k| {
+            k.start_group(GroupKind::Restart, 1, 0).unwrap();
+            if k.skipping().unwrap() {
+                k.skip_to_group_end().unwrap();
+            } else {
+                k.start_group(GroupKind::Replaceable, 2, 0).unwrap();
+                k.end_group().unwrap();
+                // Not counted: an unregistered key, and a movable group.
+                k.start_group(GroupKind::Replaceable, 3, 0).unwrap();
+                k.end_group().unwrap();
+                k.start_group(GroupKind::Movable, 2, 5).unwrap();
+                k.end_group().unwrap();
+            }
+            k.end_restart_group(content(|_| {})).unwrap();
+        }),
+    )
+    .unwrap();
+    // Nothing is counted before counting is on.
+    assert!(crate::counts::take().is_empty());
+    crate::counts::enable(&[1, 2]);
+    invalidate(Composition::root_scope(c).unwrap());
+    Composition::recompose(c).unwrap();
+    let counts = |mut taken: Vec<(u64, crate::counts::Counts)>| {
+        taken.sort_by_key(|(key, _)| *key);
+        taken
+            .into_iter()
+            .map(|(key, counts)| (key, counts.ran, counts.skipped))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(counts(crate::counts::take()), [(1, 0, 1)]);
+    // A forced body runs.
+    with_state(|state| {
+        let root = state.compositions.get(c).unwrap().root;
+        let restart = state.groups.get(root).unwrap().children[0];
+        state.groups.get_mut(restart).unwrap().invalid = true;
+    });
+    invalidate(Composition::root_scope(c).unwrap());
+    Composition::recompose(c).unwrap();
+    assert_eq!(counts(crate::counts::take()), [(1, 1, 0), (2, 1, 0)]);
+    assert!(
+        crate::counts::take().is_empty(),
+        "taking starts again from zero"
+    );
+    crate::counts::disable();
+    Composition::dispose(c).unwrap();
+}
+
 #[test]
 fn invalidations_during_a_pass_go_to_the_next_pass() {
     let log = log();

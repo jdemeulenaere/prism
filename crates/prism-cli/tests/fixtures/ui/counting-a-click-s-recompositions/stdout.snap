@@ -1,0 +1,6 @@
+recompositions
+  main::Badge ran 1 skipped 0
+  main::Screen ran 1 skipped 0
+recompositions
+  main::Badge ran 0 skipped 1
+  main::Screen ran 1 skipped 0

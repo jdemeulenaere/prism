@@ -136,7 +136,26 @@ fn run_deferring(
     content: FunctionValue,
     called: Instant,
 ) -> UiResult<Counters> {
-    let mut app = App::start_at(host, measurer, content, called)?;
+    // Recompositions are counted only for a script that dumps them (D14 of
+    // `strong-skipping`), from the first composition on.
+    let counting = crate::host::counts_recompositions();
+    if counting {
+        let keys: Vec<u64> = crate::host::recomposition_names()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        prism_compose::counts::enable(&keys);
+    }
+    let started = App::start_at(host, measurer, content, called);
+    let mut app = match started {
+        Ok(app) => app,
+        Err(error) => {
+            if counting {
+                prism_compose::counts::disable();
+            }
+            return Err(error);
+        }
+    };
     let result = app.run();
     // The final frame is not measured.
     let statistics = app.statistics.take();
@@ -149,6 +168,9 @@ fn run_deferring(
     };
     let counters = app.counters;
     app.finish();
+    if counting {
+        prism_compose::counts::disable();
+    }
     // The report comes after the composition is dropped, and only for an app that ended
     // normally: a runtime error ends the program instead.
     if let (Some(statistics), Ok(())) = (statistics, &result) {
@@ -509,6 +531,23 @@ impl App {
                 self.build_display_list(false);
                 dump_display_list(&self.list, &mut self.dump);
             }
+            DumpKind::Recompositions => {
+                let names: std::collections::HashMap<u64, String> =
+                    crate::host::recomposition_names().into_iter().collect();
+                let mut lines: Vec<(String, prism_compose::counts::Counts)> =
+                    prism_compose::counts::take()
+                        .into_iter()
+                        .filter_map(|(key, counts)| Some((names.get(&key)?.clone(), counts)))
+                        .collect();
+                lines.sort_by(|a, b| a.0.cmp(&b.0));
+                self.dump.push_str("recompositions\n");
+                for (name, counts) in lines {
+                    self.dump.push_str(&format!(
+                        "  {} ran {} skipped {}\n",
+                        name, counts.ran, counts.skipped
+                    ));
+                }
+            }
         }
         (self.output)(&self.dump);
     }
@@ -569,6 +608,10 @@ impl App {
             }
             ScriptCommand::Resize(width, height) => self.input(HostEvent::Resize(width, height)),
             ScriptCommand::Frame => self.handle(HostEvent::Frame)?,
+            // A person's pause: the thread sleeps, in no frame (D15 of `strong-skipping`).
+            ScriptCommand::Pause(milliseconds) => {
+                self.unmeasured(|_| std::thread::sleep(Duration::from_millis(milliseconds)))
+            }
             ScriptCommand::Dump(kind) => self.unmeasured(|app| app.print_dump(kind)),
             // The session requests the reload, which the loop's reload point applies next
             // (D12 of `compose-hot-reload`). The session's work is not the app's.

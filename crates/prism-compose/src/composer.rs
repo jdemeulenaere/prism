@@ -129,6 +129,12 @@ impl Composer {
             if state.frames[top].kind == FrameKind::Window {
                 return Err(NOT_STARTED);
             }
+            if let Some(counting) = &mut state.counting {
+                let group = state.frames[top].group;
+                if let Some(group) = state.groups.get(group) {
+                    crate::counts::count_skip(counting, group.key);
+                }
+            }
             skip_rest(state, top, pass);
             Ok(())
         })
@@ -577,6 +583,11 @@ fn start(
     node_kind: i64,
 ) -> ComposeResult<Option<NodeHandle>> {
     let pass = check(state, composer)?;
+    if let Some(counting) = &mut state.counting {
+        if matches!(kind, GroupKind::Restart | GroupKind::Replaceable) {
+            crate::counts::count_start(counting, key);
+        }
+    }
     let top = state.frames.len() - 1;
     let data_key = if kind == GroupKind::Movable {
         data_key

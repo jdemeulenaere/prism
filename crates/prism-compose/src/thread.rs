@@ -205,6 +205,9 @@ pub struct State {
     /// thread, from 2, so a version names one cell between two writes and is never 0 (no
     /// identity) or 1 (permanent).
     pub next_version: u64,
+    /// The recomposition counts of the bodies counted, while counting is on (D14 of
+    /// `strong-skipping`).
+    pub counting: Option<Box<HashMap<i64, crate::counts::Counts>>>,
 }
 
 impl State {
@@ -245,6 +248,7 @@ impl State {
             reload_targets: Vec::new(),
             invalidated_by_reloads: 0,
             next_version: 2,
+            counting: None,
         }
     }
 }

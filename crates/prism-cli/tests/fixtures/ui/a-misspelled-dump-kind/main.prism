@@ -1,0 +1,6 @@
+// expect: ok
+// run: 1
+// events: script
+import /prism/compose/ui
+import /prism/compose/material3
+fun main() { runApp(width = 400, height = 300) { Text("never") } }

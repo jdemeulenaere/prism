@@ -30,6 +30,11 @@ pub struct FileSummary {
     /// generic, in body order: what a reload of the file, or of a file it imports, names for
     /// recomposition (D4 and D5 of `compose-hot-reload`).
     pub composable_bodies: Vec<u64>,
+    /// The body key of each composable function of the file, generic ones included, with its
+    /// declaration path as `prism dump-mir` names its body, in body order: what
+    /// `dump recompositions` names its counts by (D14 of `strong-skipping`). Composable closures
+    /// have no name and are not listed.
+    pub composable_functions: Vec<(u64, String)>,
 }
 
 /// A call of a generic function or of one of its default value generators, with its type
@@ -175,9 +180,13 @@ impl FileSummary {
     ) -> FileSummary {
         let mut roots = Vec::new();
         let mut composable_bodies = Vec::new();
+        let mut composable_functions = Vec::new();
         let mut seen: HashSet<(DeclarationPath, Option<DefaultParameter>, Vec<Type>)> =
             HashSet::new();
         for (_, body) in file.bodies.iter() {
+            if let (BodyOwner::Function(path), Some(key)) = (&body.owner, body.body_key) {
+                composable_functions.push((key, path.to_string()));
+            }
             // A compiled body: generic bodies and their closures are compiled as instances.
             if !body.type_parameters.is_empty() {
                 continue;
@@ -204,6 +213,7 @@ impl FileSummary {
             roots,
             generics,
             composable_bodies,
+            composable_functions,
         }
     }
 
@@ -363,11 +373,13 @@ impl Codec for FileSummary {
             roots,
             generics,
             composable_bodies,
+            composable_functions,
         } = self;
         entry_point.encode(encoder);
         roots.encode(encoder);
         generics.encode(encoder);
         composable_bodies.encode(encoder);
+        composable_functions.encode(encoder);
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
         Some(FileSummary {
@@ -375,6 +387,7 @@ impl Codec for FileSummary {
             roots: decoder.decode()?,
             generics: decoder.decode()?,
             composable_bodies: decoder.decode()?,
+            composable_functions: decoder.decode()?,
         })
     }
 }
