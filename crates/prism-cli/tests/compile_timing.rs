@@ -1232,6 +1232,24 @@ fn extension_properties(n: usize) -> String {
     source
 }
 
+/// `n` structs with a `private`, a `package` and an unmarked field, each constructed, read,
+/// written and matched by a named pattern in its own file (D10 of `field-visibility`): every
+/// field use pays the visibility lookup.
+fn field_visibility(n: usize) -> String {
+    let mut source = String::from("package bench\nimport /prism/core\n");
+    for i in 0..n {
+        writeln!(
+            source,
+            "struct S{i} {{ private var a: Int, package val b: Int, val c: Int }}\n\
+             fun f{i}(): Int {{\n    var s = S{i}({i}, 1, 2)\n    s.a = s.b + s.c\n    \
+             return when (s) {{ S{i}(a = val x) -> x }}\n}}"
+        )
+        .unwrap();
+    }
+    writeln!(source, "fun main() {{ println(f{}()) }}", n - 1).unwrap();
+    source
+}
+
 /// One generic struct with a drop and a clone hook, instantiated through a generic function at
 /// `n` struct types (D11 and D17 of `drop-and-clone-hooks`): `n` instances of the function and
 /// `2n` hook instances, requested from the file's summary.
@@ -1392,6 +1410,7 @@ fn shapes() -> Vec<Shape> {
         shape("ui-calls", true, SIZES, ui_calls),
         shape("vararg-calls", true, SIZES, vararg_calls),
         shape("extension-properties", true, SIZES, extension_properties),
+        shape("field-visibility", true, SIZES, field_visibility),
     ]
 }
 
