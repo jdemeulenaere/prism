@@ -644,6 +644,12 @@ pub struct TypeChecker {
     /// place read in place (D4 of `operator-conventions`). An argument check takes its entry
     /// instead of inferring the expression again.
     preinferred_arguments: HashMap<usize, (ExpressionId, bool)>,
+    /// Index targets already inferred while looking for a `set` operator, by the address of
+    /// their expression, with whether each is a place and may be written (D10 of
+    /// `operator-conventions`).
+    preinferred_places: HashMap<usize, (ExpressionId, bool, bool)>,
+    /// How many names the checker made up for locals it synthesized (`index#1`).
+    synthesized_names: usize,
     /// Unannotated private top-level declarations and extensions, and how far their inference is.
     inference: HashMap<InferenceKey, Inference>,
     /// Declarations already reported as depending on themselves (`E4013`).
@@ -748,6 +754,8 @@ impl TypeChecker {
             consuming: false,
             parent_consuming: false,
             preinferred_arguments: HashMap::new(),
+            preinferred_places: HashMap::new(),
+            synthesized_names: 0,
             inference: HashMap::new(),
             recursive_inference: HashSet::new(),
             own_extensions: HashMap::new(),
@@ -4970,6 +4978,9 @@ impl TypeChecker {
             };
             self.reject_state_mutation(id, what, span);
         }
+        if mutable {
+            self.make_accessors_mutable(id);
+        }
         let place = self.as_place(id);
         let (ty, span) = (self.ty(place), self.builder.span_of(place));
         let kind = ExpressionKind::Borrow {
@@ -5097,6 +5108,20 @@ impl TypeChecker {
                             span,
                             help: None,
                         });
+                        self.explain_accessor_write(value);
+                    }
+                    (None, ExprKind::Index { .. })
+                        if !writable && self.builder.accessor_places.contains_key(&value) =>
+                    {
+                        self.errors.push(TypeError::ImmutabilityViolation {
+                            message: format!(
+                                "cannot take mutable borrow '&mut' of '{}': the element is not a mutable place",
+                                inner
+                            ),
+                            span,
+                            help: None,
+                        });
+                        self.explain_accessor_write(value);
                     }
                     _ => {}
                 }
@@ -5189,14 +5214,26 @@ impl TypeChecker {
                         (field_id, field_ty, false)
                     }
                     Some(true) if !contents_writable(&base_ty, base_writable) => {
+                        // The variable of a loop iterating shared (D9 of `collections`, D11 of
+                        // `operator-conventions`).
+                        let loop_help = binding_name(base)
+                            .and_then(|name| self.env.lookup(name))
+                            .and_then(|sym| self.shared_loop_variables.get(&sym.span))
+                            .map(|iterable| {
+                                format!(
+                                    "iterate mutably to change the elements: 'for ({} in &mut {})'",
+                                    base, iterable
+                                )
+                            });
                         self.errors.push(TypeError::ImmutabilityViolation {
                             message: format!(
                                 "cannot assign to field '{}' of a value that is not mutable (a 'val' binding or field, or a shared '&' borrow)",
                                 member
                             ),
                             span,
-                            help: None,
+                            help: loop_help,
                         });
+                        self.explain_accessor_write(field_id);
                         (field_id, field_ty, false)
                     }
                     Some(true) => (field_id, field_ty, true),
@@ -5250,14 +5287,40 @@ impl TypeChecker {
                     }
                     return (node, element_ty, writable);
                 }
+                // An element through a `get` returning a borrow (D9 of `operator-conventions`).
+                if matches!(self.builder.kind(node), ExpressionKind::Deref { .. }) {
+                    let element_ty = self.ty(node);
+                    if !writable {
+                        self.errors.push(TypeError::ImmutabilityViolation {
+                            message: format!(
+                                "cannot assign to '{}': the element is not a mutable place",
+                                target
+                            ),
+                            span,
+                            help: None,
+                        });
+                        self.explain_accessor_write(node);
+                    }
+                    return (node, element_ty, writable);
+                }
                 if self.ty(node) != Type::Error {
+                    let help = if matches!(self.builder.kind(node), ExpressionKind::Call(_))
+                        && !matches!(
+                            self.builder.kind(node),
+                            ExpressionKind::Call(Call {
+                                callee: Callee::Builtin(BuiltinFunction::StringCharacter),
+                                ..
+                            })
+                        ) {
+                        "the element is a value its 'get' operator computes: declare 'operator mut fun ... .set(...)' to assign it, or a 'get' returning a borrow".to_string()
+                    } else {
+                        "the characters of a string cannot be assigned: strings are immutable"
+                            .to_string()
+                    };
                     self.errors.push(TypeError::ImmutabilityViolation {
                         message: format!("cannot assign to '{}'", target),
                         span,
-                        help: Some(
-                            "the characters of a string cannot be assigned: strings are immutable"
-                                .to_string(),
-                        ),
+                        help: Some(help),
                     });
                 }
                 (self.wrap_error(node), Type::Error, false)
@@ -5277,6 +5340,11 @@ impl TypeChecker {
         } else {
             self.wrap_error(target_id)
         };
+        // A written element reached through a `get` is reached through the `mut` one (D9 of
+        // `operator-conventions`).
+        if is_mutable {
+            self.make_accessors_mutable(target_id);
+        }
         (target_id, target_ty, is_mutable)
     }
 
@@ -5285,6 +5353,17 @@ impl TypeChecker {
     fn check_assignment(&mut self, target: &Expr, value: &Expr, span: Span) -> StatementId {
         if let Some(field) = self.implicit_this_field(target) {
             return self.check_assignment(&field, value, span);
+        }
+        // `a[i] = v` calls `set` when the indexed type declares it (D10 of
+        // `operator-conventions`).
+        if let ExprKind::Index {
+            target: indexed,
+            indices,
+        } = &target.kind
+        {
+            if let Some(statement) = self.check_indexed_set(indexed, indices, None, value, span) {
+                return statement;
+            }
         }
         let (target_id, target_ty, is_mutable) = self.assignment_target(target, span);
         self.check_state_write(target_id, false, span);
@@ -5351,6 +5430,17 @@ impl TypeChecker {
     ) -> StatementId {
         if let Some(field) = self.implicit_this_field(target) {
             return self.check_compound_assignment(operator, &field, value, span);
+        }
+        if let ExprKind::Index {
+            target: indexed,
+            indices,
+        } = &target.kind
+        {
+            if let Some(statement) =
+                self.check_indexed_set(indexed, indices, Some(operator), value, span)
+            {
+                return statement;
+            }
         }
         let (target_id, target_ty, is_mutable) = self.assignment_target(target, span);
         self.check_state_write(target_id, true, span);
@@ -5790,13 +5880,21 @@ impl TypeChecker {
                 initializer,
             } => self.check_destructure(*is_var, entries, initializer, statement.span),
             StatementKind::Assign { target, value } => {
-                self.check_assignment(target, value, statement.span)
+                let checked = self.check_assignment(target, value, statement.span);
+                // A target inferred while looking for `set` is taken by then.
+                self.preinferred_places.clear();
+                checked
             }
             StatementKind::CompoundAssign {
                 operator,
                 target,
                 value,
-            } => self.check_compound_assignment(*operator, target, value, statement.span),
+            } => {
+                let checked =
+                    self.check_compound_assignment(*operator, target, value, statement.span);
+                self.preinferred_places.clear();
+                checked
+            }
             StatementKind::Expression(expr) => {
                 let value = self.infer_discarded_expr(expr);
                 self.builder
@@ -5851,7 +5949,12 @@ impl TypeChecker {
                 body,
             } => {
                 let (iterable_id, iteration, variable_ty) = self.check_iterable(iterable);
-                if iteration == (ForIteration::List { mutable: false }) {
+                let shared = match &iteration {
+                    ForIteration::List { mutable } => !mutable,
+                    ForIteration::Cursor(protocol) => !protocol.mutable,
+                    ForIteration::Range => false,
+                };
+                if shared {
                     self.shared_loop_variables
                         .insert(*variable_span, iterable.to_string());
                 }
@@ -5912,13 +6015,19 @@ impl TypeChecker {
                 ForIteration::Range,
                 Type::Int,
             ),
+            Type::Error => (self.wrap_error(peeled), ForIteration::Range, Type::Int),
             ty => {
+                // Any other type iterates through its cursor protocol (D11 of
+                // `operator-conventions`).
+                if let Some(iteration) = self.cursor_iteration(iterable, peeled, &iterable_ty) {
+                    return iteration;
+                }
                 self.with_origin(Origin::Value, |c| {
                     c.report_mismatch_with_help(
                         &range,
                         ty,
                         iterable.span,
-                        Some("a 'for' loop iterates a 'Range' or a 'List<T>'".to_string()),
+                        Some("a 'for' loop iterates a 'Range', a 'List<T>' or a type with the operators 'iterator', 'hasNext' and 'next'".to_string()),
                     )
                 });
                 (self.wrap_error(peeled), ForIteration::Range, Type::Int)
@@ -8092,12 +8201,16 @@ impl TypeChecker {
             layers,
             through_nullable,
         };
+        let reported = self.errors.len();
         let adjustment = self.pass_receiver(
             &receiver_site,
             extension.mode,
             extension.builtin.is_some(),
             member,
         );
+        if self.errors.len() > reported {
+            self.explain_accessor_write(receiver);
+        }
         let (joined, receiver_argument) =
             self.apply_receiver_adjustment(receiver, adjustment, &reached);
         // A `MutableState<T>` receiver of a member of `State<T>` converts (D3 of
@@ -10370,12 +10483,20 @@ impl TypeChecker {
     /// of the built-in `get` with a shared receiver borrow of the string (D5 of
     /// `runtime-strings-and-drops`), never writable. Any other target is `E4002`.
     fn infer_index(&mut self, target: &Expr, indices: &[Expr], span: Span) -> (ExpressionId, bool) {
-        let (target_id, target_writable) = if self.is_place(target) {
-            self.infer_place(target)
-        } else {
-            (self.with_consuming(true, |c| c.infer_expr(target)), true)
-        };
+        let (target_id, is_place, target_writable) = self.infer_index_target(target);
         let target_ty = self.ty(target_id);
+        // Any other type is indexed through its `get` operator (D9 of `operator-conventions`).
+        if !matches!(
+            peel_indirection(&target_ty),
+            Type::List(_) | Type::String | Type::Error
+        ) {
+            return self.infer_accessor_index(
+                target,
+                (target_id, is_place, target_writable),
+                indices,
+                span,
+            );
+        }
         let base = self.peel_indirection_nodes(target_id);
         let indexed = self.ty(base);
         // A list and a string take exactly one index (D9 of `operator-conventions`).

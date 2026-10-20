@@ -19,11 +19,11 @@ An operator use that calls an operator function MUST be a call of that function,
 - **THEN** the body's value is a binary `==` whose operands are the dereferences of the bindings `a` and `b`, read in place
 
 ### Requirement: Index Places Through Accessors
-An index of a type with index operators MUST be a call of the chosen `get` (shared or `mut`) with the target as its receiver and the indices in order. When `get` returns a borrow, the element MUST be the dereference of a temporary holding that call, a place; a borrow of the whole element in the accessor's mode MUST be the call itself. A write through `set` MUST be a call statement.
+An index of a type with index operators MUST be a call of the chosen `get` (shared or `mut`) with the target as its receiver and the indices in order. When `get` returns a borrow, the element MUST be the dereference of a temporary holding that call, a place, which a borrow of the element (whole or a part) reborrows. A write through `set` MUST be a call statement.
 
 #### Scenario: Index places in the tree
 - **WHEN** `struct Item { var count: Int }`, `struct Bag { var items: List<Item> }`, `operator fun Bag.get(index: Int): &Item = &items[index]` and `operator mut fun Bag.get(index: Int): &mut Item = &mut items[index]` are declared and `fun f(b: &mut Bag): Int { b[0].count = 1; val r: &Item = &b[1]; return b[2].count }` is checked
-- **THEN** the assignment's target is field 0 of the dereference of a temporary holding a call of the `mut` `get` with a mutable receiver borrow of the dereferenced `b`; `r`'s initializer is the call of the shared `get` itself; and the result copies field 0 of the dereference of a temporary holding a call of the shared `get`
+- **THEN** the assignment's target is field 0 of the dereference of a temporary holding a call of the `mut` `get` with a mutable receiver borrow of the dereferenced `b`; `r`'s initializer is a shared borrow of the dereference of a temporary holding a call of the shared `get`; and the result copies field 0 of the dereference of a temporary holding a call of the shared `get`
 
 ### Requirement: Compound Assignments Through Operator Functions
 A compound assignment through an operator function MUST be a compound assignment statement recording the function as well as its operator, with the target appearing once. One through `get` and `set` MUST be a block of statements: a temporary per index, then the call of `set` whose value argument is the operator applied to `get`'s element and the value.

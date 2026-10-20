@@ -15,8 +15,8 @@ use prism_ast::decl::{FunctionBody, FunctionDecl, ReceiverMode};
 use prism_ast::expr::{BinaryOp, CallArg, Expr, ExprKind, Literal, UnaryOp};
 use prism_ast::{Span, Visibility};
 use prism_typed_tree::{
-    Argument, BuiltinFunction, Call, Callee, ExpressionId, ExpressionKind, ParameterKind,
-    SpelledOperator, UnaryOperator,
+    Argument, BorrowOrigin, BuiltinFunction, Call, Callee, ExpressionId, ExpressionKind,
+    ParameterKind, SpelledOperator, UnaryOperator,
 };
 
 /// An operator convention: what a function of its name serves.
@@ -1377,5 +1377,754 @@ impl TypeChecker {
                 self.error_node(vec![node], span)
             }
         }
+    }
+}
+
+impl TypeChecker {
+    /// `target[indices]` on a type other than `List` and `String` (D9): a call of its `get`
+    /// operator with the indices as arguments, the shared one (else the `mut` one when it is the
+    /// only one). A `get` returning a borrow makes the element the place behind it,
+    /// `Deref(Temporary(call))`, writable when the indexed value is and a `mut` `get` agreeing
+    /// with the shared one exists, which a write then switches to
+    /// ([`Self::make_accessors_mutable`]); a `get` returning a value makes the element that
+    /// value. Without `get`, the target cannot be indexed (`E4002`).
+    pub(super) fn infer_accessor_index(
+        &mut self,
+        target: &Expr,
+        indexed: (ExpressionId, bool, bool),
+        indices: &[Expr],
+        span: Span,
+    ) -> (ExpressionId, bool) {
+        let (target_id, is_place, target_writable) = indexed;
+        let target_ty = self.ty(target_id);
+        let args: Vec<CallArg> = indices
+            .iter()
+            .map(|index| CallArg {
+                name: None,
+                value: index.clone(),
+                span: index.span,
+                is_trailing_lambda: false,
+            })
+            .collect();
+        let use_of = |name| OperatorUse {
+            operator: SpelledOperator::Index,
+            name,
+            target,
+            receiver: target_id,
+            is_place,
+            writable: target_writable,
+            args: &args,
+            span,
+            expected: None,
+        };
+        let mutable_name = mutable_accessor_name("get");
+        let (called, only_mutable) = match self.call_operator(use_of("get")) {
+            Err(OperatorMiss::Missing) => (self.call_operator(use_of(&mutable_name)), true),
+            other => (other, false),
+        };
+        let call = match called {
+            Ok(call) => call,
+            Err(miss) => {
+                let mut children = vec![self.peel_indirection_nodes(target_id)];
+                let mut index_types = Vec::new();
+                for index in indices {
+                    let node = self.infer_operand(index);
+                    index_types.push(self.ty(node).to_string());
+                    children.push(node);
+                }
+                let indexed = super::peel_indirection(&target_ty).clone();
+                if indexed != Type::Error {
+                    let parameters: Vec<String> = match &index_types[..] {
+                        [only] => vec![format!("index: {}", only)],
+                        many => many
+                            .iter()
+                            .enumerate()
+                            .map(|(i, ty)| format!("index{}: {}", i + 1, ty))
+                            .collect(),
+                    };
+                    self.report_missing_operator(
+                        miss,
+                        format!("'{}' cannot be indexed", indexed),
+                        &indexed,
+                        "get",
+                        format!(
+                            "operator fun {}.get({}): &E', returning a borrow of the element 'E' or the element itself, to index it",
+                            indexed,
+                            parameters.join(", ")
+                        )
+                        .replacen("&E'", "&E", 1),
+                        format!("{}?.get(...)", target),
+                        span,
+                    );
+                }
+                return (self.error_node(children, span), false);
+            }
+        };
+        let Type::Reference { inner, .. } = self.ty(call) else {
+            // A `get` returning a value: the element is that value, a temporary.
+            return (call, false);
+        };
+        let element = inner.as_ref().clone();
+        let temporary = self.as_place(call);
+        let place = self.deref(temporary);
+        if only_mutable {
+            // The receiver is a mutable borrow already, checked as one.
+            return (place, true);
+        }
+        let (mutable, needed) = self.mutable_accessor(call, &target_ty, &element);
+        let writable = mutable.is_some() && super::contents_writable(&target_ty, target_writable);
+        self.builder.accessor_places.insert(
+            place,
+            crate::builder::AccessorPlace {
+                temporary,
+                call,
+                mutable,
+                needed,
+            },
+        );
+        (place, writable)
+    }
+
+    /// The `mut` `get` the shared accessor call `call` on a value of type `target_ty` switches
+    /// to, if the indexed type has one taking the same parameters and returning `&mut element`;
+    /// and the declaration a write needs otherwise.
+    fn mutable_accessor(
+        &mut self,
+        call: ExpressionId,
+        target_ty: &Type,
+        element: &Type,
+    ) -> (Option<crate::builder::MutableAccessor>, String) {
+        let ExpressionKind::Call(shared) = self.builder.kind(call).clone() else {
+            return (None, String::new());
+        };
+        let declared: Vec<String> = shared
+            .parameters
+            .iter()
+            .skip(1)
+            .map(|(name, ty)| format!("{}: {}", name.clone().unwrap_or_default(), ty))
+            .collect();
+        let mut layers = Vec::new();
+        let (lookup, reached) = self.find_extension_through_indirection(
+            target_ty.clone(),
+            &mutable_accessor_name("get"),
+            &mut layers,
+        );
+        let needed = format!(
+            "operator mut fun {}.get({}): &mut {}",
+            reached,
+            declared.join(", "),
+            element
+        );
+        let ExtensionLookup::Found { extension, .. } = lookup else {
+            return (None, needed);
+        };
+        if !extension.is_operator {
+            return (None, needed);
+        }
+        let SymbolKind::Function {
+            fn_type: Type::Fn { params, ret, .. },
+            param_names,
+            type_parameters,
+            ..
+        } = &extension.symbol.kind
+        else {
+            return (None, needed);
+        };
+        let type_arguments = if type_parameters.is_empty() {
+            Vec::new()
+        } else {
+            let mut unknowns = crate::inference::Unknowns::new(type_parameters.len());
+            unknowns.match_exact(&extension.receiver, &reached);
+            unknowns.partial()
+        };
+        let result = ret.substitute(&type_arguments);
+        let agrees = matches!(&result, Type::Reference { mutable: true, inner } if inner.as_ref() == element)
+            && params.len() + 1 == shared.parameters.len()
+            && params.iter().zip(shared.parameters.iter().skip(1)).all(
+                |(mutable, (_, declared))| {
+                    mutable.substitute(&type_arguments)
+                        == declared.substitute(&shared.type_arguments)
+                },
+            );
+        if !agrees {
+            return (None, needed);
+        }
+        let mut parameters = vec![(
+            Some(super::THIS.to_string()),
+            Type::Reference {
+                mutable: true,
+                inner: Box::new(extension.receiver.clone()),
+            },
+        )];
+        parameters.extend(super::parameter_list(param_names, params));
+        (
+            Some(crate::builder::MutableAccessor {
+                path: extension.path("get"),
+                parameters,
+                type_arguments,
+                result,
+            }),
+            needed,
+        )
+    }
+
+    /// Switches every accessor place the place `id` is reached through to its `mut` `get`
+    /// (D9), for a write, a mutable borrow or a `mut fun` receiver: the call's callee, its
+    /// receiver borrow (now mutable) and the types of the call and its temporary. The
+    /// indexed value's own place is made mutable in turn.
+    pub(super) fn make_accessors_mutable(&mut self, mut id: ExpressionId) {
+        loop {
+            match self.builder.kind(id).clone() {
+                ExpressionKind::Field { base, .. } | ExpressionKind::Index { base, .. } => {
+                    id = base
+                }
+                ExpressionKind::NonNullPayload { nullable } => id = nullable,
+                ExpressionKind::Deref { .. } => {
+                    let Some(place) = self.builder.accessor_places.remove(&id) else {
+                        return;
+                    };
+                    let Some(mutable) = place.mutable else {
+                        return;
+                    };
+                    let ExpressionKind::Call(mut call) = self.builder.kind(place.call).clone()
+                    else {
+                        return;
+                    };
+                    let Some(Argument::Written(receiver)) = call.arguments.first().cloned() else {
+                        return;
+                    };
+                    call.callee = Callee::Function(mutable.path);
+                    call.parameters = mutable.parameters;
+                    call.type_arguments = mutable.type_arguments;
+                    self.builder.expression_mut(place.call).kind = ExpressionKind::Call(call);
+                    self.builder.expression_mut(place.call).ty = mutable.result.clone();
+                    self.builder.expression_mut(place.temporary).ty = mutable.result;
+                    let ExpressionKind::Borrow {
+                        origin,
+                        place: borrowed,
+                        ..
+                    } = self.builder.kind(receiver).clone()
+                    else {
+                        return;
+                    };
+                    let span = self.builder.span_of(receiver);
+                    self.reject_state_mutation(borrowed, "a 'mut fun' call", span);
+                    let referent = self.ty(borrowed);
+                    let expression = self.builder.expression_mut(receiver);
+                    expression.kind = ExpressionKind::Borrow {
+                        mutable: true,
+                        origin,
+                        place: borrowed,
+                    };
+                    expression.ty = Type::Reference {
+                        mutable: true,
+                        inner: Box::new(referent),
+                    };
+                    id = borrowed;
+                }
+                _ => return,
+            }
+        }
+    }
+
+    /// The help of a write to the place `id` that is not writable because an accessor place it
+    /// is reached through has no `mut` `get`: the declaration to add.
+    pub(super) fn accessor_write_help(&self, mut id: ExpressionId) -> Option<String> {
+        loop {
+            match self.builder.kind(id) {
+                ExpressionKind::Field { base, .. } | ExpressionKind::Index { base, .. } => {
+                    id = *base
+                }
+                ExpressionKind::NonNullPayload { nullable } => id = *nullable,
+                ExpressionKind::Deref { .. } => {
+                    let place = self.builder.accessor_places.get(&id)?;
+                    if place.mutable.is_none() {
+                        return Some(format!("declare '{}' to change the element", place.needed));
+                    }
+                    let ExpressionKind::Call(call) = self.builder.kind(place.call) else {
+                        return None;
+                    };
+                    let Some(Argument::Written(receiver)) = call.arguments.first() else {
+                        return None;
+                    };
+                    let ExpressionKind::Borrow { place, .. } = self.builder.kind(*receiver) else {
+                        return None;
+                    };
+                    id = *place;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Adds the help of [`Self::accessor_write_help`] to the last error when it is an
+    /// `E4003` without help, about writing the place `id`.
+    pub(super) fn explain_accessor_write(&mut self, id: ExpressionId) {
+        let Some(fix) = self.accessor_write_help(id) else {
+            return;
+        };
+        if let Some(TypeError::ImmutabilityViolation { help, .. }) = self.errors.last_mut() {
+            *help = Some(fix);
+        }
+    }
+}
+
+impl TypeChecker {
+    /// Infers the target of an index expression as `infer_index` does: a place read in place,
+    /// or a consumed temporary; with whether it is a place and may be written.
+    pub(super) fn infer_index_target(&mut self, target: &Expr) -> (ExpressionId, bool, bool) {
+        if let Some(inferred) = self
+            .preinferred_places
+            .remove(&(target as *const Expr as usize))
+        {
+            return inferred;
+        }
+        let is_place = self.is_place(target);
+        let (id, writable) = if is_place {
+            self.infer_place(target)
+        } else {
+            (self.with_consuming(true, |c| c.infer_expr(target)), true)
+        };
+        (id, is_place, writable)
+    }
+
+    /// `indexed[indices] = value`, or `indexed[indices] op= value` with `compound`, through the
+    /// indexed type's `set` operator when it has one (D10): a call statement of `set` with the
+    /// indices and the value, or for a compound assignment a block evaluating each index once
+    /// into a local, then calling `set` with `get`'s element combined with the value. Returns
+    /// `None`, leaving the target inferred for the assignment's own checks, when the type has
+    /// no `set`.
+    pub(super) fn check_indexed_set(
+        &mut self,
+        indexed: &Expr,
+        indices: &[Expr],
+        compound: Option<BinaryOp>,
+        value: &Expr,
+        span: Span,
+    ) -> Option<prism_typed_tree::StatementId> {
+        let (receiver, is_place, writable) = self.infer_index_target(indexed);
+        let receiver_ty = self.ty(receiver);
+        let has_set = !matches!(
+            super::peel_indirection(&receiver_ty),
+            Type::List(_) | Type::String | Type::Error
+        ) && {
+            let mut layers = Vec::new();
+            !matches!(
+                self.find_extension_through_indirection(receiver_ty.clone(), "set", &mut layers)
+                    .0,
+                ExtensionLookup::None | ExtensionLookup::MissingContext(_)
+            )
+        };
+        if !has_set {
+            self.preinferred_places.insert(
+                indexed as *const Expr as usize,
+                (receiver, is_place, writable),
+            );
+            return None;
+        }
+        let as_argument = |value: Expr| CallArg {
+            name: None,
+            span: value.span,
+            value,
+            is_trailing_lambda: false,
+        };
+        let Some(operator) = compound else {
+            let mut args: Vec<CallArg> = indices.iter().cloned().map(as_argument).collect();
+            args.push(as_argument(value.clone()));
+            let call = self.call_set(indexed, (receiver, is_place, writable), &args, span);
+            let kind = prism_typed_tree::StatementKind::Expression { value: call };
+            return Some(self.builder.add_statement(kind, span));
+        };
+        // The indexed value is read twice, by `get` and `set`: only a variable or a field path
+        // reads the same value twice.
+        if !is_variable_path(indexed) {
+            self.errors.push(TypeError::ImmutabilityViolation {
+                message: format!(
+                    "cannot assign through '{}' with '{}=': the value indexed is computed, not a variable or a field",
+                    indexed,
+                    operator.as_str()
+                ),
+                span,
+                help: Some("hold it in a 'var' first".to_string()),
+            });
+            let mut children = vec![receiver];
+            for index in indices {
+                children.push(self.infer_operand(index));
+            }
+            children.push(self.infer_operand(value));
+            let error = self.error_node(children, span);
+            let kind = prism_typed_tree::StatementKind::Expression { value: error };
+            return Some(self.builder.add_statement(kind, span));
+        }
+        // Each index is evaluated once, into a local passed to `get` and `set`.
+        self.env.enter_scope();
+        let mut statements = Vec::new();
+        let mut names = Vec::new();
+        for index in indices {
+            self.synthesized_names += 1;
+            let name = format!("index#{}", self.synthesized_names);
+            let local = prism_ast::statement::Statement {
+                kind: prism_ast::statement::StatementKind::Local {
+                    is_var: false,
+                    name: name.clone(),
+                    ty: None,
+                    initializer: index.clone(),
+                },
+                span: index.span,
+            };
+            statements.push(self.check_statement(&local));
+            names.push(Expr::new(ExprKind::Ident(name), index.span));
+        }
+        // An index passed by value to both functions must be `Copy`.
+        for (index, name) in indices.iter().zip(&names) {
+            let ExprKind::Ident(local) = &name.kind else {
+                continue;
+            };
+            let ty = match self.env.lookup(local).map(|symbol| &symbol.kind) {
+                Some(SymbolKind::Variable { ty, .. }) => ty.clone(),
+                _ => continue,
+            };
+            if ty != Type::Error && !self.is_copy(&ty) && !self.set_index_is_borrowed(&receiver_ty)
+            {
+                self.errors.push(TypeError::CannotMoveOut {
+                    source: format!(
+                        "the index '{}', which '{}=' passes to both 'get' and 'set'",
+                        index,
+                        operator.as_str()
+                    ),
+                    ty,
+                    borrow: None,
+                    clone: None,
+                    destructure: None,
+                    unbox: None,
+                    remove: None,
+                    captured: false,
+                    span: index.span,
+                });
+            }
+        }
+        let element = Expr::new(
+            ExprKind::Index {
+                target: Box::new(indexed.clone()),
+                indices: names.clone(),
+            },
+            span,
+        );
+        let combined = Expr::new(
+            ExprKind::Binary {
+                op: operator,
+                left: Box::new(element),
+                right: Box::new(value.clone()),
+            },
+            span,
+        );
+        let mut args: Vec<CallArg> = names.into_iter().map(as_argument).collect();
+        args.push(as_argument(combined));
+        let call = self.call_set(indexed, (receiver, is_place, writable), &args, span);
+        self.env.exit_scope();
+        let kind = ExpressionKind::Block {
+            statements,
+            tail: Some(call),
+            close_brace: span,
+        };
+        let ty = self.ty(call);
+        let block = self.add(kind, ty, span);
+        let kind = prism_typed_tree::StatementKind::Expression { value: block };
+        Some(self.builder.add_statement(kind, span))
+    }
+
+    /// Whether every index parameter of the `set` of `receiver_ty` is a borrow, so an index
+    /// local is lent rather than moved.
+    fn set_index_is_borrowed(&self, receiver_ty: &Type) -> bool {
+        let mut layers = Vec::new();
+        let ExtensionLookup::Found { extension, .. } = self
+            .find_extension_through_indirection(receiver_ty.clone(), "set", &mut layers)
+            .0
+        else {
+            return false;
+        };
+        let SymbolKind::Function {
+            fn_type: Type::Fn { params, .. },
+            ..
+        } = &extension.symbol.kind
+        else {
+            return false;
+        };
+        params
+            .split_last()
+            .is_some_and(|(_, indices)| indices.iter().all(|p| matches!(p, Type::Reference { .. })))
+    }
+
+    /// A call of the `set` operator of the indexed value `receiver` with `args`, marked as an
+    /// indexed assignment; a missing or unmarked `set` is `E4002`.
+    fn call_set(
+        &mut self,
+        indexed: &Expr,
+        receiver: (ExpressionId, bool, bool),
+        args: &[CallArg],
+        span: Span,
+    ) -> ExpressionId {
+        let (node, is_place, writable) = receiver;
+        let called = self.call_operator(OperatorUse {
+            operator: SpelledOperator::IndexAssign,
+            name: "set",
+            target: indexed,
+            receiver: node,
+            is_place,
+            writable,
+            args,
+            span,
+            expected: None,
+        });
+        match called {
+            Ok(call) => call,
+            Err(miss) => {
+                let ty = super::peel_indirection(&self.ty(node)).clone();
+                self.report_missing_operator(
+                    miss,
+                    format!("'{}' cannot be assigned by index", ty),
+                    &ty,
+                    "set",
+                    format!("operator mut fun {}.set(...)", ty),
+                    format!("{}?.set(...)", indexed),
+                    span,
+                );
+                self.give_up_call(node, args, span)
+            }
+        }
+    }
+}
+
+/// Whether `expr` is a variable or a field path over one, which reads the same value each time.
+fn is_variable_path(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Ident(_) | ExprKind::This => true,
+        ExprKind::MemberAccess {
+            target,
+            is_safe_nav: false,
+            ..
+        } => is_variable_path(target),
+        _ => false,
+    }
+}
+
+impl TypeChecker {
+    /// The `operator` extension `name` (a table name) of `ty` or of what it reaches through its
+    /// `&`, `&mut` and `Heap<T>` layers, with its own inferred type refreshed, and the type it
+    /// was found on; or why there is none.
+    fn operator_extension(
+        &mut self,
+        ty: &Type,
+        name: &str,
+        span: Span,
+    ) -> Result<(Box<super::Extension>, Type), OperatorMiss> {
+        let mut layers = Vec::new();
+        let (lookup, reached) =
+            self.find_extension_through_indirection(ty.clone(), name, &mut layers);
+        match lookup {
+            ExtensionLookup::Found { extension, .. } if !extension.is_operator => {
+                Err(OperatorMiss::Unmarked)
+            }
+            ExtensionLookup::Found { extension, own } => {
+                let extension = if own {
+                    let key = super::InferenceKey::Extension {
+                        receiver: ReceiverKey::of(&reached),
+                        name: name.to_string(),
+                        context: extension.context.clone(),
+                    };
+                    self.ensure_key_inferred(&key, span);
+                    match self.find_extension(&reached, name) {
+                        ExtensionLookup::Found { extension, .. } => extension,
+                        _ => extension,
+                    }
+                } else {
+                    extension
+                };
+                Ok((extension, reached))
+            }
+            _ => Err(OperatorMiss::Missing),
+        }
+    }
+
+    /// The protocol call of the extension `extension` found on `reached`: its path, parameters
+    /// (`this` borrowed by its mode first), type arguments solved from the receiver, and its
+    /// result.
+    fn protocol_call(
+        &self,
+        extension: &super::Extension,
+        name: &str,
+        reached: &Type,
+    ) -> Option<(prism_typed_tree::ProtocolCall, Type)> {
+        let SymbolKind::Function {
+            fn_type: Type::Fn { params, ret, .. },
+            param_names,
+            type_parameters,
+            ..
+        } = &extension.symbol.kind
+        else {
+            return None;
+        };
+        let type_arguments = if type_parameters.is_empty() {
+            Vec::new()
+        } else {
+            let mut unknowns = crate::inference::Unknowns::new(type_parameters.len());
+            unknowns.match_exact(&extension.receiver, reached);
+            unknowns.partial()
+        };
+        let this_ty = Type::Reference {
+            mutable: extension.mode == ReceiverMode::Mutable,
+            inner: Box::new(extension.receiver.clone()),
+        };
+        let mut parameters = vec![(Some(super::THIS.to_string()), this_ty)];
+        parameters.extend(super::parameter_list(param_names, params));
+        let result = ret.substitute(&type_arguments);
+        Some((
+            prism_typed_tree::ProtocolCall {
+                path: extension.path(name),
+                parameters,
+                type_arguments,
+            },
+            result,
+        ))
+    }
+
+    /// The iteration of a `for` loop over `peeled`, an iterable of a type other than `Range`
+    /// and `List` read in place (`iterable_ty` before its layers were peeled), through the
+    /// cursor protocol (D11): its `iterator`, `hasNext` and `next` operators (the `mut` `next`
+    /// for a `&mut` iterable), whose cursor types must agree. The iterable is borrowed for the
+    /// loop. A missing or mismatched part is `E4002`, a `&mut` iterable without a `mut` `next`
+    /// `E4003`. Returns `None` when the type has no `iterator`, which the caller reports.
+    pub(super) fn cursor_iteration(
+        &mut self,
+        iterable: &Expr,
+        peeled: ExpressionId,
+        iterable_ty: &Type,
+    ) -> Option<(ExpressionId, prism_typed_tree::ForIteration, Type)> {
+        let collection = self.ty(peeled);
+        let span = iterable.span;
+        let (iterator, reached) = match self.operator_extension(&collection, "iterator", span) {
+            Ok(found) => found,
+            Err(OperatorMiss::Unmarked) => {
+                self.report_missing_operator(
+                    OperatorMiss::Unmarked,
+                    format!("'{}' cannot be iterated by a 'for' loop", collection),
+                    &collection,
+                    "iterator",
+                    String::new(),
+                    String::new(),
+                    span,
+                );
+                return Some((
+                    self.wrap_error(peeled),
+                    prism_typed_tree::ForIteration::Range,
+                    Type::Error,
+                ));
+            }
+            Err(_) => return None,
+        };
+        let mutable = matches!(iterable_ty, Type::Reference { mutable: true, .. })
+            && super::contents_writable(iterable_ty, false);
+        let (iterator_call, cursor) = self.protocol_call(&iterator, "iterator", &reached)?;
+        let cursor_ref = |mutable: bool| Type::Reference {
+            mutable,
+            inner: Box::new(cursor.clone()),
+        };
+        let has_next = self.operator_extension(&collection, "hasNext", span).ok();
+        let next_name = if mutable {
+            mutable_accessor_name("next")
+        } else {
+            "next".to_string()
+        };
+        let next = self.operator_extension(&collection, &next_name, span).ok();
+        let has_next = has_next
+            .and_then(|(extension, reached)| self.protocol_call(&extension, "hasNext", &reached));
+        let next =
+            next.and_then(|(extension, reached)| self.protocol_call(&extension, "next", &reached));
+        let next_text = |element: &Option<Type>| {
+            format!(
+                "operator {}fun {}.next(cursor: &mut {}){}",
+                if mutable { "mut " } else { "" },
+                collection,
+                cursor,
+                element
+                    .as_ref()
+                    .map_or(String::new(), |element| format!(": {}", element))
+            )
+        };
+        let has_next_agrees = has_next
+            .as_ref()
+            .is_some_and(|(call, _)| call.parameter_type(1) == Some(cursor_ref(false)));
+        let next_agrees = next
+            .as_ref()
+            .is_some_and(|(call, _)| call.parameter_type(1) == Some(cursor_ref(true)));
+        if mutable && next.is_none() {
+            self.errors.push(TypeError::ImmutabilityViolation {
+                message: format!(
+                    "cannot iterate '{}' mutably: '{}' has no mutable 'next' operator",
+                    iterable, collection
+                ),
+                span,
+                help: Some(format!(
+                    "declare '{}' to iterate it with 'for (x in &mut ...)'",
+                    next_text(&Some(Type::Reference {
+                        mutable: true,
+                        inner: Box::new(Type::Opaque("E".to_string())),
+                    }))
+                )),
+            });
+            return Some((
+                self.wrap_error(peeled),
+                prism_typed_tree::ForIteration::Range,
+                Type::Error,
+            ));
+        }
+        if !has_next_agrees || !next_agrees {
+            let mut needs = Vec::new();
+            if !has_next_agrees {
+                needs.push(format!(
+                    "'operator fun {}.hasNext(cursor: &{}): Bool'",
+                    collection, cursor
+                ));
+            }
+            if !next_agrees {
+                needs.push(format!("'{}'", next_text(&None)));
+            }
+            self.errors.push(TypeError::MissingOperatorFunction {
+                message: format!(
+                    "iterating a '{}' needs {}, for the cursor '{}' its 'iterator' returns",
+                    collection,
+                    needs.join(" and "),
+                    cursor
+                ),
+                receiver: collection.clone(),
+                function: if has_next_agrees { "next" } else { "hasNext" }.to_string(),
+                help: Some(
+                    "a 'for' loop calls 'iterator()' once, then 'hasNext(&cursor)' before each iteration and 'next(&mut cursor)' for each element".to_string(),
+                ),
+                span,
+                import_suggestions: Vec::new(),
+            });
+            return Some((
+                self.wrap_error(peeled),
+                prism_typed_tree::ForIteration::Range,
+                Type::Error,
+            ));
+        }
+        let (has_next_call, _) = has_next?;
+        let (next_call, element) = next?;
+        let borrow = self.borrow(mutable, BorrowOrigin::Iteration, peeled);
+        let protocol = prism_typed_tree::CursorProtocol {
+            iterator: iterator_call,
+            has_next: has_next_call,
+            next: next_call,
+            cursor,
+            element: element.clone(),
+            mutable,
+        };
+        Some((
+            borrow,
+            prism_typed_tree::ForIteration::Cursor(Box::new(protocol)),
+            element,
+        ))
     }
 }

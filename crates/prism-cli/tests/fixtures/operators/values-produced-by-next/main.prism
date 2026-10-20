@@ -1,0 +1,16 @@
+// expect: ok
+import /prism/core
+
+struct Countdown : Copy { val from: Int }
+
+operator fun Countdown.iterator(): Int = from
+operator fun Countdown.hasNext(cursor: &Int): Bool = cursor > 0
+operator fun Countdown.next(cursor: &mut Int): String {
+    val n: Int = cursor
+    *cursor = n - 1
+    return n.toString()
+}
+
+fun f() {
+    for (s in Countdown(3)) println(s)
+}

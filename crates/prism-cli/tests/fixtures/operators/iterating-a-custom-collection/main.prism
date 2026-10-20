@@ -1,0 +1,20 @@
+// expect: ok
+import /prism/core
+
+struct Item { val name: String }
+struct Bag { var items: List<Item> }
+
+operator fun Bag.iterator(): Int = 0
+operator fun Bag.hasNext(cursor: &Int): Bool = cursor < items.size
+operator fun Bag.next(cursor: &mut Int): &Item {
+    val i: Int = cursor
+    *cursor = i + 1
+    return &items[i]
+}
+
+fun f(b: &Bag) {
+    for (item in b) {
+        if (item.name == "stop") break
+        println(item.name)
+    }
+}

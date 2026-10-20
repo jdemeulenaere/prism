@@ -475,6 +475,43 @@ impl Validator<'_> {
                             _ => {}
                         }
                     }
+                    // D11 of `operator-conventions`: a borrow by the loop, in its mode, and a
+                    // variable of `next`'s result type.
+                    ForIteration::Cursor(protocol) => {
+                        let borrows = matches!(
+                            self.kind(*iterable),
+                            Some(ExpressionKind::Borrow {
+                                mutable,
+                                origin: BorrowOrigin::Iteration,
+                                ..
+                            }) if *mutable == protocol.mutable
+                        );
+                        if self.error_free && !borrows {
+                            self.report(format!(
+                                "cursor loop {} does not iterate a borrow of the iterable by the loop",
+                                id.0
+                            ));
+                        }
+                        if self.error_free && variable_ty != Some(protocol.element.clone()) {
+                            self.report(format!(
+                                "cursor loop {} binds a variable that is not a {}",
+                                id.0, protocol.element
+                            ));
+                        }
+                        let cursor = |mutable: bool| Type::Reference {
+                            mutable,
+                            inner: Box::new(protocol.cursor.clone()),
+                        };
+                        if self.error_free
+                            && (protocol.has_next.parameter_type(1) != Some(cursor(false))
+                                || protocol.next.parameter_type(1) != Some(cursor(true)))
+                        {
+                            self.report(format!(
+                                "cursor loop {} passes its cursor to a protocol function of another type",
+                                id.0
+                            ));
+                        }
+                    }
                 }
                 self.loops.push(id);
                 self.expression(*body);

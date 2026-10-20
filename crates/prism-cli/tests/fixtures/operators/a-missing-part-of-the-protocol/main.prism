@@ -1,0 +1,8 @@
+// expect: E4002
+struct Bag { var items: List<Int> }
+
+operator fun Bag.iterator(): Int = 0
+
+fun f(b: &Bag) {
+    for (x in b) {}
+}

@@ -1,0 +1,17 @@
+// expect: E5003
+import /prism/collections
+import /prism/core
+
+struct Bag { var items: List<String> }
+
+operator fun Bag.get(index: Int): &String = &items[index]
+mut fun Bag.add(s: String) {
+    items.add(s)
+}
+
+fun f() {
+    var b = Bag(listOf("a"))
+    val s = &b[0]
+    b.add("c")
+    println(s)
+}

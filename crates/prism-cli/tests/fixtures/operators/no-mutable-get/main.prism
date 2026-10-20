@@ -1,0 +1,9 @@
+// expect: E4003
+struct Item { var count: Int }
+struct Bag { var items: List<Item> }
+
+operator fun Bag.get(index: Int): &Item = &items[index]
+
+fun f(b: &mut Bag) {
+    b[0].count = 1
+}

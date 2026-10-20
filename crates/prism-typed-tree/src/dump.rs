@@ -732,6 +732,24 @@ impl Printer<'_> {
                     ForIteration::List { mutable: true } => {
                         self.expression(*iterable, depth + 1, "mutable list")
                     }
+                    ForIteration::Cursor(protocol) => {
+                        let label = if protocol.mutable {
+                            "mutable cursor"
+                        } else {
+                            "cursor"
+                        };
+                        let text = format!(
+                            "{} {}: iterator {}, hasNext {}, next {}, element {}",
+                            label,
+                            protocol.cursor,
+                            protocol.iterator.path,
+                            protocol.has_next.path,
+                            protocol.next.path,
+                            protocol.element
+                        );
+                        self.line(depth + 1, "", &text);
+                        self.expression(*iterable, depth + 1, "iterable")
+                    }
                 }
                 self.expression(*body, depth + 1, "body");
             }

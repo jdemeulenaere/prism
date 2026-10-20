@@ -38,6 +38,34 @@ pub(crate) struct BodyBuilder {
     /// The span of each `s.value` that is a place, so that a move out of it is reported as one
     /// (`E4017`).
     pub(crate) state_value_spans: HashSet<Span>,
+    /// The element places reached through a shared `get` returning a borrow, by their
+    /// dereference node, which a write switches to the `mut` `get` (D9 of
+    /// `operator-conventions`).
+    pub(crate) accessor_places: HashMap<ExpressionId, AccessorPlace>,
+}
+
+/// An element place `a[i]` reached through a shared `get` operator returning a borrow:
+/// `Deref(Temporary(call))` (D9 of `operator-conventions`).
+#[derive(Debug, Clone)]
+pub(crate) struct AccessorPlace {
+    pub(crate) temporary: ExpressionId,
+    pub(crate) call: ExpressionId,
+    /// The `mut` `get` a write calls instead, if the indexed type has one agreeing with the
+    /// shared one.
+    pub(crate) mutable: Option<MutableAccessor>,
+    /// The declaration a write needs when there is none (`operator mut fun Bag.get(index:
+    /// Int): &mut Item`).
+    pub(crate) needed: String,
+}
+
+/// The `mut` `get` an accessor place switches to: its path, parameters as a call records
+/// them (`this` a `&mut` borrow first), type arguments and result.
+#[derive(Debug, Clone)]
+pub(crate) struct MutableAccessor {
+    pub(crate) path: DeclarationPath,
+    pub(crate) parameters: Vec<(Option<String>, Type)>,
+    pub(crate) type_arguments: Vec<Type>,
+    pub(crate) result: Type,
 }
 
 impl BodyBuilder {
@@ -49,6 +77,7 @@ impl BodyBuilder {
             opened_closures: 0,
             reported_state_values: HashSet::new(),
             state_value_spans: HashSet::new(),
+            accessor_places: HashMap::new(),
         }
     }
 

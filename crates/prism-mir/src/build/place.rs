@@ -749,6 +749,9 @@ impl Builder<'_> {
                     ForIteration::List { mutable } => {
                         self.lower_list_for(id, *variable, *iterable, *mutable, *body, span)
                     }
+                    ForIteration::Cursor(protocol) => {
+                        self.lower_cursor_for(id, *variable, *iterable, protocol, *body, span)
+                    }
                 }
                 self.pop_scope();
             }

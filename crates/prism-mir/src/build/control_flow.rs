@@ -15,8 +15,8 @@ use crate::types::RANGE_END_INCLUSIVE;
 use prism_ast::Span;
 use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{
-    BinaryOperator, BuiltinFunction, ExpressionId, ExpressionKind, LocalId as TreeLocalId,
-    LogicalOperator, Pattern, StatementId, Type, WhenBranch,
+    BinaryOperator, BuiltinFunction, CursorProtocol, ExpressionId, ExpressionKind,
+    LocalId as TreeLocalId, LogicalOperator, Pattern, ProtocolCall, StatementId, Type, WhenBranch,
 };
 
 impl Builder<'_> {
@@ -1300,6 +1300,167 @@ impl Builder<'_> {
             self.goto(iteration, span);
         }
         self.close_loop();
+    }
+
+    /// `for (x in y)` over a type with the cursor protocol (D11 of `operator-conventions`):
+    /// the iterable's borrow is held for the whole loop; the cursor is `iterator()`'s result;
+    /// the header, `continue`'s target, calls `hasNext` with a shared reborrow and `&cursor`
+    /// and leaves the loop when it is `false`; each iteration binds the variable to `next`'s
+    /// result, called with a reborrow in the loop's mode and `&mut cursor`. The cursor is a
+    /// temporary of the loop's statement, dropped when the loop ends.
+    pub(super) fn lower_cursor_for(
+        &mut self,
+        id: StatementId,
+        variable: TreeLocalId,
+        iterable: ExpressionId,
+        protocol: &CursorProtocol,
+        body: ExpressionId,
+        span: Span,
+    ) {
+        let borrow_ty = self.expression(iterable).ty.clone();
+        let collection = match &borrow_ty {
+            Type::Reference { inner, .. } => inner.as_ref().clone(),
+            other => panic!("internal error: a cursor loop over a {}", other),
+        };
+        let borrowed = self.new_temporary(borrow_ty, span);
+        self.expression_into(Some(&Place::local(borrowed)), iterable);
+        if self.current.is_none() {
+            return;
+        }
+        let cursor = self.new_temporary(protocol.cursor.clone(), span);
+        let receiver = self.reborrow(borrowed, &collection, false, span);
+        self.emit_protocol_call(
+            &protocol.iterator,
+            vec![receiver],
+            Place::local(cursor),
+            span,
+        );
+        if self.current.is_none() {
+            return;
+        }
+        let header = self.new_block();
+        self.goto(header, span);
+        self.current = Some(header);
+        let depth = self.scope_depth();
+        self.loops.push(LoopContext {
+            statement: id,
+            break_depth: depth,
+            continue_depth: depth,
+            exit: None,
+            next: Some(header),
+            body_scope: None,
+            continues: Vec::new(),
+        });
+        let index = self.loops.len() - 1;
+        // The header's borrows and result live in their own scope, ended before the branch.
+        let tested = self.branch_on(span, |builder, result| {
+            let receiver = builder.reborrow(borrowed, &collection, false, span);
+            let cursor_ref = builder.borrow_cursor(cursor, &protocol.cursor, false, span);
+            builder.emit_protocol_call(
+                &protocol.has_next,
+                vec![receiver, cursor_ref],
+                result.clone(),
+                span,
+            );
+        });
+        let Some((iteration, finished)) = tested else {
+            self.close_loop();
+            return;
+        };
+        self.current = Some(finished);
+        let exit = self.loop_exit(index);
+        self.goto(exit, span);
+        self.current = Some(iteration);
+        let body_exit = self.block_exit_span(body);
+        self.push_block_scope(body_exit);
+        let variable_local = self.declare_binding(variable, span);
+        let receiver = self.reborrow(borrowed, &collection, protocol.mutable, span);
+        let cursor_ref = self.borrow_cursor(cursor, &protocol.cursor, true, span);
+        self.emit_protocol_call(
+            &protocol.next,
+            vec![receiver, cursor_ref],
+            Place::local(variable_local),
+            span,
+        );
+        self.expression_into(None, body);
+        self.pop_scope();
+        if self.current.is_some() {
+            self.goto(header, span);
+        }
+        self.close_loop();
+    }
+
+    /// A reborrow of the referent of the borrow held in `borrowed`, of type `referent`, shared
+    /// or mutable, in a temporary moved into a call.
+    fn reborrow(
+        &mut self,
+        borrowed: LocalId,
+        referent: &Type,
+        mutable: bool,
+        span: Span,
+    ) -> Operand {
+        let ty = Type::Reference {
+            mutable,
+            inner: Box::new(referent.clone()),
+        };
+        let local = self.new_temporary(ty, span);
+        self.assign(
+            Place::local(local),
+            Rvalue::Borrow {
+                mutable,
+                origin: BorrowOrigin::Receiver,
+                place: Self::deref(Place::local(borrowed)),
+            },
+            span,
+        );
+        Operand::Move(Place::local(local), span)
+    }
+
+    /// A borrow of the cursor `cursor` of type `ty`, shared or mutable, in a temporary moved
+    /// into a call.
+    fn borrow_cursor(&mut self, cursor: LocalId, ty: &Type, mutable: bool, span: Span) -> Operand {
+        let reference = Type::Reference {
+            mutable,
+            inner: Box::new(ty.clone()),
+        };
+        let local = self.new_temporary(reference, span);
+        self.assign(
+            Place::local(local),
+            Rvalue::Borrow {
+                mutable,
+                origin: BorrowOrigin::Argument,
+                place: Place::local(cursor),
+            },
+            span,
+        );
+        Operand::Move(Place::local(local), span)
+    }
+
+    /// Calls the protocol function `function` with `arguments` into `destination`.
+    fn emit_protocol_call(
+        &mut self,
+        function: &ProtocolCall,
+        arguments: Vec<Operand>,
+        destination: Place,
+        span: Span,
+    ) {
+        let parameters: Vec<Type> = function
+            .parameters
+            .iter()
+            .map(|(_, ty)| ty.clone())
+            .collect();
+        let kinds = vec![ParameterKind::Plain; parameters.len()];
+        self.emit_call(
+            Callee::Function(function.path.clone()),
+            arguments,
+            parameters,
+            kinds,
+            function.type_arguments.clone(),
+            destination,
+            false,
+            true,
+            span,
+        );
     }
 
     /// Exits the loop `index` when the range in `range` is empty, else computes its last

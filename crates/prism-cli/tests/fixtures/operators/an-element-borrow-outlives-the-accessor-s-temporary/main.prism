@@ -1,0 +1,12 @@
+// expect: ok
+import /prism/core
+
+struct Bag { var items: List<String> }
+
+operator fun Bag.get(index: Int): &String = &items[index]
+
+fun first(b: &Bag): &String = &b[0]
+fun f(b: Bag) {
+    val s = &b[0]
+    println(s)
+}

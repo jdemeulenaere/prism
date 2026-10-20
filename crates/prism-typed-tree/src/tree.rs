@@ -1066,13 +1066,51 @@ pub enum BorrowOrigin {
 }
 
 /// How a `for` loop iterates its iterable (D10 of `collections`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ForIteration {
     /// Over a `Range` held by value: the variable is each `Int` in turn.
     Range,
     /// Over a list, held as a borrow of origin [`BorrowOrigin::Iteration`], mutable when
     /// `mutable`: the variable is a `&T` (or `&mut T`) to each element in turn.
     List { mutable: bool },
+    /// Over a type with the cursor protocol (D11 of `operator-conventions`), held as a borrow
+    /// of origin [`BorrowOrigin::Iteration`]: the variable is what `next` returns each time.
+    Cursor(Box<CursorProtocol>),
+}
+
+/// The functions of the cursor protocol a `for` loop calls (D11 of `operator-conventions`):
+/// `iterator()` once for the cursor, `hasNext(&cursor)` before each iteration and
+/// `next(&mut cursor)` for each element, on the iterable's borrow, reborrowed shared for the
+/// first two and in the loop's mode for `next`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CursorProtocol {
+    pub iterator: ProtocolCall,
+    pub has_next: ProtocolCall,
+    pub next: ProtocolCall,
+    /// The cursor's type, `iterator`'s result.
+    pub cursor: Type,
+    /// The loop variable's type, `next`'s result.
+    pub element: Type,
+    /// Whether the iterable is borrowed mutably (`for (x in &mut y)`), calling the `mut` `next`.
+    pub mutable: bool,
+}
+
+/// A function of the cursor protocol: its path, parameters as a call records them (`this`
+/// first) and type arguments.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProtocolCall {
+    pub path: DeclarationPath,
+    pub parameters: Vec<(Option<String>, Type)>,
+    pub type_arguments: Vec<Type>,
+}
+
+impl ProtocolCall {
+    /// The type of parameter `index`, with the type arguments substituted.
+    pub fn parameter_type(&self, index: usize) -> Option<Type> {
+        self.parameters
+            .get(index)
+            .map(|(_, ty)| ty.substitute(&self.type_arguments))
+    }
 }
 
 /// How a [`ExpressionKind::Coerce`] converts its value.

@@ -1,0 +1,6 @@
+// expect: ok
+struct Matrix { val columns: Int, var cells: List<Double> }
+
+operator fun Matrix.get(row: Int, column: Int): Double = cells[row * columns + column]
+
+fun f(m: &Matrix): Double = m[1, 2] + m[0, 0]

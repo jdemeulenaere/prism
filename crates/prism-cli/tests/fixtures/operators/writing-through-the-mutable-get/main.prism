@@ -1,0 +1,17 @@
+// expect: ok
+struct Item { val name: String, var count: Int }
+struct Bag { var items: List<Item> }
+
+operator fun Bag.get(index: Int): &Item = &items[index]
+operator mut fun Bag.get(index: Int): &mut Item = &mut items[index]
+mut fun Item.reset() {
+    count = 0
+}
+
+fun f(b: &mut Bag) {
+    b[0].count += 1
+    b[1].reset()
+    val m: &mut Item = &mut b[0]
+    m.count = 2
+    b[0] = Item("z", 0)
+}
