@@ -359,19 +359,23 @@ mod tests {
                  public fun mix(a: Int, b: &Int, c: Bool, d: Double = 1.0): Double = d\n\
                  public fun Int.twice(): Int = this * 2\n\
                  public fun quiet(): Unit {}\n\
-                 public fun local(): Double = mix(1, &2, true) + mix(1, &2, false, 2.0)\n",
+                 public fun local(): Double = mix(1, &2, true) + mix(1, &2, false, 2.0)\n\
+                 public compose fun Show(s: &String, n: Int): Unit {}\n",
             ),
             (
                 "app/main",
                 "package app\nimport /lib/math\n\
-                 fun f(): Double { quiet(); val n = 3.twice(); return mix(n, &n, false) }\n",
+                 fun f(): Double { quiet(); val n = 3.twice(); return mix(n, &n, false) }\n\
+                 compose fun Screen(t: &String) { Show(t, 1) }\n",
             ),
         ]);
         let pointer = types::I64;
         let mut bodies = HashMap::new();
-        for (_, body) in files[0].bodies.iter() {
-            let symbol = symbol_of(body, &files[0]);
-            bodies.insert(symbol, body_signature(body, CALL_CONV, pointer));
+        for file in &files {
+            for (_, body) in file.bodies.iter() {
+                let symbol = symbol_of(body, file);
+                bodies.insert(symbol, body_signature(body, CALL_CONV, pointer));
+            }
         }
         let mut calls = 0;
         for file in &files {
@@ -397,6 +401,8 @@ mod tests {
                 }
             }
         }
-        assert_eq!(calls, 7);
+        // Seven plain calls, and the composable calls with their version words (D4 of
+        // `strong-skipping`): `Screen`'s of `Show`, and each restart function's.
+        assert_eq!(calls, 10);
     }
 }

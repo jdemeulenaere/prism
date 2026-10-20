@@ -2051,6 +2051,126 @@ fn composable_signatures_and_calls() {
     );
 }
 
+/// code-generation: "Signature of a composable taking a borrow" (`strong-skipping`): one version
+/// word after the composer and the change word.
+#[test]
+fn signature_of_a_composable_taking_a_borrow() {
+    let directory = single_file(
+        "borrowed_composable_signature",
+        "compose fun Show(s: &String, n: Int) {}\n",
+    );
+    let show = clif_function(&directory, "main::Show");
+    assert!(
+        show.contains("function %\"main::Show\"(i64, i64, i64, i64, i64)"),
+        "{}",
+        show
+    );
+}
+
+/// code-generation: "A version read in the IR dump" (`strong-skipping`): the version of the
+/// state whose contents `Show` borrows is read with the record of `List<String>` and passed
+/// as the call's last argument.
+#[test]
+fn a_version_read_in_the_ir_dump() {
+    let directory = single_file(
+        "version_read_ir",
+        "compose fun Show(s: &String) {}\n\
+         compose fun Screen(items: &State<List<String>>) { Show(items.value[0]) }\n",
+    );
+    let screen = clif_function(&directory, "main::Screen");
+    let entry = screen
+        .lines()
+        .find_map(|line| {
+            let line = line.trim();
+            let (name, symbol) = line.split_once(" = %\"")?;
+            (symbol.starts_with("prism_compose_state_version\"")).then(|| name.to_string())
+        })
+        .unwrap_or_else(|| panic!("no version entry in\n{}", screen));
+    let record = screen
+        .lines()
+        .find_map(|line| {
+            let (name, _) = line
+                .trim()
+                .split_once(" = symbol %\"main#slot-type(List<String>)\"")?;
+            Some(name.to_string())
+        })
+        .expect("the record of List<String>");
+    let call = screen
+        .lines()
+        .find(|line| line.contains(&format!("call {}(", entry)))
+        .unwrap_or_else(|| panic!("no call of {} in\n{}", entry, screen));
+    let (result, arguments) = call.trim().split_once(" = ").expect("a result");
+    // The handle, then a value loaded from the record's symbol.
+    assert!(arguments.ends_with(")"), "{}", call);
+    let record_value = screen
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .split_once(&format!(" = symbol_value.i64 {}", record))
+        })
+        .map(|(name, _)| name.to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        record_value
+            .iter()
+            .any(|value| arguments.contains(&format!(", {})", value))),
+        "{} with {:?}",
+        call,
+        record_value
+    );
+    // The result, or an alias of it, is the last argument of the call of `Show`'s slot.
+    let aliases: Vec<String> = screen
+        .lines()
+        .filter_map(|line| {
+            let (alias, of) = line.trim().split_once(" -> ")?;
+            (of == result).then(|| alias.to_string())
+        })
+        .chain([result.to_string()])
+        .collect();
+    let show_call = screen
+        .lines()
+        .find(|line| line.contains("call_indirect"))
+        .unwrap_or_else(|| panic!("no call of Show in\n{}", screen));
+    let arguments = show_call
+        .split_once('(')
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(arguments, _)| arguments)
+        .expect("arguments");
+    let last = arguments.rsplit(", ").next().unwrap();
+    assert!(aliases.iter().any(|alias| alias == last), "{}", show_call);
+}
+
+/// code-generation: "The record of a kept borrow" (`strong-skipping`): `&String` has a record
+/// whose equality entry is the identity glue, which compares two words and calls no glue of
+/// `String`, and no drop glue.
+#[test]
+fn the_record_of_a_kept_borrow() {
+    let directory = single_file("kept_borrow_record", "compose fun Show(s: &String) {}\n");
+    let output = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let dump = stdout(&output);
+    let show = function_ir(&dump, "main::Show");
+    assert!(
+        show.contains("symbol %\"main#slot-type(&String)\""),
+        "{}",
+        show
+    );
+    let identity = function_ir(&dump, "main#identity(&String)");
+    // Each value's two words, at its address and 8 bytes after, and nothing else but the
+    // stack check every glue starts with.
+    for word in [
+        "aligned v0\n",
+        "aligned v0+8\n",
+        "aligned v1\n",
+        "aligned v1+8\n",
+    ] {
+        assert!(identity.contains(word), "{} in\n{}", word, identity);
+    }
+    assert!(!identity.contains("equals"), "{}", identity);
+    assert!(!dump.contains("main#drop(&String)"), "{}", dump);
+    assert!(!dump.contains("prism_rt_string_equals"), "{}", dump);
+}
+
 /// code-generation: "A restart group in the IR dump" and "Records of a unit"
 /// (`compose-transform`).
 #[test]
