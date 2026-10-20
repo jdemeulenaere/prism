@@ -1,0 +1,16 @@
+error[E4007]: the field 'count' of 'Modifier' is private to 'prism/compose/ui', so it cannot be read, written or borrowed here
+  --> main.prism:4:32
+    4 | fun count(m: &Modifier): Int = m.count
+      |                                ^
+error[E4007]: 'Modifier' cannot be constructed here: a construction gives every field, and the field 'count' of 'Modifier' is private to 'prism/compose/ui'
+  --> main.prism:5:25
+    5 | fun empty(): Modifier = Modifier(0, Modifier.first, Modifier.second)
+      |                         ^
+error[E4007]: the field 'first' of 'Modifier' is private to 'prism/compose/ui', so it cannot be read, written or borrowed here
+  --> main.prism:5:37
+    5 | fun empty(): Modifier = Modifier(0, Modifier.first, Modifier.second)
+      |                                     ^
+error[E4007]: the field 'second' of 'Modifier' is private to 'prism/compose/ui', so it cannot be read, written or borrowed here
+  --> main.prism:5:53
+    5 | fun empty(): Modifier = Modifier(0, Modifier.first, Modifier.second)
+      |                                                     ^

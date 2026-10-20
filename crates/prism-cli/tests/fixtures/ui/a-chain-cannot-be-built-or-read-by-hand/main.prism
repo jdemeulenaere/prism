@@ -1,0 +1,6 @@
+// expect: E4007
+// run: 1
+import /prism/compose/ui
+fun count(m: &Modifier): Int = m.count
+fun empty(): Modifier = Modifier(0, Modifier.first, Modifier.second)
+fun main() {}

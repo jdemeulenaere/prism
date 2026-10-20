@@ -1,4 +1,4 @@
-1
+true
 window 400x300
   column #1 0,0 20x60
     text #2 0,0 8x20 "1"

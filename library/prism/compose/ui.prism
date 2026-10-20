@@ -244,22 +244,22 @@ public enum ModifierElement : Copy {
 
 // Eight elements of a chain.
 public struct ModifierElements : Copy {
-    val e0: ModifierElement
-    val e1: ModifierElement
-    val e2: ModifierElement
-    val e3: ModifierElement
-    val e4: ModifierElement
-    val e5: ModifierElement
-    val e6: ModifierElement
-    val e7: ModifierElement
+    private val e0: ModifierElement
+    private val e1: ModifierElement
+    private val e2: ModifierElement
+    private val e3: ModifierElement
+    private val e4: ModifierElement
+    private val e5: ModifierElement
+    private val e6: ModifierElement
+    private val e7: ModifierElement
 }
 
 // An ordered chain of at most 16 elements: each one applies to the layout of the elements after
 // it. Two chains are equal when they hold equal elements in the same order.
 public struct Modifier : Copy {
-    val count: Int
-    val first: ModifierElements
-    val second: ModifierElements
+    private val count: Int
+    private val first: ModifierElements
+    private val second: ModifierElements
 }
 
 // Eight empty elements.

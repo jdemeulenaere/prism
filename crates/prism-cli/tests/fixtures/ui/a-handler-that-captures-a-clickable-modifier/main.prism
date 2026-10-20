@@ -13,7 +13,7 @@ compose fun Screen() {
     val inner = Modifier.clickable { c.value += 1 }
     Column {
         Text("${c.value}")
-        Box(modifier = Modifier.size(20.dp).clickable { println(inner.count) }) { }
+        Box(modifier = Modifier.size(20.dp).clickable { println(inner != Modifier) }) { }
         Box(modifier = inner.size(20.dp)) { }
     }
 }

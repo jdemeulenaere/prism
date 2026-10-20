@@ -398,7 +398,7 @@ fn the_modifier_mirrors_match_the_layout_of_the_ui_module() {
     let entry = directory.join("main.prism");
     std::fs::write(
         &entry,
-        "import /prism/compose/ui\nfun count(m: Modifier, e: ModifierElement): Int = m.count\n",
+        "import /prism/compose/ui\nfun count(m: Modifier, e: ModifierElement): Int = 0\n",
     )
     .unwrap();
     let layout = prism_cli::dump_layout(&entry)

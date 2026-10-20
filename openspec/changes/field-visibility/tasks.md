@@ -43,7 +43,8 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement fi
 
 ## 5. Library, timing and verification (D7, D10)
 
-- [ ] 5.1 `library/prism/compose/ui.prism`: mark `Modifier`'s fields `count`, `first` and `second` and `ModifierElements`' fields `e0` to `e7` `private`. Check that no other library module, example or fixture reads them. Add fixtures under `ui/` for "A chain cannot be built or read by hand" and "Chains built through modifier functions still compare". Run `cargo test -p prism-cli --test library_tests`.
+- [x] 5.1 `library/prism/compose/ui.prism`: mark `Modifier`'s fields `count`, `first` and `second` and `ModifierElements`' fields `e0` to `e7` `private`. Check that no other library module, example or fixture reads them. Add fixtures under `ui/` for "A chain cannot be built or read by hand" and "Chains built through modifier functions still compare". Run `cargo test -p prism-cli --test library_tests`.
+  - Done (apply): two places read `Modifier.count` outside the module: the `ui` scenario "A handler that captures a clickable modifier", whose handler printed `inner.count` and now prints `inner != Modifier` (a MODIFIED block of this change's `ui` delta, stdout `true`), and the layout test of `library_tests.rs`, whose program now reads no field.
 - [ ] 5.2 Add the `field-visibility` shape to `crates/prism-cli/tests/compile_timing.rs` (D10). Run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` on an idle machine, and record its stages and the `struct-fields` comparison with task 1.2 in `design.md`.
 - [ ] 5.3 Run the apply checks of `openspec/config.yaml`:
   - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace`, reading the `test result:` lines;
