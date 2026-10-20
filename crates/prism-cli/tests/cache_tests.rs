@@ -349,6 +349,37 @@ fn marking_a_parameter_attached_changes_the_hashes() {
     );
 }
 
+/// compilation-and-abi: "Making a parameter vararg changes the hash".
+#[test]
+fn making_a_parameter_vararg_changes_the_hash() {
+    let workspace = Workspace::new(
+        "vararg",
+        &[
+            (
+                "lib/math.prism",
+                "package lib\npublic fun sum(xs: List<Int>): Int = xs.size\n",
+            ),
+            (
+                "app/main.prism",
+                "package app\nimport /prism/collections\nimport /lib/math\nfun f(): Int = sum(listOf(1))\n",
+            ),
+        ],
+    );
+    assert!(workspace
+        .explain("app/main.prism")
+        .contains(&"checked app/main.prism".to_string()));
+    workspace.write(
+        "lib/math.prism",
+        "package lib\npublic fun sum(vararg xs: Int): Int = xs.size\n",
+    );
+    let output = workspace.run(&["check", "--explain-cache", "app/main.prism"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[E4004]"), "{}", stderr);
+    // A reused verdict would have passed: the importer was checked again.
+    assert!(stderr.contains("main.prism"), "{}", stderr);
+}
+
 /// compilation-and-abi: "Modifying private helper function".
 #[test]
 fn modifying_private_helper_function() {
@@ -1133,6 +1164,8 @@ fn library_entries_are_shared_between_workspaces() {
             "checked prism/compose/runtime.prism",
             "checked prism/core.prism",
             "checked main.prism",
+            // `listOf` is a library generic (D10 of `vararg`), instantiated for the program.
+            "instantiate prism/collections::listOf<String>",
         ])
     );
     assert_eq!(
@@ -1142,6 +1175,8 @@ fn library_entries_are_shared_between_workspaces() {
             "reused prism/compose/runtime.prism",
             "reused prism/core.prism",
             "checked main.prism",
+            // A check plans instances without caching their code.
+            "instantiate prism/collections::listOf<String>",
         ])
     );
     fs::remove_dir_all(&base).ok();
@@ -1880,4 +1915,43 @@ fn a_hook_instance_requested_inside_a_generic() {
             explanation
         );
     }
+}
+
+/// standard-library: "listOf is written in Prism": each element type a program builds lists of
+/// instantiates `listOf` once, and a later run reuses the cached instances (D10 of `vararg`).
+#[test]
+fn list_of_instances_are_cached() {
+    let workspace = Workspace::new(
+        "list-of",
+        &[(
+            "main.prism",
+            "import /prism/collections\nimport /prism/core\nfun main() { println(listOf(1, 2).size); println(listOf(\"a\").size); println(listOf(3).size) }\n",
+        )],
+    );
+    let instances = |output: &Output| -> Vec<String> {
+        String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.contains("prism/collections::listOf"))
+            .map(str::to_string)
+            .collect()
+    };
+    let first = workspace.run(&["run", "--explain-cache", "main.prism"]);
+    assert_success(&first);
+    assert_eq!(
+        instances(&first),
+        lines(&[
+            "instantiate prism/collections::listOf<Int>",
+            "instantiate prism/collections::listOf<String>"
+        ])
+    );
+    let second = workspace.run(&["run", "--explain-cache", "main.prism"]);
+    assert_success(&second);
+    assert_eq!(
+        instances(&second),
+        lines(&[
+            "reused instance prism/collections::listOf<Int>",
+            "reused instance prism/collections::listOf<String>"
+        ])
+    );
 }

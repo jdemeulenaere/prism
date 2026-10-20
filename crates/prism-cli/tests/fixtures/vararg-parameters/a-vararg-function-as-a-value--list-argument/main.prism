@@ -1,0 +1,16 @@
+// expect: ok
+// run: 0
+import /prism/collections
+import /prism/core
+
+fun sum(vararg xs: Int): Int = xs.size
+
+fun f(): Int {
+    val g: (List<Int>) -> Int = sum
+    val h = sum
+    return g(listOf(1, 2)) + h(listOf(3))
+}
+
+fun main() {
+    println(f())
+}

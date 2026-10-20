@@ -1,0 +1,10 @@
+// expect: E4004 E4013
+fun <T> bag(vararg xs: T): List<T> = xs
+
+fun f() {
+    val a = bag(1, 2.0)
+}
+
+fun g() {
+    val b = bag()
+}

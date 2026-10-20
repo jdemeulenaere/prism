@@ -5,7 +5,7 @@ A vararg's elements MUST be evaluated into operands in order, then passed to a `
 
 #### Scenario: A vararg call in MIR
 - **WHEN** `fun sum(vararg xs: Int): Int = xs.size` is declared and `fun f(a: Int, ys: List<Int>): Int = sum(a, 2) + sum(*ys)` is lowered
-- **THEN** the MIR calls `builtin varargList<Int>` with a copy of `_1` and the constant `2` into a temporary, calls `main::sum` with a move of that temporary, and calls `main::sum` again with a move of `_2`
+- **THEN** the MIR calls `builtin varargList<Int>` with a copy of `_1` (through a temporary) and the constant `2` into a temporary, calls `main::sum` with a move of that temporary, and calls `main::sum` again with a move of `_2`
 
 ## MODIFIED Requirements
 

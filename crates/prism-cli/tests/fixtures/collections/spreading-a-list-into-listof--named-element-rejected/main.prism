@@ -1,0 +1,4 @@
+// expect: E4004
+import /prism/collections
+
+fun h(): List<Int> = listOf(elements = 1)

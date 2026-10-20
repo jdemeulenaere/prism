@@ -4,8 +4,9 @@ fun main::f(i: Int): Unit @4:1
   local %1 xs: List<Int> (var)
   block: Unit @4:15
     let %1 xs @5:5
-      call builtin listOf<Int>: List<Int> @5:14
-        argument e1: literal 1: Int @5:21
+      call prism/collections::listOf<Int>: List<Int> @5:14
+        argument elements: call builtin varargList<Int>: List<Int> @5:21
+          argument e1: literal 1: Int @5:21
     assign @6:5
       target: index: Int @6:5
         base: local %1 xs: List<Int> @6:5

@@ -1,0 +1,8 @@
+package app
+import /lib/math
+import /prism/core
+fun main() { println(sum(1, 2, 3)); println(sum(1, 2, 3)) }
+// expect: ok
+// run: 0
+// watch: edits
+// entry: app/main.prism

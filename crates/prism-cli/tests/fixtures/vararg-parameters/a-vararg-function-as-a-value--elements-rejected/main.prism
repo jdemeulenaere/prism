@@ -1,0 +1,7 @@
+// expect: E4004
+fun sum(vararg xs: Int): Int = xs.size
+
+fun h(): Int {
+    val g = sum
+    return g(1, 2)
+}

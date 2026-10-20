@@ -1,0 +1,4 @@
+// expect: E4017
+fun sum(vararg xs: Int): Int = xs.size
+
+fun f(numbers: &List<Int>): Int = sum(*numbers)

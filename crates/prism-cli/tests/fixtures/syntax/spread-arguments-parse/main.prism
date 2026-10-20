@@ -1,0 +1,15 @@
+// expect: ok
+fun sum(vararg numbers: Int): Int = numbers.size
+
+fun <T> listOf(vararg elements: T): List<T> = elements
+
+struct A(val n: Int)
+
+fun A.items(): List<Int> = listOf(n)
+
+fun f(x: Int, vararg ys: Int): Int = x
+
+fun g(numbers: List<Int>, xs: List<Int>, a: A, b: Int): Int {
+    val total = sum(*numbers) + listOf(elements = *xs).size + f(1, *a.items())
+    return total + f(b * b, b *b)
+}

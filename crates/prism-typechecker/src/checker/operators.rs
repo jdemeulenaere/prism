@@ -250,7 +250,7 @@ impl TypeChecker {
         let parameters: Vec<Type> = {
             let type_parameters = super::type_parameters_of(&f.type_parameters);
             self.with_type_parameters(type_parameters, |c| {
-                f.params.iter().map(|p| c.lower_type(&p.ty)).collect()
+                f.params.iter().map(|p| c.parameter_type(p)).collect()
             })
         };
         let count = parameters.len();
@@ -1545,17 +1545,19 @@ impl TypeChecker {
             param_names,
             defaults,
             type_parameters,
+            vararg,
             ..
         } = &extension.symbol.kind
         else {
             return Err(None);
         };
-        let (params, param_names, defaults, ret, type_parameters) = (
+        let (params, param_names, defaults, ret, type_parameters, vararg) = (
             params.clone(),
             param_names.clone(),
             defaults.clone(),
             (**ret).clone(),
             type_parameters.clone(),
+            *vararg,
         );
         let argument = CallArg {
             name: None,
@@ -1568,7 +1570,7 @@ impl TypeChecker {
             preinferred.map(|(node, is_place)| self.preinfer(&argument.value, node, is_place));
         let args = std::slice::from_ref(&argument);
         let checked = if type_parameters.is_empty() {
-            self.check_call_arguments(&params, &param_names, &defaults, args, span)
+            self.check_call_arguments(&params, &param_names, &defaults, vararg, args, span)
                 .map(|normalized| (normalized, params.clone(), ret.clone(), Vec::new()))
         } else {
             let signature = super::GenericSignature {
@@ -1584,6 +1586,7 @@ impl TypeChecker {
                 Some(target_ty),
                 &param_names,
                 &defaults,
+                vararg,
                 args,
                 span,
             )

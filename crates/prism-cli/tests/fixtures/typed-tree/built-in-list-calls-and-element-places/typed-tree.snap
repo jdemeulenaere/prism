@@ -5,9 +5,10 @@ fun main::f(xs: &List<Int>, i: Int): Int @4:1
   local %2 ys: List<Int> (var)
   block: Int @4:36
     let %2 ys @5:5
-      call builtin listOf<Int>: List<Int> @5:14
-        argument e1: literal 1: Int @5:21
-        argument e2: literal 2: Int @5:24
+      call prism/collections::listOf<Int>: List<Int> @5:14
+        argument elements: call builtin varargList<Int>: List<Int> @5:21
+          argument e1: literal 1: Int @5:21
+          argument e2: literal 2: Int @5:24
     expression @6:5
       call builtin add<Int>: Unit @6:5
         receiver: borrow mut (receiver): &mut List<Int> @6:5

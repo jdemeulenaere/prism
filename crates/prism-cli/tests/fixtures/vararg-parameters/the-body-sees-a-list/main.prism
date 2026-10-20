@@ -1,0 +1,10 @@
+// expect: ok
+fun sum(vararg xs: Int): Int {
+    var total = 0
+    for (x in xs) total += x
+    return total + xs.size
+}
+
+fun <T> listOf(vararg elements: T): List<T> = elements
+
+fun check(xs: List<Int>): Int = sum(*xs)

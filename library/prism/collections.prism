@@ -3,8 +3,9 @@
 // precedence over extensions. `listOf` and the helpers are used after `import /prism/collections`.
 package prism
 
-// A list of the given elements, in order. It takes any number of elements, all of one type.
-public intrinsic fun <T> listOf(element: T): List<T>
+// A list of the given elements, in order. It takes any number of elements, all of one type, and
+// gives back the list its call built, or the list spread into it (`listOf(*xs)`).
+public fun <T> listOf(vararg elements: T): List<T> = elements
 
 // The number of elements.
 public intrinsic val <T> List<T>.size: Int

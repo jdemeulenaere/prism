@@ -1,0 +1,19 @@
+module main
+fun main::sum(xs: List<Int>): Int @2:1
+  local %0 xs: List<Int> (parameter)
+  call builtin size<Int>: Int @2:32
+    receiver: borrow (receiver): &List<Int> @2:32
+      local %0 xs: List<Int> @2:32
+fun main::f(ys: List<Int>): Int @4:1
+  local %0 ys: List<Int> (parameter)
+  binary +: Int @4:29
+    binary +: Int @4:29
+      call main::sum: Int @4:29
+        argument xs: call builtin varargList<Int>: List<Int> @4:33
+          argument e1: literal 1: Int @4:33
+          argument e2: literal 2: Int @4:36
+      call main::sum: Int @4:41
+        argument xs: call builtin varargList<Int>: List<Int> @4:41
+    call main::sum: Int @4:49
+      argument xs: move: List<Int> @4:54
+        local %0 ys: List<Int> @4:54

@@ -1,0 +1,5 @@
+// expect: ok
+fun <T> lastOf(vararg xs: T): T {
+    var list = xs
+    return list.removeLast()
+}

@@ -1,0 +1,6 @@
+// expect: E4004
+fun sum(vararg xs: Int): Int = xs.size
+
+fun f(a: List<Int>) {
+    sum(1, *a)
+}

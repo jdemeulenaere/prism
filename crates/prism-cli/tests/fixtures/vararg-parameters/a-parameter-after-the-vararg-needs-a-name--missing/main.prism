@@ -1,0 +1,4 @@
+// expect: E4004
+fun f(vararg xs: Int, last: Int): Int = last
+
+fun g(): Int = f(1, 2)

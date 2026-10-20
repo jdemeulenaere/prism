@@ -1,5 +1,4 @@
-// expect: ok
-// run: 0
+// expect: E4004
 import /prism/collections
 import /prism/core
 

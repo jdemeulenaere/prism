@@ -1,0 +1,4 @@
+// expect: ok
+fun f(vararg xs: Int, last: Int): Int = last
+
+fun h(): Int = f(1, 2, last = 3)

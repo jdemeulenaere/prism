@@ -1,0 +1,3 @@
+package lib
+
+public fun sum(vararg xs: Int): Int = xs.size * 10

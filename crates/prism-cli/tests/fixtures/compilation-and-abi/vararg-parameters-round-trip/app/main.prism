@@ -1,0 +1,8 @@
+// expect: ok
+package app
+
+import /lib/math
+
+fun f(): Int = sum(1, 2, 3)
+
+fun g(ys: List<Int>): Int = sum(*ys) + sum()

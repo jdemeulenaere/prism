@@ -712,10 +712,11 @@ pub enum BuiltinFunction {
     /// `h.unbox()` of a `Heap<T>`, called with the box moved as its receiver: moves the contents
     /// out and frees the box (D6 of `heap-boxes`).
     Unbox,
-    /// `listOf(e1, ..., en)`: a list of exactly its arguments, in order (D4 of `collections`).
-    /// Declared like `fun <T> listOf(e1: T, ..., en: T): List<T>`, with as many parameters as the
-    /// call has arguments; its type argument is the element type.
-    ListOf,
+    /// The list of a vararg's elements, `e1, ..., en`, in order (D13 of `vararg`): the argument
+    /// a call passes its vararg parameter. Declared like `fun <T> varargList(e1: T, ..., en: T):
+    /// List<T>`, with as many parameters as the vararg has elements, so the elements are stored
+    /// values; its type argument is the element type.
+    VarargList,
     /// `xs.size` of a `List<T>`: its number of elements. Like every list member below, declared
     /// as an extension on `List<T>` ([`BuiltinFunction::list_member_signature`]) with the
     /// element type as its type argument (D6 of `collections`).
@@ -824,7 +825,7 @@ impl BuiltinFunction {
             BuiltinFunction::ToString => "toString",
             BuiltinFunction::HeapAllocate => "Heap",
             BuiltinFunction::Unbox => "unbox",
-            BuiltinFunction::ListOf => "listOf",
+            BuiltinFunction::VarargList => "varargList",
             BuiltinFunction::ListSize => "size",
             BuiltinFunction::ListIndices => "indices",
             BuiltinFunction::ListIsEmpty => "isEmpty",
@@ -902,7 +903,7 @@ impl BuiltinFunction {
     ];
 
     /// The type parameter `T` of the list built-ins' declarations, the element type of
-    /// `List<T>` in `fun <T> listOf(...)` and `fun <T> List<T>.add(element: T)`.
+    /// `List<T>` in the built-in `varargList` and `fun <T> List<T>.add(element: T)`.
     pub fn list_element_parameter() -> crate::types::TypeParameter {
         crate::types::TypeParameter {
             index: 0,
@@ -911,7 +912,7 @@ impl BuiltinFunction {
         }
     }
 
-    /// The declared signature of a list member, `None` for any other built-in (`listOf`
+    /// The declared signature of a list member, `None` for any other built-in (`varargList`
     /// included, whose parameters are as many as its call's arguments).
     pub fn list_member_signature(self) -> Option<ListMemberSignature> {
         let element = Self::list_element_parameter().as_type();
@@ -987,7 +988,7 @@ impl BuiltinFunction {
     /// Whether the built-in's first argument is a receiver: that of every built-in member
     /// (`clone`, `length`, `get`, `toString`, `unbox`, the list members and the members of
     /// `Composition`, `RecomposeScope` and the state handles), not the arguments of `print`,
-    /// `println`, `Heap`, `listOf`, `composition`, `remember`, `key`, `currentRecomposeScope`,
+    /// `println`, `Heap`, `varargList`, `composition`, `remember`, `key`, `currentRecomposeScope`,
     /// `mutableStateOf` and `SideEffect`.
     pub fn has_receiver(self) -> bool {
         !matches!(
@@ -995,7 +996,7 @@ impl BuiltinFunction {
             BuiltinFunction::Print
                 | BuiltinFunction::PrintLine
                 | BuiltinFunction::HeapAllocate
-                | BuiltinFunction::ListOf
+                | BuiltinFunction::VarargList
                 | BuiltinFunction::Composition
                 | BuiltinFunction::Remember
                 | BuiltinFunction::Key

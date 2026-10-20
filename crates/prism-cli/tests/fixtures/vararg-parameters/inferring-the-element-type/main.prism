@@ -1,0 +1,11 @@
+// expect: ok
+fun <T> bag(vararg xs: T): List<T> = xs
+
+fun f(a: String, b: String) {
+    val x: List<Int> = bag(1, 2)
+    val y: List<Int?> = bag(1, null)
+    val z: List<String> = bag()
+    val w: List<Double> = bag<Double>()
+    val v: List<String> = bag(a, b)
+}
+

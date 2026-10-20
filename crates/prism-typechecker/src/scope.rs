@@ -42,6 +42,10 @@ pub enum SymbolKind {
         /// The type of the context parameter (`context(scope: RowScope)`), which a call passes
         /// from its context (D6 of `receiver-lambdas`).
         context: Option<Type>,
+        /// The index of the `vararg` parameter, whose type in `fn_type` is a `List<E>` a call
+        /// packs its elements into (D7 of `vararg`); a property of the declaration, like
+        /// `param_names` and `defaults`.
+        vararg: Option<usize>,
     },
     /// Struct declaration. Its fields live in the checker's type table under `id`.
     Struct {
@@ -121,6 +125,7 @@ impl Symbol {
                 defining_package,
                 module: String::new(),
                 context: None,
+                vararg: None,
             },
             span,
         }
@@ -146,6 +151,7 @@ impl Symbol {
                 defining_package,
                 module: String::new(),
                 context: None,
+                vararg: None,
             },
             span,
         }
@@ -199,6 +205,22 @@ impl Symbol {
             *own = context;
         }
         self
+    }
+
+    /// The symbol of a function whose parameter `vararg` is a vararg.
+    pub fn with_vararg(mut self, index: Option<usize>) -> Self {
+        if let SymbolKind::Function { vararg, .. } = &mut self.kind {
+            *vararg = index;
+        }
+        self
+    }
+
+    /// The index of a function symbol's vararg parameter, if it has one.
+    pub fn vararg(&self) -> Option<usize> {
+        match &self.kind {
+            SymbolKind::Function { vararg, .. } => *vararg,
+            _ => None,
+        }
     }
 
     /// The context parameter type of a function symbol, if it has one.

@@ -6,8 +6,9 @@ fun main::f(xs: List<Int>): Unit @4:1
   local %3 y: &mut Int (for)
   block: Unit @4:22
     let %1 ys @5:5
-      call builtin listOf<Int>: List<Int> @5:14
-        argument e1: literal 1: Int @5:21
+      call prism/collections::listOf<Int>: List<Int> @5:14
+        argument elements: call builtin varargList<Int>: List<Int> @5:21
+          argument e1: literal 1: Int @5:21
     for #1 %2 x @6:5
       list: borrow (iteration): &List<Int> @6:15
         local %0 xs: List<Int> @6:15

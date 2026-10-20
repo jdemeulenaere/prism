@@ -1,0 +1,15 @@
+// expect: ok
+// run: 0
+import /prism/core
+
+fun tag(n: Int): Int {
+    println(n)
+    return n
+}
+
+fun f(a: Int, vararg xs: Int, last: Int = 0): Int = a * 100 + xs.size * 10 + last
+
+fun main() {
+    println(f(tag(1), tag(2), tag(3), last = tag(4)))
+    println(f(last = tag(5), tag(6), tag(7)))
+}

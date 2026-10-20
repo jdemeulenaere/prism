@@ -1137,7 +1137,7 @@ impl Callee {
     /// `length` and `get` (a string's character), which take a shared receiver borrow (D3 of
     /// `borrowck-elision`), `toString`, which takes the receiver copied out, and `unbox`, which
     /// takes the box moved, and the list members, which borrow the list as their mode says (D16
-    /// of `collections`). The arguments of `print`, `println`, `Heap` and `listOf` are not
+    /// of `collections`). The arguments of `print`, `println`, `Heap` and `varargList` are not
     /// receivers. A function value is never an extension, since an extension cannot be named as
     /// a value.
     pub fn has_receiver(&self) -> bool {

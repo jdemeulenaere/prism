@@ -16,6 +16,17 @@ fn compile_files(files: Vec<MirFile>) -> Program {
 }
 
 fn compile(source: &str) -> Program {
+    // `listOf` is a generic function of the library (D10 of `vararg`): the program compiles its
+    // instances from the library module's MIR.
+    if source.contains("listOf") {
+        return compile_files(lower_files(&[
+            (
+                "prism/collections",
+                include_str!("../../../library/prism/collections.prism"),
+            ),
+            ("main", source),
+        ]));
+    }
     compile_files(vec![lower_source(source)])
 }
 

@@ -1,0 +1,6 @@
+module main
+fun main::f(): List<Int> @4:1
+  call prism/collections::listOf<Int>: List<Int> @4:22
+    argument elements: call builtin varargList<Int>: List<Int> @4:29
+      argument e1: literal 1: Int @4:29
+      argument e2: literal 2: Int @4:32

@@ -1,0 +1,17 @@
+// expect: ok
+// run: 0
+import /prism/collections
+import /prism/core
+
+fun sum(vararg xs: Int): Int {
+    var total = 0
+    for (x in xs) total += x
+    return total
+}
+
+fun main() {
+    val more = listOf(4, 5)
+    println(sum())
+    println(sum(1, 2, 3))
+    println(sum(*more))
+}

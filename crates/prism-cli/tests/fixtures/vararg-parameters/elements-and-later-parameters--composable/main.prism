@@ -1,0 +1,20 @@
+// expect: ok
+// run: 0
+import /prism/compose/runtime
+import /prism/core
+
+compose fun Labels(vararg labels: String, separator: String = ",") {
+    for (l in labels) print("$l$separator")
+    println("")
+}
+compose fun Screen(tick: &State<Int>) {
+    println("screen ${tick.value}")
+    Labels("a", "b", separator = ";")
+    Labels()
+}
+fun main() {
+    val tick = mutableStateOf(0)
+    val c = composition { Screen(tick) }
+    tick.value = 1
+    println(c.recompose())
+}

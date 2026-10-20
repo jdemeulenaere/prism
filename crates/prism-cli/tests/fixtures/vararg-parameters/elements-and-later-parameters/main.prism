@@ -1,0 +1,4 @@
+// expect: ok
+fun line(prefix: String, vararg words: String, separator: String = " "): Int = words.size
+
+fun f(): Int = line("a", "b", "c") + line("a") + line("a", "b", separator = "-")

@@ -1,0 +1,12 @@
+// expect: ok
+import /prism/compose/runtime
+
+fun sum(vararg xs: Int): Int = 0
+
+fun <T> bag(vararg elements: T): List<T> = elements
+
+struct Builder(val n: Int)
+
+fun Builder.items(vararg names: String, separator: String = ", ") {}
+
+compose fun Row(vararg labels: String) {}

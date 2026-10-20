@@ -3,21 +3,26 @@ fun main::f(_1: Int): Int @4:1
   local _0: Int (return)
   local _1 i: Int (argument)
   local _2 xs: List<Int> (user, var)
-  local _3: Int (temporary)
+  local _3: List<Int> (temporary)
   local _4: Int (temporary)
+  local _5: Int (temporary)
   bb0:
     storage_live _2 @5:5
-    _2 = call builtin listOf<Int>(const 1, const 2) -> bb1 @5:14
+    storage_live _3 @5:21
+    _3 = call builtin varargList<Int>(const 1, const 2) -> bb1 @5:21
   bb1:
-    storage_live _3 @6:8
-    _3 = copy _1 + const 1 @6:8
-    _2[_3] = const 3 @6:5
-    storage_dead _3 @6:5
-    storage_live _4 @7:15
-    _4 = const 0 @7:15
-    _0 = copy _2[_4] @7:12
-    storage_dead _4 @7:5
-    drop _2 -> bb2 @7:5
+    _2 = call prism/collections::listOf<Int>(move _3) -> bb2 @5:14
   bb2:
+    storage_dead _3 @5:5
+    storage_live _4 @6:8
+    _4 = copy _1 + const 1 @6:8
+    _2[_4] = const 3 @6:5
+    storage_dead _4 @6:5
+    storage_live _5 @7:15
+    _5 = const 0 @7:15
+    _0 = copy _2[_5] @7:12
+    storage_dead _5 @7:5
+    drop _2 -> bb3 @7:5
+  bb3:
     storage_dead _2 @7:5
     return @4:1

@@ -81,6 +81,10 @@ Whether a parameter is a vararg MUST be a property of the function's declaration
 - **WHEN** `fun sum(vararg xs: Int): Int = xs.size` is declared and `fun f(): Int { val g = sum; return g(listOf(1, 2)) }` and `fun h(): Int { val g = sum; return g(1, 2) }` are checked
 - **THEN** the type checker accepts `f`, where `g` has type `(List<Int>) -> Int`, and emits `E4004` for the call in `h`
 
+#### Scenario: Reloading a vararg function
+- **WHEN** a program runs under `prism run --watch` with `--check-allocations`, its `main` calls `sum(1, 2, 3)` twice, and between the calls the body of `lib/math.prism`'s `public fun sum(vararg xs: Int): Int` changes from summing its elements to `xs.size * 10`
+- **THEN** the reload applies `lib/math.prism` alone, since the machine signature takes the same list, and the program prints `6` then `30` and frees every list once
+
 ### Requirement: Elements Are Stored List Values
 A vararg's elements MUST be stored in its list as values given to `listOf` are (collections, "Elements Are Stored Values"): a closure element MUST own its captures, and one that may hold a borrow MUST be rejected with `E5007`.
 

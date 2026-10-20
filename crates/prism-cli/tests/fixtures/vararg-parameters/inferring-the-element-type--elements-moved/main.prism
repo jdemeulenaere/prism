@@ -1,0 +1,7 @@
+// expect: E5001
+fun <T> bag(vararg xs: T): List<T> = xs
+
+fun g(a: String) {
+    val v = bag(a)
+    val again = a
+}

@@ -721,7 +721,7 @@ impl Validator<'_> {
         }
     }
 
-    /// Checks a call of a list built-in (D16 of `collections`): `listOf` declares one parameter
+    /// Checks a call of a list built-in (D16 of `collections`): `varargList` declares one parameter
     /// `T` per element and gives a `List<T>`; a member declares its signature, receiver first,
     /// and gives its result, both with the element type as the one type argument.
     fn list_builtin(
@@ -734,7 +734,7 @@ impl Validator<'_> {
     ) {
         let element = BuiltinFunction::list_element_parameter().as_type();
         let (declared, result) = match builtin {
-            BuiltinFunction::ListOf => (
+            BuiltinFunction::VarargList => (
                 vec![element.clone(); parameters.len()],
                 Type::List(Box::new(element)),
             ),

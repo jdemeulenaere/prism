@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+import /prism/core
+
+fun runAll(vararg actions: () -> Unit) {
+    for (a in actions) a()
+}
+
+fun main() {
+    val n = 7
+    val s = "s".clone()
+    runAll({ println(n) }, { println(s) })
+}

@@ -510,3 +510,21 @@ fn the_toolkit_s_handler_parameters_in_the_abi() {
         assert!(text.contains(parameter), "{} lacks {}", text, parameter);
     }
 }
+
+/// standard-library: "listOf is written in Prism" (D10 of `vararg`): an ordinary generic
+/// function with a vararg, which the intrinsic catalog no longer lists.
+#[test]
+fn list_of_is_written_in_prism() {
+    let source = MODULES
+        .iter()
+        .find(|(path, _)| *path == "prism/collections")
+        .map(|(_, source)| *source)
+        .expect("the collections module");
+    assert!(
+        source.contains("\npublic fun <T> listOf(vararg elements: T): List<T> = elements\n"),
+        "collections declares listOf in Prism"
+    );
+    assert!(prism_typechecker::intrinsics::CATALOG
+        .iter()
+        .all(|intrinsic| intrinsic.name != "listOf"));
+}

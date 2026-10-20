@@ -1,0 +1,8 @@
+// expect: ok
+fun sum(vararg xs: Int): Int = xs.size
+
+fun <T> bag(vararg xs: T): List<T> = xs
+
+fun f(numbers: List<Int>): Int = sum(*numbers)
+
+fun <T> again(vararg xs: T): List<T> = bag(xs = *xs)

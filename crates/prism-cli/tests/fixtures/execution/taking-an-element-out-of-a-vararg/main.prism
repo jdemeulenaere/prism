@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+import /prism/core
+
+fun <T> lastOf(vararg xs: T): T {
+    var list = xs
+    return list.removeLast()
+}
+
+fun main() {
+    println(lastOf("a".clone(), "b".clone()))
+    println(lastOf(1, 2, 3))
+}

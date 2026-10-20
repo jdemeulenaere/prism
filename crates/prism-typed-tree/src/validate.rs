@@ -1554,14 +1554,14 @@ impl Validator<'_> {
                     }
                 }
             }
-            // D4 of `collections`: one parameter `T` per element, the result `List<T>`.
-            BuiltinFunction::ListOf => {
+            // D13 of `vararg`: one parameter `T` per element, the result `List<T>`.
+            BuiltinFunction::VarargList => {
                 let element = BuiltinFunction::list_element_parameter().as_type();
                 let shape = call.type_arguments.len() == 1
                     && !call.has_receiver
                     && call.parameters.iter().all(|(_, ty)| *ty == element);
                 if !shape {
-                    self.report(format!("call {} of builtin listOf is malformed", id.0));
+                    self.report(format!("call {} of builtin varargList is malformed", id.0));
                     return;
                 }
                 let list = Type::List(Box::new(call.type_arguments[0].clone()));

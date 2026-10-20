@@ -1,0 +1,2 @@
+// expect: E4022
+fun show(vararg names: &String) {}

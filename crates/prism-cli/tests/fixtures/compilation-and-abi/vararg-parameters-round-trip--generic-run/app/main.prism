@@ -1,0 +1,15 @@
+// expect: ok
+// entry: app/main.prism
+// run: 0
+package app
+
+import /lib/math
+import /prism/core
+
+fun main() {
+    println(sum(1, 2, 3))
+    val words = bag("a".clone(), "b".clone(), last = "c".clone())
+    println(words.size)
+    println(words[2])
+    println(bag<Int>(last = 4).size)
+}

@@ -7,7 +7,7 @@
 //! that types its calls and the code that lowers them cannot drift apart. Calls of a
 //! signature-typed intrinsic are checked as calls of its declaration; a rule-typed one is typed
 //! by its own checker, selected by its built-in, because its behavior needs a feature Prism
-//! lacks (overloading, `vararg`, traits).
+//! lacks (overloading, arguments of different types, traits).
 
 use prism_ast::decl::{ExtensionPropertyDecl, FunctionDecl};
 use prism_ast::types::{Type, TypeKind};
@@ -112,15 +112,6 @@ pub const CATALOG: &[Intrinsic] = &[
         BuiltinFunction::StringLength,
         "public intrinsic val String.length: Int",
         false,
-    ),
-    // `/prism/collections`: `listOf` takes any number of elements, until `vararg` exists.
-    entry(
-        COLLECTIONS,
-        None,
-        "listOf",
-        BuiltinFunction::ListOf,
-        "public intrinsic fun <T> listOf(element: T): List<T>",
-        true,
     ),
     entry(
         COLLECTIONS,

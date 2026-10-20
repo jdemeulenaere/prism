@@ -1,0 +1,4 @@
+// expect: E4004
+fun sum(vararg xs: Int): Int = xs.size
+
+fun f(r: &Int): Int = sum(1, r, "a")

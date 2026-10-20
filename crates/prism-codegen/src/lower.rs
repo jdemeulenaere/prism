@@ -2594,7 +2594,7 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             .clone();
         let layout = self.element_layout(&element)?;
         let pointer = self.pointer();
-        if builtin == BuiltinFunction::ListOf {
+        if builtin == BuiltinFunction::VarargList {
             // Every argument is evaluated, then the buffer allocated once and each moved in.
             let mut values = Vec::with_capacity(arguments.len());
             for argument in arguments {

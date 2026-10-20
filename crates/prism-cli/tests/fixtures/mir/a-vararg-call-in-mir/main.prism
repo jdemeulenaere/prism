@@ -1,0 +1,4 @@
+// expect: ok
+fun sum(vararg xs: Int): Int = xs.size
+
+fun f(a: Int, ys: List<Int>): Int = sum(a, 2) + sum(*ys)

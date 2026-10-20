@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+import /prism/core
+
+fun shout(vararg words: String, end: String = "!") {
+    for (w in words) print(w)
+    println(end)
+}
+
+fun main() {
+    val a = "x".clone()
+    shout(a, "y" + "z", end = "?")
+    shout()
+}

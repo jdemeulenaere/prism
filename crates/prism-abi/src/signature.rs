@@ -387,10 +387,7 @@ impl ExportedSymbol {
                 if let Some(receiver) = receiver {
                     text.push_str(&format!("{}.", receiver.ty));
                 }
-                let params: Vec<String> = params
-                    .iter()
-                    .map(|p| p.signature_text())
-                    .collect();
+                let params: Vec<String> = params.iter().map(|p| p.signature_text()).collect();
                 text.push_str(&format!("{}({}): {}", name, params.join(", "), return_type));
                 Some(text)
             }

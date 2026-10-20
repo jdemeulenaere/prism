@@ -48,14 +48,6 @@ const HEAP: &str = "Heap";
 /// The name of the built-in list type (D2 of `collections`), reserved like [`HEAP`].
 const LIST: &str = "List";
 
-/// The name of the built-in list constructor (D4 of `collections`), which declarations of the
-/// name shadow, like the output built-ins.
-const LIST_OF: &str = "listOf";
-
-/// The help of an element type `listOf` cannot infer (`E4013`, D4 of `collections`).
-const LIST_ELEMENT_HELP: &str =
-    "write the element type, as in 'listOf<Int>()', or annotate the expected type, as in 'val xs: List<Int> = listOf()'";
-
 /// The name the receiver of an extension function is bound to in its body. It is a keyword, so no
 /// user declaration can use it.
 const THIS: &str = "this";
@@ -256,6 +248,9 @@ struct GenericArguments<'a> {
     synthesized: Vec<SynthesizedArgument<'a>>,
     /// Closure arguments whose parameter types mention unsolved unknowns, checked last.
     deferred: Vec<(usize, &'a Expr)>,
+    /// Whether the call passes elements to a vararg whose element type mentions a type
+    /// parameter, which the help for an unsolved one then names.
+    vararg_elements: bool,
 }
 
 /// A call `target.member<type_arguments>(args)` whose target is a value, checked against
@@ -690,6 +685,9 @@ pub struct TypeChecker {
     /// earlier parameters), and the number of closures open around the default. Moving one of
     /// them outside a closure of the default is a move out of a borrow (D11 of `borrowck-moves`).
     default_inputs: Option<(Vec<prism_typed_tree::LocalId>, usize)>,
+    /// The argument lists (by address) whose spreads a call's binding accepted or reported
+    /// (D5 of `vararg`); `infer_call_expr` reports the spreads of any other list.
+    bound_spreads: HashSet<usize>,
     /// Accumulated semantic errors.
     pub errors: Vec<TypeError>,
     /// The annotations naming a type that is neither built in, a type parameter in scope, nor
@@ -769,6 +767,7 @@ impl TypeChecker {
             seen_nominals: HashMap::new(),
             exported_nominals: HashSet::new(),
             default_inputs: None,
+            bound_spreads: HashSet::new(),
             type_parameter_scope: Vec::new(),
             generic_callee: false,
             errors: Vec::new(),
@@ -2121,7 +2120,8 @@ impl TypeChecker {
                         Span::dummy(),
                     )
                     .with_module(abi.module.clone())
-                    .with_type_parameters(type_parameters.clone());
+                    .with_type_parameters(type_parameters.clone())
+                    .with_vararg(params.iter().position(|p| p.is_vararg));
                     // An intrinsic is a declaration the catalog knows (checked in its own
                     // file, D6 of `standard-library`); one it does not know is left out.
                     let intrinsic = (*kind == FunctionKind::Intrinsic).then(|| {
@@ -3031,7 +3031,7 @@ impl TypeChecker {
             .as_ref()
             .map(|c| self.lower_type(&c.ty))
             .filter(|ty| ty != &Type::Error);
-        let params: Vec<Type> = f.params.iter().map(|p| self.lower_type(&p.ty)).collect();
+        let params: Vec<Type> = f.params.iter().map(|p| self.parameter_type(p)).collect();
         let param_names: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
         let defaults = declared_default_inputs(f);
 
@@ -3069,6 +3069,18 @@ impl TypeChecker {
         )
         .with_module(self.module_path.clone())
         .with_context(context)
+        .with_vararg(f.params.iter().position(|p| p.is_vararg))
+    }
+
+    /// The type of parameter `p` in its function's type and body: its written type, or the
+    /// `List<E>` of a vararg's element type `E` (D2 of `vararg`).
+    pub(super) fn parameter_type(&mut self, p: &prism_ast::Param) -> Type {
+        let ty = self.lower_type(&p.ty);
+        if p.is_vararg && ty != Type::Error {
+            Type::List(Box::new(ty))
+        } else {
+            ty
+        }
     }
 
     /// Registers the extension function `f` in the file's extension table (D7 of
@@ -3587,7 +3599,18 @@ impl TypeChecker {
         // before the parameter is bound, so it may refer to earlier parameters only.
         let mut parameters = Vec::new();
         for p in &f.params {
-            let p_ty = self.lower_type(&p.ty);
+            let p_ty = self.parameter_type(p);
+            // A vararg's elements are stored in a list, so they hold no borrow (D2 of
+            // `vararg`).
+            if let (true, Type::List(element)) = (p.is_vararg, &p_ty) {
+                if element.reference_outside_functions().is_some() {
+                    self.errors.push(TypeError::BorrowInTypeArgument {
+                        argument: (**element).clone(),
+                        owner: format!("vararg parameter '{}'", p.name),
+                        span: p.ty.span,
+                    });
+                }
+            }
             // A default value is evaluated as the call's argument, so it is borrowed like one.
             // Its generator only borrows `this` and the earlier parameters (D11 of
             // `borrowck-moves`).
@@ -3670,7 +3693,7 @@ impl TypeChecker {
                         let inferred = Type::Fn {
                             is_compose: f.is_compose,
                             receiver: false,
-                            params: f.params.iter().map(|p| self.lower_type(&p.ty)).collect(),
+                            params: f.params.iter().map(|p| self.parameter_type(p)).collect(),
                             kinds: f.params.iter().map(|p| p.kind).collect(),
                             ret: Box::new(expr_ty),
                         };
@@ -6484,6 +6507,31 @@ impl TypeChecker {
         span: Span,
         expected: Option<Type>,
     ) -> ExpressionId {
+        if !args.iter().any(|arg| arg.is_spread) {
+            return self.infer_call(callee, type_arguments, args, span, expected);
+        }
+        // Spreads are placed by the binding of a callee's arguments (D5 of `vararg`); a call
+        // checked another way (a built-in rule, a constructor) rejects them here.
+        // A call checked again (through `this`, or as a re-check) binds its spreads again; one
+        // checked inside this one with the same arguments marks them for both.
+        let key = args.as_ptr() as usize;
+        self.bound_spreads.remove(&key);
+        let id = self.infer_call(callee, type_arguments, args, span, expected);
+        if !self.bound_spreads.contains(&key) {
+            self.reject_spreads(args);
+        }
+        id
+    }
+
+    /// [`Self::infer_call_expr`] once its spreads are tracked.
+    fn infer_call(
+        &mut self,
+        callee: &Expr,
+        type_arguments: &[prism_ast::types::Type],
+        args: &[CallArg],
+        span: Span,
+        expected: Option<Type>,
+    ) -> ExpressionId {
         // `Heap(...)` always constructs a box: the name is built in, like a type name, which
         // no local value hides (D2 of `heap-boxes`).
         if matches!(&callee.kind, ExprKind::Ident(name) if name == HEAP) {
@@ -6495,13 +6543,10 @@ impl TypeChecker {
         }
         // A call of a rule-typed intrinsic of the library, found as any name is, so a local or
         // parameter of the name shadows it (D6 of `standard-library`): `print` and `println`
-        // take any argument with a text form, and `listOf` any number of elements.
+        // take any argument with a text form, and `remember` its keys.
         match self.intrinsic_callee(callee) {
             Some(builtin @ (BuiltinFunction::Print | BuiltinFunction::PrintLine)) => {
                 return self.infer_output_call(builtin, type_arguments, args, span);
-            }
-            Some(BuiltinFunction::ListOf) => {
-                return self.infer_list_construction(type_arguments, args, expected.as_ref(), span);
             }
             Some(BuiltinFunction::Remember) => {
                 return self.infer_remember(type_arguments, args, expected.as_ref(), span);
@@ -6625,81 +6670,6 @@ impl TypeChecker {
         )
     }
 
-    /// Checks `listOf(e1, ..., en)`, typed as a call of `fun <T> listOf(e1: T, ..., en: T):
-    /// List<T>` with as many parameters as arguments (D4 of `collections`): the element type
-    /// comes from the written type argument, else from an expected `List<T>` (or `List<T>?`),
-    /// else from the joined arguments, each checked against it in a consuming position.
-    /// Named arguments are `E4004`; an element type nothing gives is `E4013`.
-    fn infer_list_construction(
-        &mut self,
-        type_arguments: &[prism_ast::types::Type],
-        args: &[CallArg],
-        expected: Option<&Type>,
-        span: Span,
-    ) -> ExpressionId {
-        if args.iter().any(|arg| arg.name.is_some()) {
-            self.errors.push(TypeError::CallSignatureMismatch {
-                message: format!("'{}' takes no named arguments", LIST_OF),
-                span,
-            });
-            let children = args
-                .iter()
-                .map(|arg| self.with_origin(Origin::Value, |c| c.infer_expr(&arg.value)))
-                .collect();
-            return self.error_node(children, span);
-        }
-        let parameter = BuiltinFunction::list_element_parameter();
-        let element = parameter.as_type();
-        let signature = GenericSignature {
-            owner: format!("'{}'", LIST_OF),
-            type_parameters: vec![parameter],
-            params: vec![element.clone(); args.len()],
-            ret: Type::List(Box::new(element)),
-            receiver: None,
-        };
-        // A list assigned to a nullable list takes its element type from it too.
-        let expected = match expected {
-            Some(Type::Nullable(inner)) if matches!(**inner, Type::List(_)) => Some(&**inner),
-            other => other,
-        };
-        let names: Vec<String> = (1..=args.len()).map(|i| format!("e{}", i)).collect();
-        let defaults = vec![None; args.len()];
-        let checked = self.check_generic_call_arguments(
-            &signature,
-            type_arguments,
-            expected,
-            &names,
-            &defaults,
-            args,
-            span,
-        );
-        match checked {
-            Err(CheckedArguments(children)) => self.error_node(children, span),
-            Ok((
-                NormalizedArguments {
-                    arguments,
-                    evaluation_order,
-                },
-                solution,
-            )) => {
-                let ty = signature.ret.substitute(&solution);
-                let call = Call {
-                    callee: Callee::Builtin(BuiltinFunction::ListOf),
-                    arguments,
-                    parameters: parameter_list(&names, &signature.params),
-                    parameter_kinds: vec![ParameterKind::Plain; signature.params.len()],
-                    type_arguments: solution,
-                    evaluation_order,
-                    has_receiver: false,
-                    has_context: false,
-                    is_compose: false,
-                    operator: None,
-                };
-                self.add(ExpressionKind::Call(call), ty, span)
-            }
-        }
-    }
-
     /// Checks `remember(k1, ..., kn, calculation)`, typed as a call of `fun <T, K1 : Copy, ...,
     /// Kn : Copy> remember(k1: K1, ..., kn: Kn, calculation: () -> T): T` with up to three keys
     /// before the calculation (D12 of `compose-transform`), so a key that is not `Copy` is
@@ -6795,6 +6765,7 @@ impl TypeChecker {
             expected,
             &names,
             &defaults,
+            None,
             args,
             span,
         );
@@ -6942,6 +6913,7 @@ impl TypeChecker {
             expected,
             &names,
             &[None],
+            None,
             args,
             span,
         );
@@ -7008,9 +6980,10 @@ impl TypeChecker {
         }))
     }
 
-    /// The parameter names, defaults and type parameters of the callee of a call: a declared
-    /// function or payload variant named by `callee` (whose node is `callee_node`), or nothing
-    /// for a function-typed value.
+    /// The parameter names, defaults, type parameters and vararg index of the callee of a call:
+    /// a declared function or payload variant named by `callee` (whose node is `callee_node`),
+    /// or nothing for a function-typed value, whose calls never pack (D7 of `vararg`).
+    #[allow(clippy::type_complexity)]
     fn callee_declaration(
         &self,
         callee: &Expr,
@@ -7019,12 +6992,14 @@ impl TypeChecker {
         Vec<String>,
         Vec<Option<prism_ast::DefaultInputs>>,
         Vec<TypeParameter>,
+        Option<usize>,
     ) {
         if let ExprKind::Ident(name) = &callee.kind {
             if let Some(SymbolKind::Function {
                 param_names,
                 defaults,
                 type_parameters,
+                vararg,
                 ..
             }) = self.env.lookup(name).map(|sym| &sym.kind)
             {
@@ -7032,6 +7007,7 @@ impl TypeChecker {
                     param_names.clone(),
                     defaults.clone(),
                     type_parameters.clone(),
+                    *vararg,
                 );
             }
         }
@@ -7042,9 +7018,10 @@ impl TypeChecker {
                 Vec::new(),
                 Vec::new(),
                 self.types.parameters(enum_id).to_vec(),
+                None,
             );
         }
-        (Vec::new(), Vec::new(), Vec::new())
+        (Vec::new(), Vec::new(), Vec::new(), None)
     }
 
     /// The context parameter type of the declared function `callee` names, if it has one.
@@ -7115,7 +7092,7 @@ impl TypeChecker {
                     self.report_compose_context(callee_name, span);
                 }
 
-                let (param_names, defaults, type_parameters) =
+                let (param_names, defaults, type_parameters, vararg) =
                     self.callee_declaration(callee, callee_node);
                 let callee_node = callee_node.expect("a function type comes from a node");
                 // A value with a receiver called without it takes the innermost `this` (D5 of
@@ -7153,8 +7130,14 @@ impl TypeChecker {
                 let has_context = context.is_some();
                 if type_parameters.is_empty() {
                     self.reject_type_arguments(&format!("'{}'", callee), type_arguments);
-                    let checked =
-                        self.check_call_arguments(&params, &param_names, &defaults, args, span);
+                    let checked = self.check_call_arguments(
+                        &params,
+                        &param_names,
+                        &defaults,
+                        vararg,
+                        args,
+                        span,
+                    );
                     return match checked {
                         Err(CheckedArguments(children)) => {
                             let mut all = vec![callee_node];
@@ -7204,14 +7187,22 @@ impl TypeChecker {
                     expected,
                     &param_names,
                     &defaults,
+                    vararg,
                     args,
                     span,
                 );
                 match checked {
+                    // The callee's generic type mentions the callee's own type parameters, so
+                    // the failed call becomes the error node in its place, as a successful one
+                    // becomes the call.
                     Err(CheckedArguments(children)) => {
-                        let mut all = vec![callee_node];
-                        all.extend(children);
-                        self.error_node(all, span)
+                        self.builder.replace(
+                            callee_node,
+                            ExpressionKind::Error { children },
+                            Type::Error,
+                            span,
+                        );
+                        callee_node
                     }
                     Ok((
                         NormalizedArguments {
@@ -7292,14 +7283,32 @@ impl TypeChecker {
         expected: Option<&Type>,
         param_names: &[String],
         defaults: &[Option<prism_ast::DefaultInputs>],
+        vararg: Option<usize>,
         args: &[CallArg],
         span: Span,
     ) -> Result<(NormalizedArguments, Vec<Type>), CheckedArguments> {
-        let mut state = self.start_generic_arguments(signature, type_arguments, expected);
+        let plan = self.plan_vararg(vararg, param_names, args, span)?;
+        // A call with `n` elements is checked as a call with `n` parameters of the element type
+        // in the vararg's place (D4 of `vararg`), so the existing inference gives `T`.
+        let expanded = GenericSignature {
+            owner: signature.owner.clone(),
+            type_parameters: signature.type_parameters.clone(),
+            params: plan.expand(&signature.params, |list| vararg_element(list).clone()),
+            ret: signature.ret.clone(),
+            receiver: signature.receiver.clone(),
+        };
+        let names = plan.expand(param_names, Clone::clone);
+        let defaults = plan.expand(defaults, |_| None);
+        let mut state = self.start_generic_arguments(&expanded, type_arguments, expected);
+        if let VarargPlan::Elements { index, .. } = plan {
+            state.vararg_elements =
+                vararg_element(&signature.params[index]).mentions_parameter_outside_functions();
+        }
         let mut normalized = self.check_call_arguments_with(
-            signature.params.len(),
-            param_names,
-            defaults,
+            expanded.params.len(),
+            &names,
+            &defaults,
+            plan,
             args,
             span,
             &mut |checker, index, value| checker.generic_argument(&mut state, index, value),
@@ -7308,7 +7317,23 @@ impl TypeChecker {
         for (index, node) in fitted {
             normalized.arguments[index] = Argument::Written(node);
         }
+        if let VarargPlan::Elements { index, .. } = plan {
+            let element = vararg_element(&signature.params[index]).substitute(&solution);
+            normalized = self.collapse_vararg(plan, normalized, element, span);
+        }
         Ok((normalized, solution))
+    }
+
+    /// Reports `E4004` for each spread argument of `args`, a call whose callee has no vararg
+    /// parameter (D5 of `vararg`).
+    fn reject_spreads(&mut self, args: &[CallArg]) {
+        self.bound_spreads.insert(args.as_ptr() as usize);
+        for arg in args.iter().filter(|arg| arg.is_spread) {
+            self.errors.push(TypeError::CallSignatureMismatch {
+                message: "a spread '*' passes a list to a vararg parameter, which this callee does not have; reads through references are implicit, so write this argument without '*'".to_string(),
+                span: arg.span,
+            });
+        }
     }
 
     /// Reports `E4020` for type arguments written for `owner`, which is not generic.
@@ -7377,6 +7402,7 @@ impl TypeChecker {
             explicit,
             synthesized: Vec::new(),
             deferred: Vec::new(),
+            vararg_elements: false,
         }
     }
 
@@ -7461,13 +7487,21 @@ impl TypeChecker {
         let (solution, unsolved, _) = state.unknowns.solve();
         if let Some(unsolved) = unsolved {
             let parameter = &state.type_parameters[unsolved.index];
-            let help = if state.owner == format!("'{}'", LIST_OF) {
-                LIST_ELEMENT_HELP
+            // A vararg's element type is most often written as the call's type argument, as in
+            // `listOf<Int>()`.
+            let help = if state.vararg_elements && state.owner.starts_with('\'') {
+                format!(
+                    "write the element type, as in {}<Int>()', or annotate the expected type",
+                    state.owner.trim_end_matches('\'')
+                )
+            } else if state.vararg_elements {
+                "write the element type as a type argument, or annotate the expected type"
+                    .to_string()
             } else {
-                TYPE_ARGUMENTS_HELP
+                TYPE_ARGUMENTS_HELP.to_string()
             };
             self.errors.push(TypeError::CannotInferType {
-                help: Some(help.to_string()),
+                help: Some(help),
                 message: format!(
                     "cannot infer the type argument '{}' of {}",
                     parameter.name, state.owner
@@ -8586,7 +8620,7 @@ impl TypeChecker {
             self.report_compose_context(callee.to_string(), span);
         }
         self.reject_type_arguments(&format!("'{}'", callee), type_arguments);
-        match self.check_call_arguments(&params[1..], &[], &[], args, span) {
+        match self.check_call_arguments(&params[1..], &[], &[], None, args, span) {
             Err(CheckedArguments(children)) => {
                 let mut all = vec![callee_node, receiver_argument];
                 all.extend(children);
@@ -8791,6 +8825,7 @@ impl TypeChecker {
             param_names,
             defaults,
             type_parameters,
+            vararg,
             ..
         } = &extension.symbol.kind
         else {
@@ -8818,12 +8853,13 @@ impl TypeChecker {
         let parameter_kinds: Vec<ParameterKind> = std::iter::once(ParameterKind::Plain)
             .chain(parameter_kinds.iter().copied())
             .collect();
-        let (is_compose, params, param_names, defaults, ret) = (
+        let (is_compose, params, param_names, defaults, ret, vararg) = (
             *is_compose,
             params.clone(),
             param_names.clone(),
             defaults.clone(),
             (**ret).clone(),
+            *vararg,
         );
         // The declared type of `this`, which the call records like every declared parameter type.
         let declared_receiver = extension.receiver.clone();
@@ -8840,7 +8876,7 @@ impl TypeChecker {
         };
         let checked = if type_parameters.is_empty() {
             self.reject_type_arguments(&format!("extension '{}'", member), type_arguments);
-            self.check_call_arguments(&params, &param_names, &defaults, args, span)
+            self.check_call_arguments(&params, &param_names, &defaults, vararg, args, span)
                 .map(|normalized| (normalized, params, ret, Vec::new()))
         } else {
             let signature = GenericSignature {
@@ -8856,6 +8892,7 @@ impl TypeChecker {
                 expected,
                 &param_names,
                 &defaults,
+                vararg,
                 args,
                 span,
             )
@@ -9330,33 +9367,246 @@ impl TypeChecker {
         params: &[Type],
         param_names: &[String],
         defaults: &[Option<prism_ast::DefaultInputs>],
+        vararg: Option<usize>,
         args: &[CallArg],
         span: Span,
     ) -> Result<NormalizedArguments, CheckedArguments> {
-        self.check_call_arguments_with(
-            params.len(),
-            param_names,
-            defaults,
+        let plan = self.plan_vararg(vararg, param_names, args, span)?;
+        let expanded = plan.expand(params, |list| vararg_element(list).clone());
+        let names = plan.expand(param_names, Clone::clone);
+        let defaults = plan.expand(defaults, |_| None);
+        let normalized = self.check_call_arguments_with(
+            expanded.len(),
+            &names,
+            &defaults,
+            plan,
             args,
             span,
             &mut |checker, index, value| {
-                Some(checker.check_argument(value, &params[index], Origin::Argument))
+                Some(checker.check_argument(value, &expanded[index], Origin::Argument))
             },
-        )
+        )?;
+        Ok(match plan {
+            VarargPlan::Elements { index, .. } => {
+                let element = vararg_element(&params[index]).clone();
+                self.collapse_vararg(plan, normalized, element, span)
+            }
+            _ => normalized,
+        })
+    }
+
+    /// Decides how the arguments `args` of a call fill its vararg parameter `vararg`, if the
+    /// callee has one (D3 to D6 of `vararg`): as a spread binding the whole list, or as the
+    /// positional arguments from the vararg's position on. Reports `E4004` for a trailing
+    /// lambda that would be an element, a named vararg argument that is not a spread, a
+    /// spread mixed with elements or another spread, a spread for another parameter, and a
+    /// named argument between two elements.
+    fn plan_vararg(
+        &mut self,
+        vararg: Option<usize>,
+        param_names: &[String],
+        args: &[CallArg],
+        span: Span,
+    ) -> Result<VarargPlan, CheckedArguments> {
+        let Some(index) = vararg else {
+            return Ok(VarargPlan::None);
+        };
+        let name = param_names.get(index).map_or("", String::as_str);
+        let mut problems = Vec::new();
+        if let Some(lambda) = args
+            .last()
+            .filter(|arg| arg.is_trailing_lambda && index + 1 == param_names.len())
+        {
+            problems.push((
+                format!(
+                    "a trailing lambda cannot be an element of the vararg parameter '{}': a vararg's elements are passed inside the parentheses",
+                    name
+                ),
+                lambda.span,
+            ));
+        }
+        // Positional arguments from the vararg's position on are its elements (D3); a named
+        // argument written after one of them splits them.
+        let mut positional = 0;
+        let mut spreads = 0;
+        let mut elements = 0;
+        let mut named_after_element = false;
+        let mut split_element = None;
+        for arg in args.iter().filter(|arg| !arg.is_trailing_lambda) {
+            let in_vararg = match &arg.name {
+                Some(arg_name) => arg_name == name,
+                None => positional >= index,
+            };
+            match &arg.name {
+                Some(_) => {
+                    if in_vararg && !arg.is_spread {
+                        problems.push((
+                            format!(
+                                "a named argument for the vararg parameter '{}' passes a whole list as a spread, as in '{} = *listOf(...)'",
+                                name, name
+                            ),
+                            arg.span,
+                        ));
+                    }
+                    named_after_element |= spreads + elements > 0;
+                }
+                None => {
+                    if in_vararg && named_after_element && split_element.is_none() {
+                        split_element = Some(arg.span);
+                    }
+                    positional += 1;
+                }
+            }
+            if arg.is_spread && in_vararg {
+                spreads += 1;
+            } else if arg.is_spread {
+                problems.push((
+                    format!(
+                        "a spread '*' passes a list to a vararg parameter, here only to '{}'; reads through references are implicit, so write this argument without '*'",
+                        name
+                    ),
+                    arg.span,
+                ));
+            } else if in_vararg && arg.name.is_none() {
+                elements += 1;
+            }
+        }
+        if spreads > 1 || (spreads == 1 && elements > 0) {
+            problems.push((
+                format!(
+                    "a spread is the only argument of the vararg parameter '{}': mixing elements and spreads is not supported, so build one list and spread it",
+                    name
+                ),
+                span,
+            ));
+        }
+        if let Some(element) = split_element {
+            problems.push((
+                format!(
+                    "the elements of the vararg parameter '{}' must be written together, without a named argument between them",
+                    name
+                ),
+                element,
+            ));
+        }
+        if !problems.is_empty() {
+            self.bound_spreads.insert(args.as_ptr() as usize);
+            for (message, span) in problems {
+                self.errors
+                    .push(TypeError::CallSignatureMismatch { message, span });
+            }
+            return Err(CheckedArguments(Vec::new()));
+        }
+        Ok(if spreads == 1 {
+            VarargPlan::Spread
+        } else {
+            VarargPlan::Elements {
+                index,
+                count: elements,
+            }
+        })
+    }
+
+    /// Replaces the vararg's list argument `index..index + count` of `normalized`, the
+    /// elements bound to the expanded parameters, by one built-in list construction of them
+    /// (D13 of `vararg`), evaluated at its first element's position, or, with no element, after
+    /// the written arguments before it.
+    fn collapse_vararg(
+        &mut self,
+        plan: VarargPlan,
+        normalized: NormalizedArguments,
+        element: Type,
+        span: Span,
+    ) -> NormalizedArguments {
+        let VarargPlan::Elements { index, count } = plan else {
+            return normalized;
+        };
+        let NormalizedArguments {
+            mut arguments,
+            evaluation_order,
+        } = normalized;
+        let elements: Vec<Argument> = arguments.drain(index..index + count).collect();
+        let element_span = elements
+            .iter()
+            .filter_map(|argument| match argument {
+                Argument::Written(node) => Some(self.builder.span_of(*node)),
+                Argument::Default(_) => None,
+            })
+            .reduce(Span::merge)
+            .unwrap_or(span);
+        // The elements are stored values of the list, so the construction declares them as its
+        // element type parameter (D8 of `vararg`), as `listOf` did.
+        let parameter = BuiltinFunction::list_element_parameter().as_type();
+        let names: Vec<String> = (1..=count).map(|i| format!("e{}", i)).collect();
+        let construction = Call {
+            callee: Callee::Builtin(BuiltinFunction::VarargList),
+            arguments: elements,
+            parameters: parameter_list(&names, &vec![parameter; count]),
+            parameter_kinds: vec![ParameterKind::Plain; count],
+            type_arguments: vec![element.clone()],
+            evaluation_order: (0..count).collect(),
+            has_receiver: false,
+            has_context: false,
+            is_compose: false,
+            operator: None,
+        };
+        let node = self.add(
+            ExpressionKind::Call(construction),
+            Type::List(Box::new(element)),
+            element_span,
+        );
+        arguments.insert(index, Argument::Written(node));
+        let mut order = Vec::with_capacity(evaluation_order.len() + 1);
+        let mut placed = false;
+        for expanded in evaluation_order {
+            if expanded < index {
+                order.push(expanded);
+            } else if expanded < index + count {
+                if !placed {
+                    order.push(index);
+                    placed = true;
+                }
+            } else {
+                order.push(expanded + 1 - count);
+            }
+        }
+        if !placed {
+            let position = order
+                .iter()
+                .rposition(|&argument| argument < index)
+                .map_or(0, |last| last + 1);
+            order.insert(position, index);
+        }
+        NormalizedArguments {
+            arguments,
+            evaluation_order: order,
+        }
     }
 
     /// [`Self::check_call_arguments`] for a callee with `n_params` parameters, where `check`
     /// checks the argument for parameter `index`, in source order. `check` may defer an
     /// argument by returning `None`, leaving its slot `Argument::Default` for the caller to fill.
+    /// A spread argument is accepted only under the `Spread` plan, which placed it (D5 of
+    /// `vararg`).
+    #[allow(clippy::too_many_arguments)]
     fn check_call_arguments_with<'a>(
         &mut self,
         n_params: usize,
         param_names: &[String],
         defaults: &[Option<prism_ast::DefaultInputs>],
+        plan: VarargPlan,
         args: &'a [CallArg],
         span: Span,
         check: &mut ArgumentChecker<'a, '_>,
     ) -> Result<NormalizedArguments, CheckedArguments> {
+        let vararg_elements = matches!(plan, VarargPlan::Elements { .. });
+        if args.iter().any(|arg| arg.is_spread) {
+            self.bound_spreads.insert(args.as_ptr() as usize);
+            if !plan.accepts_spread() {
+                self.reject_spreads(args);
+                return Err(CheckedArguments(Vec::new()));
+            }
+        }
         let min_args = if defaults.len() == n_params {
             defaults.iter().filter(|d| d.is_none()).count()
         } else {
@@ -9377,8 +9627,11 @@ impl TypeChecker {
         let trailing_lambda_in_order = args
             .last()
             .is_none_or(|last| !last.is_trailing_lambda || args.len() == n_params);
+        // The elements of a vararg fill as many parameters as they are, so a call missing a
+        // later parameter names it rather than counting arguments.
+        let names_missing = vararg_elements && args.len() < min_args;
 
-        if !has_named_args && trailing_lambda_in_order {
+        if !has_named_args && trailing_lambda_in_order && !names_missing {
             if args.len() < min_args || args.len() > n_params {
                 let msg = if min_args == n_params {
                     format!(
@@ -10743,6 +10996,47 @@ impl TypeChecker {
 
 /// The parameters of a callee as a call records them: each with its name, when the callee is a
 /// declared function, and its type.
+/// How a call's arguments fill its callee's vararg parameter (D3 to D5 of `vararg`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VarargPlan {
+    /// The callee has no vararg parameter.
+    None,
+    /// A spread argument passes the whole list to the vararg, bound like any argument.
+    Spread,
+    /// `count` positional elements fill the vararg at `index`: the call is checked with
+    /// `count` parameters of the element type in its place.
+    Elements { index: usize, count: usize },
+}
+
+impl VarargPlan {
+    /// The parameters of a callee as the call binds them: `list` with the vararg's entry
+    /// replaced by `count` entries made by `element` from it, under the `Elements` plan.
+    fn expand<T: Clone>(self, list: &[T], element: impl Fn(&T) -> T) -> Vec<T> {
+        match self {
+            VarargPlan::Elements { index, count } if index < list.len() => {
+                let mut expanded = list[..index].to_vec();
+                expanded.extend(std::iter::repeat_n(element(&list[index]), count));
+                expanded.extend_from_slice(&list[index + 1..]);
+                expanded
+            }
+            _ => list.to_vec(),
+        }
+    }
+
+    /// Whether the binding accepts a spread argument, which only the `Spread` plan places.
+    fn accepts_spread(self) -> bool {
+        self == VarargPlan::Spread
+    }
+}
+
+/// The element type `E` of a vararg parameter's type `List<E>`.
+fn vararg_element(list: &Type) -> &Type {
+    match list {
+        Type::List(element) => element,
+        other => other,
+    }
+}
+
 fn parameter_list(names: &[String], params: &[Type]) -> Vec<(Option<String>, Type)> {
     params
         .iter()

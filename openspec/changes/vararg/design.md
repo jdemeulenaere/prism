@@ -180,6 +180,17 @@ Rejected:
 
 `crates/prism-cli/tests/compile_timing.rs` gains the shape `vararg-calls`: files of 256, 1,024 and 4,096 functions, each calling a generic and a non-generic vararg function with eight elements, a spread and a named argument after the vararg, asserting growth of at most ×4.6 per ×4 under `PRISM_ASSERT_TIMING=1`, as every stage's shapes do.
 
+### Implementation notes (apply)
+
+- **Binding.** `check_call_arguments` and `check_generic_call_arguments` take the callee's vararg index and first compute a `VarargPlan` in one pass over the arguments (`plan_vararg`): `None`, `Spread` (bound like any argument of type `List<E>`) or `Elements { index, count }`, which reports every `E4004` of D3, D5 and D6. Under `Elements` the parameter, name and default lists are expanded to `count` element parameters, the existing binder and inference run unchanged, and `collapse_vararg` replaces the elements by the `varargList` construction, remapping the evaluation order (the list at its first element; an empty list after the last argument before it). The cost stays linear in the arguments.
+- **Spreads elsewhere.** A spread for a callee checked without that binder (a rule-typed intrinsic such as `println`, `Heap(...)`, a struct constructor) is reported once by `infer_call_expr` (`E4004`, "a spread '*' passes a list to a vararg parameter, which this callee does not have; reads through references are implicit"), tracked per argument list.
+- **Diagnostics.** A missing parameter after a vararg is named (`missing required argument 'last'`) rather than counted. The `E4013` help of a vararg call names the callee (`write the element type, as in 'listOf<Int>()'`), replacing the help special-cased on `listOf`'s name. A borrowed element type's `E4022` reads "type argument '&String' of vararg parameter 'names'", with help `vararg names: String`.
+- **ABI hash bytes.** The vararg flag is the parameter-kind byte's value 3 (a vararg is never `escaping` or `attached`), so every existing hash keeps its bytes.
+- **A failed generic call's callee node** (typed with the callee's own type parameters) is now replaced by the call's error node, as a successful call replaces it by the call; a typed-tree validation of the new rejection fixtures found that the old error path left a node mentioning type parameters the caller does not declare (the same held for any generic call with the wrong argument count).
+- **Operator functions** may declare a vararg like any `fun`; no rule was added for them. **(autonomous)** Rejected: rejecting `vararg` on operators (Kotlin allows `operator fun get(vararg ...)`).
+- **Scenarios.** "Reloading a vararg function" was added to `vararg-parameters` (the brief asked for a hot-reload case); "A vararg call in MIR" now says the copy of `_1` goes through a temporary, as every argument copy does.
+- `prism check` plans `prism/collections::listOf<T>` per element type; `prism run` caches and reuses those instances (`cache_tests.rs`, `list_of_instances_are_cached`).
+
 ## Risks / Trade-offs
 
 - **[An allocation per call]** A vararg function that only reads its elements still gets an owned list, allocated by the caller. → As in Kotlin; zero elements allocate nothing; a borrowed-slice form or Tier 2 elision is a follow-up if profiles show it.

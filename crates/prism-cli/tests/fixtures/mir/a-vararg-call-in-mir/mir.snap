@@ -1,0 +1,46 @@
+module main
+fun main::sum(_1: List<Int>): Int @2:1
+  local _0: Int (return)
+  local _1 xs: List<Int> (argument)
+  local _2: &List<Int> (temporary)
+  bb0:
+    storage_live _2 @2:32
+    _2 = &_1 (receiver) @2:32
+    _0 = call builtin size<Int>(move _2) -> bb1 @2:32
+  bb1:
+    storage_dead _2 @2:32
+    drop _1 -> bb2 @2:1
+  bb2:
+    return @2:1
+fun main::f(_1: Int, _2: List<Int>): Int @4:1
+  local _0: Int (return)
+  local _1 a: Int (argument)
+  local _2 ys: List<Int> (argument)
+  local _3: Int (temporary)
+  local _4: List<Int> (temporary)
+  local _5: Int (temporary)
+  local _6: Int (temporary)
+  local _7: List<Int> (temporary)
+  bb0:
+    storage_live _3 @4:37
+    storage_live _4 @4:41
+    storage_live _5 @4:41
+    _5 = copy _1 @4:41
+    _4 = call builtin varargList<Int>(move _5, const 2) -> bb1 @4:41
+  bb1:
+    _3 = call main::sum(move _4) -> bb2 @4:37
+  bb2:
+    storage_live _6 @4:49
+    storage_live _7 @4:54
+    _7 = move _2 @4:54
+    _6 = call main::sum(move _7) -> bb3 @4:49
+  bb3:
+    _0 = move _3 + move _6 @4:37
+    storage_dead _7 @4:37
+    storage_dead _6 @4:37
+    storage_dead _5 @4:37
+    storage_dead _4 @4:37
+    storage_dead _3 @4:37
+    drop _2 -> bb4 @4:1
+  bb4:
+    return @4:1

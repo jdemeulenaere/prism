@@ -1,0 +1,11 @@
+// expect: ok
+import /prism/core
+
+fun runAll(vararg actions: () -> Unit) {
+    for (a in actions) a()
+}
+
+fun f(r: &String) {
+    val n = 7
+    runAll({ println(n) }, { println(1) })
+}

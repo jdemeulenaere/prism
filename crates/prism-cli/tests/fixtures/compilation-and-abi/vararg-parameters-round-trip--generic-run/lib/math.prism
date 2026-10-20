@@ -1,0 +1,13 @@
+package lib
+
+public fun sum(vararg xs: Int): Int {
+    var total = 0
+    for (x in xs) total += x
+    return total
+}
+
+public fun <T> bag(vararg xs: T, last: T): List<T> {
+    var list = xs
+    list.add(last)
+    return list
+}

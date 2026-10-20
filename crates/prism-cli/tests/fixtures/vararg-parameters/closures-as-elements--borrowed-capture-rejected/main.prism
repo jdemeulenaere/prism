@@ -1,0 +1,10 @@
+// expect: E5007
+import /prism/core
+
+fun runAll(vararg actions: () -> Unit) {
+    for (a in actions) a()
+}
+
+fun g(r: &String) {
+    runAll({ println(r) })
+}

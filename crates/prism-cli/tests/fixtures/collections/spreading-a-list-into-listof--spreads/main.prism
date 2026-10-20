@@ -1,0 +1,13 @@
+// expect: ok
+// run: 0
+import /prism/collections
+import /prism/core
+
+fun f(xs: List<Int>): List<Int> = listOf(elements = *xs)
+
+fun g(xs: List<Int>): List<Int> = listOf(*xs)
+
+fun main() {
+    println(f(listOf(1, 2)).size)
+    println(g(listOf(3))[0])
+}

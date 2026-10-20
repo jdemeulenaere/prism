@@ -610,6 +610,22 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 element
             ));
         }
+        // A vararg's elements are stored in a list (D2 of `vararg`).
+        TypeError::BorrowInTypeArgument {
+            owner, argument, ..
+        } if owner.starts_with("vararg parameter ") => {
+            let element = match argument {
+                Type::Reference { inner, .. } => inner.to_string(),
+                other => other.to_string(),
+            };
+            let name = owner
+                .trim_start_matches("vararg parameter ")
+                .trim_matches('\'');
+            out.push_str(&format!(
+                "   = help: a vararg's elements are owned values stored in a list; take the referent type, as in 'vararg {}: {}'\n",
+                name, element
+            ));
+        }
         TypeError::BorrowInTypeArgument { .. } => {
             out.push_str("   = help: type parameters stand for owned values; take '&T' in the signature instead, as in 'fun <T> first(a: &T): &T'\n");
         }
