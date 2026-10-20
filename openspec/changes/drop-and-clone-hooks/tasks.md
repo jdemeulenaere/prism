@@ -38,9 +38,9 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 8. Compile timing, catalog and documents (D16, D17)
 
-- [ ] 8.1 Add the `drop-hooks` and `generic-hook-instances` shapes to `crates/prism-cli/tests/compile_timing.rs` (D17) and run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` on an idle machine; record the times per size in `design.md`. This is the scenario "Many hooked types check in linear time".
+- [x] 8.1 Add the `drop-hooks` and `generic-hook-instances` shapes to `crates/prism-cli/tests/compile_timing.rs` (D17) and run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` on an idle machine; record the times per size in `design.md`. This is the scenario "Many hooked types check in linear time".
 - [x] 8.2 Update `openspec/specs/diagnostics/spec.md`: add `E4036` `DropHookCalled`; extend `E4035` (hook shapes, `Copy` with a drop hook, `Clone` with a drop hook and no clone hook, clone hooks without `: Clone`), `E4017` (taking apart a value with a drop hook), `E4010` (an extension named `drop` on a type with a drop hook), `E4016` (waived by a clone hook) and `E6004` (cycles through hook requests).
-- [ ] 8.3 Run the apply checks of `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `prism check` on every file under `examples/`, `prism fmt --check examples/`, `prism run --check-allocations examples/run/main.prism`, and the headless UI entries with `--check-allocations`.
+- [x] 8.3 Run the apply checks of `openspec/config.yaml`: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `prism check` on every file under `examples/`, `prism fmt --check examples/`, `prism run --check-allocations examples/run/main.prism`, and the headless UI entries with `--check-allocations`.
 
 ## Workflow follow-up
 

@@ -1157,6 +1157,54 @@ fn operator_uses(n: usize) -> String {
     source
 }
 
+/// `n` structs, each with a drop and a clone hook (D17 of `drop-and-clone-hooks`), each
+/// dropped, cloned, held in a list and in a field of another struct, and matched by a borrowing
+/// pattern: the hook declaration checks, the take-apart check and glue calling hooks.
+fn drop_hooks(n: usize) -> String {
+    let mut source = String::from("import /prism/collections\nimport /prism/core\n");
+    for i in 0..n {
+        writeln!(
+            source,
+            "struct H{i} : Clone {{ val id: Int, val name: String }}\n\
+             operator mut fun H{i}.drop() {{ println(id) }}\n\
+             operator fun H{i}.clone(): H{i} = H{i}(id + 1, name.clone())\n\
+             struct W{i} {{ val h: H{i}, val n: Int }}\n\
+             fun f{i}(): Int {{\n\
+             \x20   val a = H{i}({i}, \"x\")\n\
+             \x20   val b = a.clone()\n\
+             \x20   val xs = listOf(b.clone())\n\
+             \x20   val w = W{i}(a, 1)\n\
+             \x20   val r = when (&w.h) {{ H{i}(id = val k, name = _) -> k }}\n\
+             \x20   return r + xs.size\n\
+             }}"
+        )
+        .unwrap();
+    }
+    source.push_str("fun main() { println(f0()) }\n");
+    source
+}
+
+/// One generic struct with a drop and a clone hook, instantiated through a generic function at
+/// `n` struct types (D11 and D17 of `drop-and-clone-hooks`): `n` instances of the function and
+/// `2n` hook instances, requested from the file's summary.
+fn generic_hook_instances(n: usize) -> String {
+    let mut source = String::from(
+        "struct Owned<T> : Clone { val v: T }\n\
+         operator mut fun <T> Owned<T>.drop() {}\n\
+         operator fun <T : Clone> Owned<T>.clone(): Owned<T> = Owned(v.clone())\n\
+         fun <T> hold(x: T) {}\n",
+    );
+    for i in 0..n {
+        writeln!(source, "struct S{i} : Clone {{ val v: Int }}").unwrap();
+    }
+    source.push_str("fun main() {\n");
+    for i in 0..n {
+        writeln!(source, "    hold(Owned(S{i}({i})))").unwrap();
+    }
+    source.push_str("}\n");
+    source
+}
+
 fn shapes() -> Vec<Shape> {
     let shape = |name, compiled, sizes, generate| Shape {
         name,
@@ -1286,6 +1334,13 @@ fn shapes() -> Vec<Shape> {
         ),
         shape("context-overloads", true, SIZES, context_overloads),
         shape("operator-uses", true, SIZES, operator_uses),
+        shape("drop-hooks", true, SIZES, drop_hooks),
+        shape(
+            "generic-hook-instances",
+            true,
+            SIZES,
+            generic_hook_instances,
+        ),
         shape("ui-calls", true, SIZES, ui_calls),
     ]
 }
@@ -1787,8 +1842,9 @@ fn composed_file(source: &str) -> prism_mir::MirFile {
 /// block, as it did, grew x10 per x4 at 4,096 composables, the 360-byte blocks of the composed
 /// file outgrowing the caches. The single cold run of the main benchmark's `inst` column stays
 /// under a millisecond, too little for its growth to be measured reliably.
-const LINEAR_INSTANCES: [(&str, Generator); 3] = [
+const LINEAR_INSTANCES: [(&str, Generator); 4] = [
     ("borrowed-arguments", borrowed_arguments),
+    ("generic-hook-instances", generic_hook_instances),
     ("many-composables", many_composables),
     ("many-instances", many_instances),
 ];
