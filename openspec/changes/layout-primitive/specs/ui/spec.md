@@ -77,7 +77,15 @@ A node of kind `column`, `row`, `box`, `spacer` or `layout` that is measured wit
 - **THEN** stderr is exactly `panic: ui misuse: a layout node has no measure policy` and a newline, and the exit status is 101
 
 ### Requirement: Measure Policies Run as Program Code
-A measure policy MUST run during layout, outside any pass, as a handler of the app's composition: states it creates belong to whatever holds them, a state it writes invalidates its readers, which the frame loop recomposes before the next event, and a runtime error in it ends the program with its location. A policy's reads of states MUST NOT make its node measure again when those states change.
+A measure policy MUST run during layout, outside any pass, as a handler of the app's composition: states it creates belong to whatever holds them, and a runtime error in it ends the program with its location. A state it writes MUST invalidate its readers, which the frame loop recomposes and lays out again before the next event, for at most eight layouts in a row. A policy's reads of states MUST NOT make its node measure again when those states change.
+
+#### Scenario: A policy writes a state
+- **WHEN** a headless app of 400 × 300 composes `Column { Text("width ${width.value}"); Layout(content = { Text("abc") }) { measurables, constraints -> val a = measurables[0].measure(constraints); width.value = a.width; layout(a.width, a.height) { a.place(0, 0) } } }`, with `val width = remember { mutableStateOf(0) }`, under `--check-allocations`, and its script is `dump`
+- **THEN** the dump holds `text #2 0,0 64x20 "width 24"`, and the exit status is 0
+
+#### Scenario: A policy that writes on every layout
+- **WHEN** a headless app of 400 × 300 composes `Column { Layout(content = { Spacer(modifier = Modifier.width(count.value.dp)) }) { measurables, constraints -> count.value = count.value + 1; ... }; Text("count ${count.value}") }`, with `val count = remember { mutableStateOf(1) }`, and its script is `dump`
+- **THEN** the dump holds `spacer #3 0,0 8x0 width(8)` and `text #4 0,0 56x20 "count 8"`: eight layouts ran before the event, and the exit status is 0
 
 #### Scenario: A policy divides by zero
 - **WHEN** a headless app of 400 × 300 composes `Layout(content = { }) { measurables, constraints -> val zero = constraints.minWidth; layout(constraints.maxWidth / zero, 0) { } }` and no script

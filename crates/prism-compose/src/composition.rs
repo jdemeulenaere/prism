@@ -123,6 +123,12 @@ impl Composition {
         run_pass(composition)
     }
 
+    /// Whether a scope of the composition was invalidated since its last pass, so that
+    /// [`Composition::recompose`] may run one; it touches no queue.
+    pub fn has_invalid_scopes(composition: Handle) -> ComposeResult<bool> {
+        with_state(|state| Ok(!live_record(state, composition)?.queue.is_empty()))
+    }
+
     /// Removes every group of the composition and releases them as the end of a pass does,
     /// then releases its root content and its applier, and makes its handle stale.
     pub fn dispose(composition: Handle) -> ComposeResult<()> {

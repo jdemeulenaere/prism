@@ -1,0 +1,5 @@
+window 400x300
+  column #1 0,0 64x40
+    text #2 0,0 64x20 "width 24"
+    layout #3 0,20 24x20
+      text #4 0,20 24x20 "abc"

@@ -90,6 +90,11 @@ pub struct App {
     reloaded: bool,
 }
 
+/// The most layouts one [`App::settle`] runs: a layout whose measure policies invalidated scopes
+/// is followed by the passes and another layout, this many times at most (D24 of
+/// `layout-primitive`).
+const SETTLE_ROUNDS: usize = 8;
+
 /// Runs an app titled `title` of `width` × `height` with the configured host, composing
 /// `content`, which it owns, until the host's events end.
 pub fn run_app(
@@ -333,8 +338,29 @@ impl App {
         self.counters.passes += 1;
     }
 
-    /// Runs passes while a scope is invalid, then lays out if anything is dirty.
+    /// Runs passes while a scope is invalid, then lays out if anything is dirty; and again, up
+    /// to [`SETTLE_ROUNDS`] layouts in all, while a layout's measure policies wrote states that
+    /// invalidated scopes, so that what they wrote is composed and laid out before the next
+    /// event (D24 of `layout-primitive`). What the last round invalidates waits for the next
+    /// iteration of the loop, so that policies that keep writing cannot stall it.
     pub fn settle(&mut self) -> UiResult<()> {
+        for round in 0..SETTLE_ROUNDS {
+            if round > 0 && !Composition::has_invalid_scopes(self.composition)? {
+                break;
+            }
+            let passes = self.recompose()?;
+            if round > 0 && passes == 0 {
+                break;
+            }
+            if !self.lay_out() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Runs passes while a scope is invalid, and gives how many ran.
+    fn recompose(&mut self) -> UiResult<u64> {
         let started = self.now();
         let passes = self.counters.passes;
         while Composition::recompose(self.composition)? {
@@ -347,6 +373,11 @@ impl App {
                 statistics.passes(passes);
             }
         }
+        Ok(passes)
+    }
+
+    /// Lays out if anything is dirty, and gives whether it did.
+    fn lay_out(&mut self) -> bool {
         let started = self.now();
         let laid_out = if std::mem::take(&mut self.reloaded) {
             self.layout.run_after_reload(&*self.measurer)
@@ -357,7 +388,7 @@ impl App {
             self.counters.layouts += 1;
             self.record(Stage::Layout, started);
         }
-        Ok(())
+        laid_out
     }
 
     /// The loop: apply a pending reload, settle, then take and dispatch the next event, until

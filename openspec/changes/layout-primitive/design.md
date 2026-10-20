@@ -670,6 +670,21 @@ Rejected:
 - **A `ui misuse:` error for an out-of-range size or position**, as Compose throws for sizes it cannot represent: it would end programs for a padding no window shows, and `Constraints.Infinity` measured by a `Box` would be an error.
 - **Clamping to a smaller range** (Compose's packed `Constraints` hold less): sizes up to `Int.MAX_VALUE` are Compose's `layout` range.
 
+### D24. A policy's writes are composed before the next event, eight layouts at most (autonomous, review)
+
+Added at review. D14 says that a state a policy writes invalidates its readers, "which the frame loop recomposes before the next event, as after a handler". The loop ran its passes and then the layout, and took the next event: a policy's write was composed only after that event, so a `dump` or a click right after showed or hit the composition from before the write, and a window drew one stale frame first.
+
+- `App::settle` now runs the passes and the layout, then, while that layout's policies invalidated scopes, the passes and the layout again: a policy publishing a measured size (`width.value = a.width`) is composed and laid out before the next event.
+- At most eight layouts run in one settle. What the eighth invalidates waits for the next iteration of the loop, so a policy that writes a new value on every layout, which Compose would recompose on every frame, cannot stall the loop: input and frames still get through.
+
+**Compile-time cost.** None. **Run-time cost.** One more check for invalid scopes after a layout that ran; nothing when no policy wrote.
+
+Rejected:
+
+- **Composing at the next iteration** (as before, and as Compose recomposes in the next frame): a stale frame or dump after each write, against D14's text.
+- **No bound**: a policy whose writes keep changing its layout would hang the app.
+- **A runtime error past the bound**: such a policy is a program that animates through its layout, not a misuse to end.
+
 ## Risks / Trade-offs
 
 - **[Re-entrancy in `prism-ui`]** The pass calls program code that calls the pass. → No borrow of the thread's UI state is held across a call (D14). Frames are a stack, and every entry call checks the innermost frame (D13). The randomized incremental-versus-full test keeps running through Rust policies (D17).

@@ -1,0 +1,5 @@
+window 400x300
+  column #1 0,0 56x20
+    layout #2 0,0 8x0
+      spacer #3 0,0 8x0 width(8)
+    text #4 0,0 56x20 "count 8"
