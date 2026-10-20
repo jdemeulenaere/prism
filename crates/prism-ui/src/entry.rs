@@ -11,7 +11,7 @@ use crate::app::run_app;
 use crate::error::{raise, UiResult};
 use crate::handle::{HandlerId, NodeId};
 use crate::handlers::HandlerKind;
-use crate::layout;
+use crate::layout::{self, Position};
 use crate::modifier::ModifierMirror;
 use crate::runtime::{
     AlignmentMirror, ConstraintsMirror, LinePropertiesMirror, MeasuredChildMirror,
@@ -162,11 +162,14 @@ pub extern "C" fn prism_ui_set_measure_policy(node: u64, policy: u64) {
 pub unsafe extern "C" fn prism_ui_measure(
     result: *mut PlaceableMirror,
     node: u64,
+    element: u64,
     constraints: *const ConstraintsMirror,
 ) {
-    let size = or_raise(layout::measure_child(NodeId(node), (*constraints).into()));
+    let position = Position::of_words(node, element);
+    let size = or_raise(layout::measure_position(position, (*constraints).into()));
     result.write(PlaceableMirror {
         node,
+        element,
         width: size.width,
         height: size.height,
     });
@@ -188,22 +191,39 @@ pub unsafe extern "C" fn prism_ui_measured(result: *mut MeasuredChildMirror, nod
     });
 }
 
-/// The start of `layout(width, height) { ... }` in the policy of `node`.
+/// The start of `layout(width, height) { ... }` in the measurement of `node` from `element`.
 #[no_mangle]
-pub extern "C" fn prism_ui_begin_placement(node: u64, width: i64, height: i64) {
-    or_raise(layout::begin_placement(NodeId(node), width, height))
+pub extern "C" fn prism_ui_begin_placement(node: u64, element: u64, width: i64, height: i64) {
+    or_raise(layout::begin_placement(
+        Position::of_words(node, element),
+        width,
+        height,
+    ))
 }
 
 /// The end of `layout`'s placement block.
 #[no_mangle]
-pub extern "C" fn prism_ui_end_placement(node: u64) {
-    or_raise(layout::end_placement(NodeId(node)))
+pub extern "C" fn prism_ui_end_placement(node: u64, element: u64) {
+    or_raise(layout::end_placement(Position::of_words(node, element)))
 }
 
-/// `Placeable.place(x, y)` in the placement block of `parent`'s policy.
+/// `Placeable.place(x, y)` in the placement block of the measurement of `parent` from
+/// `parent_element`.
 #[no_mangle]
-pub extern "C" fn prism_ui_place(parent: u64, child: u64, x: i64, y: i64) {
-    or_raise(layout::place(NodeId(parent), NodeId(child), x, y))
+pub extern "C" fn prism_ui_place(
+    parent: u64,
+    parent_element: u64,
+    child: u64,
+    child_element: u64,
+    x: i64,
+    y: i64,
+) {
+    or_raise(layout::place(
+        Position::of_words(parent, parent_element),
+        Position::of_words(child, child_element),
+        x,
+        y,
+    ))
 }
 
 /// A row's or column's arrangement and alignment, as its policy reads them in one call.
@@ -460,7 +480,7 @@ mod tests {
                     crate::geometry::Constraints::up_to(100, 100),
                 );
                 let mut placeable = std::mem::MaybeUninit::uninit();
-                unsafe { prism_ui_measure(placeable.as_mut_ptr(), target.get(), &constraints) };
+                unsafe { prism_ui_measure(placeable.as_mut_ptr(), target.get(), 0, &constraints) };
             });
             let handler = setters::register(HandlerKind::Click, probe).unwrap();
             let chain = ModifierMirror::encode(&[
@@ -502,7 +522,7 @@ mod tests {
         b.set_policy(
             node,
             probe_policy(|_, measurables, c| {
-                crate::layout::measure_child(NodeId(measurables[0]), c).unwrap()
+                crate::layout::measure_child(NodeId(measurables[0].node), c).unwrap()
             }),
         );
         b.lay_out();

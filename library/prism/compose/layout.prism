@@ -295,6 +295,7 @@ private fun MeasureScope.measureLine(
             }
             val placeable = prism_ui_measure(
                 measurable.node,
+                0,
                 oriented(vertical, 0, remaining, crossMaximum),
             )
             val main = if (vertical) placeable.height else placeable.width
@@ -324,6 +325,7 @@ private fun MeasureScope.measureLine(
                 val mainMinimum = if (data.fill) share else 0
                 val placeable = prism_ui_measure(
                     measurable.node,
+                    0,
                     oriented(vertical, mainMinimum, share, crossMaximum),
                 )
                 val main = if (vertical) placeable.height else placeable.width
@@ -351,11 +353,11 @@ private fun MeasureScope.measureLine(
             val code = if (placeable.alignment >= 0) placeable.alignment else alignment
             if (vertical) {
                 val along = horizontalOffset(code, crossSize - placeable.width)
-                prism_ui_place(node, child, along, position)
+                prism_ui_place(node, element, child, 0, along, position)
                 position += placeable.height + spacing + gap
             } else {
                 val along = verticalOffset(code, crossSize - placeable.height)
-                prism_ui_place(node, child, position, along)
+                prism_ui_place(node, element, child, 0, position, along)
                 position += placeable.width + spacing + gap
             }
         }
@@ -373,7 +375,7 @@ package fun MeasureScope.measureBox(
     var largestWidth = 0
     var largestHeight = 0
     for (measurable in measurables) {
-        val placeable = prism_ui_measure(measurable.node, loose)
+        val placeable = prism_ui_measure(measurable.node, 0, loose)
         if (placeable.width > largestWidth) {
             largestWidth = placeable.width
         }
@@ -394,7 +396,9 @@ package fun MeasureScope.measureBox(
             val code = if (placeable.alignment >= 0) placeable.alignment else alignment
             prism_ui_place(
                 node,
+                element,
                 child,
+                0,
                 horizontalOffset(code, width - placeable.width),
                 verticalOffset(code, height - placeable.height),
             )

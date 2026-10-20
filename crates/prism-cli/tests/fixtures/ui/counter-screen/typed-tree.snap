@@ -89,12 +89,15 @@ import struct prism/compose/ui::HandlerId : Copy
   field 0 val word: Int
 import struct prism/compose/ui::Measurable : Copy
   field 0 val node: Int
+  field 1 val element: Int
 import struct prism/compose/ui::MeasureResult : Copy
   field 0 val width: Int
   field 1 val height: Int
   field 2 val node: Int
+  field 3 val element: Int
 import struct prism/compose/ui::MeasureScope : Copy
   field 0 val node: Int
+  field 1 val element: Int
 import struct prism/compose/ui::MeasuredChild : Copy
   field 0 val width: Int
   field 1 val height: Int
@@ -133,10 +136,12 @@ import struct prism/compose/ui::ParentData : Copy
   field 2 val fill: Bool
 import struct prism/compose/ui::Placeable : Copy
   field 0 val node: Int
-  field 1 val width: Int
-  field 2 val height: Int
+  field 1 val element: Int
+  field 2 val width: Int
+  field 3 val height: Int
 import struct prism/compose/ui::PlacementScope : Copy
   field 0 val node: Int
+  field 1 val element: Int
 import struct prism/compose/ui::Role : Copy
   field 0 val code: Int
 import struct prism/compose/ui::Roles : Copy

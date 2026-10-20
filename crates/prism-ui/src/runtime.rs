@@ -36,11 +36,13 @@ pub unsafe fn call_with_string(function: &FunctionValue, value: PrismString) {
     function.call_with_string(value)
 }
 
-/// `MeasureScope` of `/prism/compose/ui` as generated code lays it out: its node's word.
+/// `MeasureScope` of `/prism/compose/ui` as generated code lays it out: its node's word and the
+/// chain position it measures from (D5 of `layout-in-prism`).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MeasureScopeMirror {
     pub node: u64,
+    pub element: u64,
 }
 
 /// `Constraints` of `/prism/compose/ui`: `minWidth`, `maxWidth`, `minHeight`, `maxHeight`.
@@ -75,29 +77,32 @@ impl From<ConstraintsMirror> for Constraints {
     }
 }
 
-/// `Measurable`: its node's word, as the lent buffer holds it.
+/// `Measurable`: its node's word and chain position, as the lent buffer holds it.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MeasurableMirror {
     pub node: u64,
+    pub element: u64,
 }
 
-/// `Placeable`: `node`, `width` and `height`.
+/// `Placeable`: `node`, `element`, `width` and `height`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlaceableMirror {
     pub node: u64,
+    pub element: u64,
     pub width: i64,
     pub height: i64,
 }
 
-/// `MeasureResult`: `width`, `height` and `node`.
+/// `MeasureResult`: `width`, `height`, `node` and `element`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MeasureResultMirror {
     pub width: i64,
     pub height: i64,
     pub node: u64,
+    pub element: u64,
 }
 
 /// `LineProperties` of `/prism/compose/layout`: a row's or column's arrangement (`code` and

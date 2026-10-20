@@ -69,10 +69,38 @@ pub struct Layout {
     pub measured: usize,
 }
 
-/// One measurement frame: a policy running for `node` (D6).
+/// A position in a node's chain, as `Measurable`, `Placeable`, `MeasureScope`, `PlacementScope`
+/// and `MeasureResult` name it (D5 of `layout-in-prism`): a child's measurable is its node at
+/// element 0, and the content's policy measures from the chain's length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+    pub node: NodeId,
+    pub element: usize,
+}
+
+impl Position {
+    /// A child, as its parent's policy measures and places it: its whole chain.
+    pub fn child(node: NodeId) -> Position {
+        Position { node, element: 0 }
+    }
+
+    /// The position of the words `node` and `element` an entry point was given; an element
+    /// outside a chain names no position any frame measures.
+    pub fn of_words(node: u64, element: u64) -> Position {
+        Position {
+            node: NodeId(node),
+            element: usize::try_from(element).unwrap_or(usize::MAX),
+        }
+    }
+}
+
+/// One measurement frame: a policy running for `node`'s content, at its chain's length (D6 of
+/// `layout-primitive`, D5 of `layout-in-prism`).
 #[derive(Debug, Clone, Copy)]
 struct Frame {
     node: NodeId,
+    /// The chain position the frame measures from.
+    element: usize,
     stamp: u64,
     /// The content's origin in the node, where `place(0, 0)` puts a child.
     origin: (i64, i64),
@@ -308,6 +336,8 @@ impl Fold {
 /// A policy call a measurement makes once the state is let go.
 struct PolicyCall {
     function: FunctionValue,
+    /// The chain position of the content.
+    element: usize,
     list: PrismList,
     constraints: Constraints,
     composition: Option<Handle>,
@@ -629,6 +659,7 @@ fn prepare_policy(
         .policy
         .and_then(|policy| handlers.function(policy))
         .ok_or(NO_POLICY)?;
+    let element = node.chain.len();
     let depth = layout.frames.len();
     if layout.buffers.len() == depth {
         layout.buffers.push(Vec::new());
@@ -638,11 +669,14 @@ fn prepare_policy(
     let mut child = node.first_child;
     let mut all_placed_before = true;
     while let Some(current) = child {
+        // A `Measurable`: the child's word and element 0.
         buffer.push(current.word());
+        buffer.push(0);
         let node = tree.node(current).unwrap();
         all_placed_before &= node.placed;
         child = node.next;
     }
+    let children = buffer.len() / 2;
     // The list header over the buffer: never null, as an empty list's pointer is its element
     // alignment.
     let list = PrismList {
@@ -651,24 +685,26 @@ fn prepare_policy(
         } else {
             buffer.as_mut_ptr().cast()
         },
-        size: buffer.len(),
-        capacity: buffer.len(),
+        size: children,
+        capacity: children,
     };
     layout.stamps += 1;
     layout.frames.push(Frame {
         node: id,
+        element,
         stamp: layout.stamps,
         origin,
         layout_called: false,
         placing: false,
         size: Size::ZERO,
-        children: buffer.len(),
+        children,
         measured: 0,
         placed: 0,
         all_placed_before,
     });
     Ok(PolicyCall {
         function,
+        element,
         list,
         constraints: c,
         composition: layout.composition,
@@ -678,7 +714,10 @@ fn prepare_policy(
 /// Calls a node's policy with no state borrowed, as a handler of the app's composition when an
 /// app runs (D14).
 fn call_policy(id: NodeId, call: &PolicyCall) {
-    let scope = MeasureScopeMirror { node: id.word() };
+    let scope = MeasureScopeMirror {
+        node: id.word(),
+        element: call.element as u64,
+    };
     let constraints = ConstraintsMirror::from(call.constraints);
     let run = || {
         // SAFETY: the node claimed the entry as a measure policy, of the policy's function
@@ -737,9 +776,19 @@ fn valid(c: Constraints) -> bool {
 /// `Measurable.measure(constraints)` (D6): measures `child`, a child of the node whose policy
 /// is running innermost, at most once in that run, and gives its size.
 pub fn measure_child(child: NodeId, constraints: Constraints) -> UiResult<Size> {
+    measure_position(Position::child(child), constraints)
+}
+
+/// `Measurable.measure(constraints)` of the measurable naming `position` (D5 of
+/// `layout-in-prism`): a child of the node whose policy is running innermost, at element 0.
+pub fn measure_position(position: Position, constraints: Constraints) -> UiResult<Size> {
+    let child = position.node;
     let mut fold = Fold::new();
     let step = with_state(|state| {
         let frame = *state.layout.frames.last().ok_or(MEASURED_OUTSIDE)?;
+        if position.element != 0 {
+            return Err(MEASURED_OUTSIDE);
+        }
         let node = state.tree.node_mut(child).ok_or(MEASURED_OUTSIDE)?;
         if node.parent != Some(frame.node) {
             return Err(MEASURED_OUTSIDE);
@@ -770,11 +819,11 @@ pub fn measured(child: NodeId) -> UiResult<Size> {
     })
 }
 
-/// The start of `layout(width, height) { ... }` in the policy of `node` (D6).
-pub fn begin_placement(node: NodeId, width: i64, height: i64) -> UiResult<()> {
+/// The start of `layout(width, height) { ... }` in the measurement `scope` names (D6).
+pub fn begin_placement(scope: Position, width: i64, height: i64) -> UiResult<()> {
     with_state(|state| {
         let frame = state.layout.frames.last_mut().ok_or(LAYOUT_OUTSIDE)?;
-        if frame.node != node {
+        if frame.node != scope.node || frame.element != scope.element {
             return Err(LAYOUT_OUTSIDE);
         }
         if frame.layout_called {
@@ -788,10 +837,10 @@ pub fn begin_placement(node: NodeId, width: i64, height: i64) -> UiResult<()> {
 }
 
 /// The end of `layout`'s placement block.
-pub fn end_placement(node: NodeId) -> UiResult<()> {
+pub fn end_placement(scope: Position) -> UiResult<()> {
     with_state(|state| {
         let frame = state.layout.frames.last_mut().ok_or(LAYOUT_OUTSIDE)?;
-        if frame.node != node {
+        if frame.node != scope.node || frame.element != scope.element {
             return Err(LAYOUT_OUTSIDE);
         }
         frame.placing = false;
@@ -799,14 +848,18 @@ pub fn end_placement(node: NodeId) -> UiResult<()> {
     })
 }
 
-/// `Placeable.place(x, y)`: places `child`, measured in the running frame of `parent`, at
-/// `(x, y)` from the content's top-left corner, while that frame is placing.
-pub fn place(parent: NodeId, child: NodeId, x: i64, y: i64) -> UiResult<()> {
+/// `Placeable.place(x, y)` in the placement block of `scope`: places `placeable`, a child
+/// measured in the running frame of `scope`'s node, at `(x, y)` from the content's top-left
+/// corner, while that frame is placing.
+pub fn place(scope: Position, placeable: Position, x: i64, y: i64) -> UiResult<()> {
+    let (parent, child) = (scope.node, placeable.node);
     with_state(|state| {
         let State { tree, layout, .. } = state;
         let frame = layout.frames.last_mut().ok_or(PLACED_OUTSIDE)?;
         let node = tree.node_mut(child).ok_or(PLACED_OUTSIDE)?;
         if frame.node != parent
+            || frame.element != scope.element
+            || placeable.element != 0
             || !frame.placing
             || node.parent != Some(parent)
             || node.stamp != frame.stamp
@@ -888,6 +941,7 @@ pub fn absolute_bounds(tree: &crate::tree::UiTree, id: NodeId) -> Rect {
 mod tests {
     use super::*;
     use crate::properties::{Arrangement, Shape};
+    use crate::runtime::MeasurableMirror;
     use crate::test_support::*;
     use crate::text::FixedAdvanceMetrics;
     use std::cell::Cell;
@@ -1420,13 +1474,14 @@ mod tests {
         let record = seen.clone();
         b.set_policy(
             node,
-            probe_policy(move |node, measurables, c| {
+            probe_policy(move |scope, measurables, c| {
                 let mut seen = record.borrow_mut();
                 let mut note = |result: Result<(), UiError>| {
                     seen.push(result.map_err(|error| error.message()).err());
                 };
-                let child = NodeId(measurables[0]);
-                note(place(node, child, 0, 0));
+                let child = NodeId(measurables[0].node);
+                let placeable = Position::child(child);
+                note(place(scope, placeable, 0, 0));
                 note(measured(child).map(|_| ()));
                 let invalid = Constraints {
                     min_width: 10,
@@ -1439,13 +1494,13 @@ mod tests {
                 note(measure_child(child, negative).map(|_| ()));
                 note(measure_child(child, c).map(|_| ()));
                 note(measure_child(child, c).map(|_| ()));
-                note(begin_placement(child, 0, 0));
-                note(place(node, child, 0, 0));
-                note(begin_placement(node, 8, 20));
-                note(begin_placement(node, 1, 1));
-                note(place(node, child, 0, 0));
-                note(end_placement(node));
-                note(place(node, child, 0, 0));
+                note(begin_placement(placeable, 0, 0));
+                note(place(scope, placeable, 0, 0));
+                note(begin_placement(scope, 8, 20));
+                note(begin_placement(scope, 1, 1));
+                note(place(scope, placeable, 0, 0));
+                note(end_placement(scope));
+                note(place(scope, placeable, 0, 0));
                 Size::new(8, 20)
             }),
         );
@@ -1482,11 +1537,15 @@ mod tests {
                 measure_child(text, Constraints::up_to(10, 10)),
                 Err(crate::error::MEASURED_OUTSIDE)
             );
+            let scope = Position { node, element: 0 };
             assert_eq!(
-                begin_placement(node, 0, 0),
+                begin_placement(scope, 0, 0),
                 Err(crate::error::LAYOUT_OUTSIDE)
             );
-            assert_eq!(place(node, text, 0, 0), Err(crate::error::PLACED_OUTSIDE));
+            assert_eq!(
+                place(scope, Position::child(text), 0, 0),
+                Err(crate::error::PLACED_OUTSIDE)
+            );
         });
     }
 
@@ -1506,25 +1565,25 @@ mod tests {
         let checks = std::rc::Rc::new(Cell::new(0));
         let counted = checks.clone();
         // Every level stacks its children vertically; the middle copies its list first.
-        let stack = move |node: NodeId, measurables: &[u64], c: Constraints| {
+        let stack = move |scope: Position, measurables: &[MeasurableMirror], c: Constraints| {
             let copy = measurables.to_vec();
             let mut sizes = Vec::new();
-            for &child in &copy {
-                sizes.push(measure_child(NodeId(child), c.loosened()).unwrap());
+            for child in &copy {
+                sizes.push(measure_child(NodeId(child.node), c.loosened()).unwrap());
             }
-            if node == middle {
+            if scope.node == middle {
                 assert_eq!(measurables, copy.as_slice(), "the lent list stays");
                 counted.set(counted.get() + 1);
             }
             let width = sizes.iter().map(|size| size.width).max().unwrap_or(0);
             let height = sizes.iter().map(|size| size.height).sum();
-            begin_placement(node, width, height).unwrap();
+            begin_placement(scope, width, height).unwrap();
             let mut y = 0;
-            for (&child, size) in copy.iter().zip(&sizes) {
-                place(node, NodeId(child), 0, y).unwrap();
+            for (child, size) in copy.iter().zip(&sizes) {
+                place(scope, Position::child(NodeId(child.node)), 0, y).unwrap();
                 y += size.height;
             }
-            end_placement(node).unwrap();
+            end_placement(scope).unwrap();
             Size::new(width, height)
         };
         let policy = probe_policy(stack);

@@ -29,11 +29,11 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement la
 
 ## 2. Positions in a chain (D5)
 
-- [ ] 2.1 Add `package val element: Int` to `Measurable`, `Placeable`, `MeasureScope`, `PlacementScope` and `MeasureResult` in `library/prism/compose/ui.prism`.
+- [x] 2.1 Add `package val element: Int` to `Measurable`, `Placeable`, `MeasureScope`, `PlacementScope` and `MeasureResult` in `library/prism/compose/ui.prism`.
   - The two-word measurables and the mirrors in `crates/prism-ui/src/runtime.rs` follow, with the mirror test of `library_tests.rs` updated.
   - Frames become `(node, element)`, and the entry checks of `entry.rs` compare both.
   - A child's measurable is `(child, 0)`. The content's position is the chain's length.
-- [ ] 2.2 Keep every `prism-ui` test and every `ui` fixture passing unchanged. Verify with `cargo test -p prism-ui -p prism-cli --test fixture_tests --test library_tests`.
+- [x] 2.2 Keep every `prism-ui` test and every `ui` fixture passing unchanged. Verify with `cargo test -p prism-ui -p prism-cli --test fixture_tests --test library_tests`.
 
 ## 3. Steps in the native fold (D1, D6, D7, D10, D11)
 

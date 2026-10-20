@@ -25,11 +25,13 @@ use crate::error::{raise, UiResult};
 use crate::geometry::{Constraints, Size, UNBOUNDED};
 use crate::handle::{HandlerId, NodeId};
 use crate::handlers::{release_functions, HandlerKind, HandlerTable};
-use crate::layout::{self, Layout};
+use crate::layout::{self, Layout, Position};
 use crate::modifier::Element;
 use crate::node::NodeKind;
 use crate::properties::{Alignment, Arrangement, Color, Role, Shape, TextStyle};
-use crate::runtime::{ConstraintsMirror, MeasureResultMirror, MeasureScopeMirror};
+use crate::runtime::{
+    ConstraintsMirror, MeasurableMirror, MeasureResultMirror, MeasureScopeMirror,
+};
 use crate::text::TextMeasurer;
 use crate::tree::UiTree;
 use prism_runtime::{
@@ -47,8 +49,8 @@ thread_local! {
     static PROBE: RefCell<Option<ProbeBody>> = const { RefCell::new(None) };
 }
 
-/// The body of a [`probe_policy`].
-type ProbeBody = std::rc::Rc<dyn Fn(NodeId, &[u64], Constraints) -> Size>;
+/// The body of a [`probe_policy`]: its scope, its lent measurables and its constraints.
+type ProbeBody = std::rc::Rc<dyn Fn(Position, &[MeasurableMirror], Constraints) -> Size>;
 
 /// Forgets the drops recorded on this thread.
 pub fn reset_drops() {
@@ -577,10 +579,12 @@ pub fn policy_calls() -> u64 {
     POLICY_CALLS.with(Cell::get)
 }
 
-/// A policy running `body` on this thread with its node, its measurables and its constraints:
-/// `body` calls the layout API itself, `layout` included, and gives the size it gave. One body
-/// per thread, the last given, which may branch on the node for nested layouts.
-pub fn probe_policy(body: impl Fn(NodeId, &[u64], Constraints) -> Size + 'static) -> FunctionValue {
+/// A policy running `body` on this thread with its scope, its lent measurables and its
+/// constraints: `body` calls the layout API itself, `layout` included, and gives the size it
+/// gave. One body per thread, the last given, which may branch on the node for nested layouts.
+pub fn probe_policy(
+    body: impl Fn(Position, &[MeasurableMirror], Constraints) -> Size + 'static,
+) -> FunctionValue {
     PROBE.with(|probe| *probe.borrow_mut() = Some(std::rc::Rc::new(body)));
     capture_free(&PROBE_SLOT, &PROBE_DESCRIPTOR, probe_policy_code)
 }
@@ -598,28 +602,28 @@ unsafe extern "C" fn probe_policy_code(
     list: *const PrismList,
     constraints: *const ConstraintsMirror,
 ) {
-    let (node, measurables, c) = policy_arguments(scope, list, constraints);
+    let (scope, measurables, c) = policy_arguments(scope, list, constraints);
     let body = PROBE
         .with(|probe| probe.borrow().clone())
         .expect("a probe policy's body");
-    write_result(result, node, body(node, measurables, c));
+    write_result(result, scope, body(scope, measurables, c));
 }
 
 /// A policy that measures every child under its constraints but places only the first, at the
 /// content's top-left corner, as large as it: a layout hiding the rest (D7 of
 /// `layout-primitive`).
 pub fn first_only_policy() -> FunctionValue {
-    probe_policy(|node, measurables, c| {
+    probe_policy(|scope, measurables, c| {
         let sizes: Vec<Size> = measurables
             .iter()
-            .map(|&child| layout::measure_child(NodeId(child), c).unwrap())
+            .map(|child| layout::measure_child(NodeId(child.node), c).unwrap())
             .collect();
         let size = sizes.first().copied().unwrap_or(Size::ZERO);
-        layout::begin_placement(node, size.width, size.height).unwrap();
-        if let Some(&first) = measurables.first() {
-            layout::place(node, NodeId(first), 0, 0).unwrap();
+        layout::begin_placement(scope, size.width, size.height).unwrap();
+        if let Some(first) = measurables.first() {
+            layout::place(scope, Position::child(NodeId(first.node)), 0, 0).unwrap();
         }
-        layout::end_placement(node).unwrap();
+        layout::end_placement(scope).unwrap();
         size
     })
 }
@@ -674,7 +678,7 @@ fn or_raise<T>(result: UiResult<T>) -> T {
     result.unwrap_or_else(|error| raise(&error))
 }
 
-/// The node, measurables and constraints a policy is called with.
+/// The scope, measurables and constraints a policy is called with.
 ///
 /// # Safety
 ///
@@ -683,22 +687,25 @@ pub unsafe fn policy_arguments<'a>(
     scope: *const MeasureScopeMirror,
     list: *const PrismList,
     constraints: *const ConstraintsMirror,
-) -> (NodeId, &'a [u64], Constraints) {
+) -> (Position, &'a [MeasurableMirror], Constraints) {
     let list = &*list;
-    let measurables = std::slice::from_raw_parts(list.pointer as *const u64, list.size);
-    (NodeId((*scope).node), measurables, (*constraints).into())
+    let measurables =
+        std::slice::from_raw_parts(list.pointer as *const MeasurableMirror, list.size);
+    let scope = Position::of_words((*scope).node, (*scope).element);
+    (scope, measurables, (*constraints).into())
 }
 
-/// Writes the result of `layout` for `node`, of `size`.
+/// Writes the result of `layout` in `scope`, of `size`.
 ///
 /// # Safety
 ///
 /// `result` must be the policy's result address.
-pub unsafe fn write_result(result: *mut MeasureResultMirror, node: NodeId, size: Size) {
+pub unsafe fn write_result(result: *mut MeasureResultMirror, scope: Position, size: Size) {
     result.write(MeasureResultMirror {
         width: size.width,
         height: size.height,
-        node: node.word(),
+        node: scope.node.word(),
+        element: scope.element as u64,
     });
 }
 
@@ -709,8 +716,8 @@ unsafe extern "C" fn column_policy(
     list: *const PrismList,
     constraints: *const ConstraintsMirror,
 ) {
-    let (node, measurables, c) = policy_arguments(scope, list, constraints);
-    write_result(result, node, measure_line(node, measurables, c, true));
+    let (scope, measurables, c) = policy_arguments(scope, list, constraints);
+    write_result(result, scope, measure_line(scope, measurables, c, true));
 }
 
 unsafe extern "C" fn row_policy(
@@ -720,8 +727,8 @@ unsafe extern "C" fn row_policy(
     list: *const PrismList,
     constraints: *const ConstraintsMirror,
 ) {
-    let (node, measurables, c) = policy_arguments(scope, list, constraints);
-    write_result(result, node, measure_line(node, measurables, c, false));
+    let (scope, measurables, c) = policy_arguments(scope, list, constraints);
+    write_result(result, scope, measure_line(scope, measurables, c, false));
 }
 
 unsafe extern "C" fn box_policy(
@@ -731,8 +738,8 @@ unsafe extern "C" fn box_policy(
     list: *const PrismList,
     constraints: *const ConstraintsMirror,
 ) {
-    let (node, measurables, c) = policy_arguments(scope, list, constraints);
-    write_result(result, node, measure_box(node, measurables, c));
+    let (scope, measurables, c) = policy_arguments(scope, list, constraints);
+    write_result(result, scope, measure_box(scope, measurables, c));
 }
 
 unsafe extern "C" fn spacer_policy(
@@ -742,11 +749,11 @@ unsafe extern "C" fn spacer_policy(
     list: *const PrismList,
     constraints: *const ConstraintsMirror,
 ) {
-    let (node, _, c) = policy_arguments(scope, list, constraints);
+    let (scope, _, c) = policy_arguments(scope, list, constraints);
     let size = c.constrain(Size::ZERO);
-    or_raise(layout::begin_placement(node, size.width, size.height));
-    or_raise(layout::end_placement(node));
-    write_result(result, node, size);
+    or_raise(layout::begin_placement(scope, size.width, size.height));
+    or_raise(layout::end_placement(scope));
+    write_result(result, scope, size);
 }
 
 unsafe extern "C" fn counting_policy_code(
@@ -803,39 +810,44 @@ fn cross_of(vertical: bool, size: Size) -> i64 {
 
 /// A box: children under the constraints loosened, the size of the largest at least the
 /// minimum, each child placed by its own alignment or the box's.
-fn measure_box(node: NodeId, measurables: &[u64], c: Constraints) -> Size {
-    let alignment = or_raise(layout::alignment(node));
+fn measure_box(scope: Position, measurables: &[MeasurableMirror], c: Constraints) -> Size {
+    let alignment = or_raise(layout::alignment(scope.node));
     let loose = c.loosened();
     let mut largest = Size::ZERO;
-    for &child in measurables {
-        let size = or_raise(layout::measure_child(NodeId(child), loose));
+    for measurable in measurables {
+        let size = or_raise(layout::measure_child(NodeId(measurable.node), loose));
         largest.width = largest.width.max(size.width);
         largest.height = largest.height.max(size.height);
     }
     let size = c.constrain(largest);
-    or_raise(layout::begin_placement(node, size.width, size.height));
-    for &child in measurables {
-        let child = NodeId(child);
+    or_raise(layout::begin_placement(scope, size.width, size.height));
+    for measurable in measurables {
+        let child = NodeId(measurable.node);
         let measured = or_raise(layout::measured(child));
         let (_, _, own) = or_raise(layout::parent_data(child));
         let own = own.unwrap_or(alignment);
         or_raise(layout::place(
-            node,
-            child,
+            scope,
+            Position::child(child),
             own.horizontal().offset(size.width - measured.width),
             own.vertical().offset(size.height - measured.height),
         ));
     }
-    or_raise(layout::end_placement(node));
+    or_raise(layout::end_placement(scope));
     size
 }
 
 /// A column (`vertical`) or a row: unweighted children in order under what remains of the main
 /// axis, then weighted children sharing what is left of a bounded main axis, then placement by
 /// the arrangement and each child's alignment.
-fn measure_line(node: NodeId, measurables: &[u64], c: Constraints, vertical: bool) -> Size {
-    let arrangement = or_raise(layout::arrangement(node));
-    let alignment = or_raise(layout::alignment(node));
+fn measure_line(
+    scope: Position,
+    measurables: &[MeasurableMirror],
+    c: Constraints,
+    vertical: bool,
+) -> Size {
+    let arrangement = or_raise(layout::arrangement(scope.node));
+    let alignment = or_raise(layout::alignment(scope.node));
     let spacing = arrangement.spacing();
     let (main_max, cross_max) = if vertical {
         (c.max_height, c.max_width)
@@ -849,8 +861,8 @@ fn measure_line(node: NodeId, measurables: &[u64], c: Constraints, vertical: boo
     let mut cross: i64 = 0;
     let mut total_weight = 0.0;
     let mut weighted: i64 = 0;
-    for &child in measurables {
-        let child = NodeId(child);
+    for measurable in measurables {
+        let child = NodeId(measurable.node);
         let (weight, _, _) = or_raise(layout::parent_data(child));
         if bounded && weight > 0.0 {
             total_weight += weight;
@@ -875,8 +887,8 @@ fn measure_line(node: NodeId, measurables: &[u64], c: Constraints, vertical: boo
         let remaining = (main_max - used - gaps).max(0);
         let mut given = 0;
         let mut seen = 0;
-        for &child in measurables {
-            let child = NodeId(child);
+        for measurable in measurables {
+            let child = NodeId(measurable.node);
             let (weight, fill, _) = or_raise(layout::parent_data(child));
             if weight > 0.0 {
                 seen += 1;
@@ -909,10 +921,10 @@ fn measure_line(node: NodeId, measurables: &[u64], c: Constraints, vertical: boo
     };
     let (main_size, cross_size) = (main_of(vertical, size), cross_of(vertical, size));
     let (start, gap) = arrangement.start_and_gap(main_size - content, count);
-    or_raise(layout::begin_placement(node, size.width, size.height));
+    or_raise(layout::begin_placement(scope, size.width, size.height));
     let mut position = start;
-    for &child in measurables {
-        let child = NodeId(child);
+    for measurable in measurables {
+        let child = NodeId(measurable.node);
         let child_size = or_raise(layout::measured(child));
         let (_, _, own) = or_raise(layout::parent_data(child));
         let own = own.unwrap_or(alignment);
@@ -923,13 +935,23 @@ fn measure_line(node: NodeId, measurables: &[u64], c: Constraints, vertical: boo
         };
         let along = part.offset(cross_size - cross_of(vertical, child_size));
         if vertical {
-            or_raise(layout::place(node, child, along, position));
+            or_raise(layout::place(
+                scope,
+                Position::child(child),
+                along,
+                position,
+            ));
         } else {
-            or_raise(layout::place(node, child, position, along));
+            or_raise(layout::place(
+                scope,
+                Position::child(child),
+                position,
+                along,
+            ));
         }
         position += main_of(vertical, child_size) + spacing + gap;
     }
-    or_raise(layout::end_placement(node));
+    or_raise(layout::end_placement(scope));
     size
 }
 

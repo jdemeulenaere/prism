@@ -475,58 +475,89 @@ public fun Constraints.copy(
     maxHeight: Int = this.maxHeight,
 ): Constraints = Constraints(minWidth, maxWidth, minHeight, maxHeight)
 
-// A child of a layout, which its parent's measure policy measures once. Compose's `Measurable`.
-public struct Measurable : Copy { package val node: Int }
+// A child of a layout, which its parent's measure policy measures once, or the rest of a modifier
+// chain, which a layout modifier's step measures once: a node and the position in its chain that
+// measuring starts at, 0 for a child. Compose's `Measurable`.
+public struct Measurable : Copy {
+    package val node: Int
+    package val element: Int
+}
 
-// A measured child, of its measured size, which its parent's measure policy places in its
-// placement block. Compose's `Placeable`.
+// A measured child or rest of a chain, of its measured size, which the policy or step that
+// measured it places in its placement block. Compose's `Placeable`.
 public struct Placeable : Copy {
     package val node: Int
+    package val element: Int
     val width: Int
     val height: Int
 }
 
-// The receiver of a measure policy, which gives it `layout`. Compose's `MeasureScope`.
-public struct MeasureScope : Copy { package val node: Int }
+// The receiver of a measure policy or a layout modifier's step, which gives it `layout`: a node
+// and its chain position, the step's element or the chain's length for the content's policy.
+// Compose's `MeasureScope`.
+public struct MeasureScope : Copy {
+    package val node: Int
+    package val element: Int
+}
 
 // The receiver of a placement block, which gives it `place`. Compose's `PlacementScope`.
-public struct PlacementScope : Copy { package val node: Int }
+public struct PlacementScope : Copy {
+    package val node: Int
+    package val element: Int
+}
 
-// What a measure policy returns: the size `layout` gave its node. Compose's `MeasureResult`.
+// What a measure policy or a step returns: the size `layout` gave. Compose's `MeasureResult`.
 public struct MeasureResult : Copy {
     val width: Int
     val height: Int
     package val node: Int
+    package val element: Int
 }
 
-// Measures this child under `constraints` and gives its placeable: once per measurement of its
-// parent, from its parent's measure policy only.
+// Measures this child, or rest of a chain, under `constraints` and gives its placeable: once per
+// measurement, from the measure policy of the child's parent or the step the rest follows only.
 public fun Measurable.measure(constraints: Constraints): Placeable = prism_ui_measure(
     node,
+    element,
     constraints,
 )
 
-// Gives the node's content the size `width` × `height`, clamped into its constraints, and runs
-// `placementBlock` at once to place the children measured in this measurement.
+// Gives the node's content, or the chain from the step, the size `width` × `height`, clamped into
+// its constraints, and runs `placementBlock` at once to place what this measurement measured.
 public fun MeasureScope.layout(
     width: Int,
     height: Int,
     placementBlock: PlacementScope.() -> Unit,
 ): MeasureResult {
-    prism_ui_begin_placement(node, width, height)
-    placementBlock(PlacementScope(node))
-    prism_ui_end_placement(node)
-    return MeasureResult(width, height, node)
+    prism_ui_begin_placement(node, element, width, height)
+    placementBlock(PlacementScope(node, element))
+    prism_ui_end_placement(node, element)
+    return MeasureResult(width, height, node, element)
 }
 
-// Places this child with its top-left corner at `(x, y)` from the content's top-left corner.
+// Places this child, or rest of a chain, with its top-left corner at `(x, y)` from the content's
+// top-left corner, or from the step's.
 context(scope: PlacementScope)
-public fun Placeable.place(x: Int, y: Int): Unit = prism_ui_place(scope.node, node, x, y)
+public fun Placeable.place(x: Int, y: Int): Unit = prism_ui_place(
+    scope.node,
+    scope.element,
+    node,
+    element,
+    x,
+    y,
+)
 
 // Places this child at `(x, y)`, mirrored in a right-to-left layout, which Prism does not have
 // yet: as `place`.
 context(scope: PlacementScope)
-public fun Placeable.placeRelative(x: Int, y: Int): Unit = prism_ui_place(scope.node, node, x, y)
+public fun Placeable.placeRelative(x: Int, y: Int): Unit = prism_ui_place(
+    scope.node,
+    scope.element,
+    node,
+    element,
+    x,
+    y,
+)
 
 // This size in pixels: a logical pixel is a pixel of layout.
 context(scope: MeasureScope)
@@ -603,20 +634,29 @@ public compose fun Layout(
     LayoutNode(layoutKind, measurePolicy, modifier, { node -> }, content)
 }
 
-// Measures a child of the running measure policy's node.
-package external fun prism_ui_measure(node: Int, constraints: Constraints): Placeable
+// Measures a child of the running measure policy's node (`element` 0), or the rest of the chain
+// after the running step (`element` the step's plus one).
+package external fun prism_ui_measure(node: Int, element: Int, constraints: Constraints): Placeable
 
 // The size and alignment of a child measured by the running measure policy.
 package external fun prism_ui_measured(node: Int): MeasuredChild
 
-// Starts `layout`'s placement block in the measurement of `node`.
-private external fun prism_ui_begin_placement(node: Int, width: Int, height: Int)
+// Starts `layout`'s placement block in the measurement of `node` from `element`.
+private external fun prism_ui_begin_placement(node: Int, element: Int, width: Int, height: Int)
 
 // Ends `layout`'s placement block.
-private external fun prism_ui_end_placement(node: Int)
+private external fun prism_ui_end_placement(node: Int, element: Int)
 
-// Places a child of `parent` at `(x, y)` from its content's top-left corner.
-package external fun prism_ui_place(parent: Int, child: Int, x: Int, y: Int): Unit
+// Places a child of `parent` (`childElement` 0) at `(x, y)` from its content's top-left corner,
+// or the rest of the chain after the step at `parentElement` from the step's.
+package external fun prism_ui_place(
+    parent: Int,
+    parentElement: Int,
+    child: Int,
+    childElement: Int,
+    x: Int,
+    y: Int,
+): Unit
 
 // A child's data for the toolkit's layouts.
 package external fun prism_ui_parent_data(node: Int): ParentData

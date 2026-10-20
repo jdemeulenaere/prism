@@ -122,7 +122,7 @@ pub static UI_FUNCTIONS: &[RuntimeFunction] = &[
     RuntimeFunction {
         name: "prism_ui_measure",
         address: address(prism_ui_measure as *const ()),
-        parameters: &[Pointer, I64, Pointer],
+        parameters: &[Pointer, I64, I64, Pointer],
         result: None,
         never_returns: false,
     },
@@ -136,21 +136,21 @@ pub static UI_FUNCTIONS: &[RuntimeFunction] = &[
     RuntimeFunction {
         name: "prism_ui_begin_placement",
         address: address(prism_ui_begin_placement as *const ()),
-        parameters: &[I64, I64, I64],
+        parameters: &[I64, I64, I64, I64],
         result: None,
         never_returns: false,
     },
     RuntimeFunction {
         name: "prism_ui_end_placement",
         address: address(prism_ui_end_placement as *const ()),
-        parameters: &[I64],
+        parameters: &[I64, I64],
         result: None,
         never_returns: false,
     },
     RuntimeFunction {
         name: "prism_ui_place",
         address: address(prism_ui_place as *const ()),
-        parameters: &[I64, I64, I64, I64],
+        parameters: &[I64, I64, I64, I64, I64, I64],
         result: None,
         never_returns: false,
     },

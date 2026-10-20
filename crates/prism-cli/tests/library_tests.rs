@@ -558,18 +558,25 @@ fn the_measurement_mirrors_match_the_layout_of_the_library() {
     expect(
         "struct prism/compose/ui::Measurable",
         size_of::<MeasurableMirror>(),
-        &[("node", "Int", offset_of!(MeasurableMirror, node))],
+        &[
+            ("node", "Int", offset_of!(MeasurableMirror, node)),
+            ("element", "Int", offset_of!(MeasurableMirror, element)),
+        ],
     );
     expect(
         "struct prism/compose/ui::MeasureScope",
         size_of::<MeasureScopeMirror>(),
-        &[("node", "Int", offset_of!(MeasureScopeMirror, node))],
+        &[
+            ("node", "Int", offset_of!(MeasureScopeMirror, node)),
+            ("element", "Int", offset_of!(MeasureScopeMirror, element)),
+        ],
     );
     expect(
         "struct prism/compose/ui::Placeable",
         size_of::<PlaceableMirror>(),
         &[
             ("node", "Int", offset_of!(PlaceableMirror, node)),
+            ("element", "Int", offset_of!(PlaceableMirror, element)),
             ("width", "Int", offset_of!(PlaceableMirror, width)),
             ("height", "Int", offset_of!(PlaceableMirror, height)),
         ],
@@ -581,6 +588,7 @@ fn the_measurement_mirrors_match_the_layout_of_the_library() {
             ("width", "Int", offset_of!(MeasureResultMirror, width)),
             ("height", "Int", offset_of!(MeasureResultMirror, height)),
             ("node", "Int", offset_of!(MeasureResultMirror, node)),
+            ("element", "Int", offset_of!(MeasureResultMirror, element)),
         ],
     );
     expect(
