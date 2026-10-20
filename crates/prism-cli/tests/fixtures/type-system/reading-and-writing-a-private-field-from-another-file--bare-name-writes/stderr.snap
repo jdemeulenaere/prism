@@ -1,0 +1,12 @@
+error[E4007]: the field 'balance' of 'Account' is private to 'bank/account', so it cannot be read, written or borrowed here
+  --> main.prism:4:27
+    4 | mut fun Account.reset() { balance = 0 }
+      |                           ^
+error[E4007]: the field 'balance' of 'Account' is private to 'bank/account', so it cannot be read, written or borrowed here
+  --> main.prism:5:31
+    5 | mut fun Account.add(n: Int) { balance += n }
+      |                               ^
+error[E4007]: the field 'balance' of 'Account' is private to 'bank/account', so it cannot be read, written or borrowed here
+  --> main.prism:7:18
+    7 |     val r = &mut balance
+      |                  ^

@@ -1,0 +1,8 @@
+error[E4007]: the field 'id' of 'Account' is private to 'bank/account', so a pattern here cannot match it
+  --> main.prism:4:46
+    4 | fun f(x: &Account): Int = when (x) { Account(val i, bank = _) -> i }
+      |                                              ^
+error[E4007]: the field 'id' of 'Account' is private to 'bank/account', so a pattern here cannot match it
+  --> main.prism:5:46
+    5 | fun g(x: &Account): Int = when (x) { Account(_, owner = "ann") -> 1; else -> 2 }
+      |                                              ^

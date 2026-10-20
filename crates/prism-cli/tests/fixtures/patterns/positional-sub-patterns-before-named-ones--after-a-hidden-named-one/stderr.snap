@@ -1,0 +1,9 @@
+error[E4007]: the field 'id' of 'Account' is private to 'bank/account', so a pattern here cannot match it
+  --> main.prism:4:46
+    4 | fun f(x: &Account): Int = when (x) { Account(id = val i, val o) -> i }
+      |                                              ^
+error[E4024]: a positional sub-pattern cannot follow a named one
+  --> main.prism:4:58
+    4 | fun f(x: &Account): Int = when (x) { Account(id = val i, val o) -> i }
+      |                                                          ^
+   = help: give every field in declaration order, or name the fields to match, as in 'Account(owner = ...)'

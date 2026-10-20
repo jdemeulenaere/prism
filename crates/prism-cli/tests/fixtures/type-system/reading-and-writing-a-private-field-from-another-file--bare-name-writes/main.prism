@@ -1,0 +1,10 @@
+// expect: E4007
+// run: 1
+import /bank/account
+mut fun Account.reset() { balance = 0 }
+mut fun Account.add(n: Int) { balance += n }
+mut fun Account.lend(): Int {
+    val r = &mut balance
+    return 1
+}
+fun main() {}

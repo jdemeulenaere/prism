@@ -1,0 +1,5 @@
+// expect: E4007 E4024
+// run: 1
+import /bank/account
+fun f(x: &Account): Int = when (x) { Account(id = val i, val o) -> i }
+fun main() {}

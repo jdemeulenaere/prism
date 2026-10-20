@@ -1411,6 +1411,14 @@ impl TypeChecker {
         Some((id.clone(), index, visibility))
     }
 
+    /// The `E4007` for a bare name `name` at `span` that nothing else resolves, when it names a
+    /// field of the current receiver that this file cannot see.
+    fn hidden_receiver_field(&self, name: &str, span: Span) -> Option<TypeError> {
+        let receiver = self.current_receiver()?;
+        let (id, index, visibility) = self.hidden_field_named(&receiver, name)?;
+        Some(self.hidden_field_error(&id, index, visibility, HiddenFieldUse::Access, span))
+    }
+
     /// The position of the variant `name` of enum `id`, if its definition is known, its members
     /// are visible and it has one.
     fn variant_index(&self, id: &NominalId, name: &str) -> Option<usize> {
@@ -1639,18 +1647,13 @@ impl TypeChecker {
                 None
             }
             Err(TypeError::UnresolvedSymbol { .. })
-                if self
-                    .current_receiver()
-                    .is_some_and(|receiver| self.hidden_field_named(&receiver, name).is_some()) =>
+                if self.hidden_receiver_field(name, span).is_some() =>
             {
                 // Nothing else resolves a bare name that a hidden field of the receiver has (D3
                 // of `field-visibility`).
-                let receiver = self.current_receiver().expect("checked above");
-                let (id, index, visibility) = self
-                    .hidden_field_named(&receiver, name)
+                let error = self
+                    .hidden_receiver_field(name, span)
                     .expect("checked above");
-                let error =
-                    self.hidden_field_error(&id, index, visibility, HiddenFieldUse::Access, span);
                 self.errors.push(error);
                 None
             }
@@ -5517,7 +5520,10 @@ impl TypeChecker {
                     }
                 }
                 Err(err) => {
-                    self.errors.push(err);
+                    // A bare name written in an extension body may be a hidden field of the
+                    // receiver (D3 of `field-visibility`).
+                    let error = self.hidden_receiver_field(name, target.span).unwrap_or(err);
+                    self.errors.push(error);
                     (self.error_node(Vec::new(), target.span), Type::Error, false)
                 }
             },

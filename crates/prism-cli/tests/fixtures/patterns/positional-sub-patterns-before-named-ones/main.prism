@@ -1,0 +1,6 @@
+// expect: E4007
+// run: 1
+import /bank/account
+fun f(x: &Account): Int = when (x) { Account(val i, bank = _) -> i }
+fun g(x: &Account): Int = when (x) { Account(_, owner = "ann") -> 1; else -> 2 }
+fun main() {}

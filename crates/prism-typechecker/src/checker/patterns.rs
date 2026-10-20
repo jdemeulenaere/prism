@@ -604,7 +604,10 @@ impl TypeChecker {
         let mut invalid = None;
         let mut seen_named = false;
         let mut positional = 0;
-        for argument in arguments {
+        // The sub-patterns already checked against `Type::Error`, which an error path below
+        // must not check again.
+        let mut checked = vec![false; arguments.len()];
+        for (argument_index, argument) in arguments.iter().enumerate() {
             match &argument.name {
                 None if seen_named => {
                     invalid.get_or_insert((
@@ -636,6 +639,7 @@ impl TypeChecker {
                             );
                             self.errors.push(error);
                             self.check_pattern(&argument.pattern, &Type::Error, mode, bindings);
+                            checked[argument_index] = true;
                         }
                         Some(index) if slots[index].is_some() => {
                             invalid.get_or_insert((
@@ -653,6 +657,7 @@ impl TypeChecker {
                                 import_suggestions: Vec::new(),
                             });
                             self.check_pattern(&argument.pattern, &Type::Error, mode, bindings);
+                            checked[argument_index] = true;
                         }
                     }
                 }
@@ -686,6 +691,25 @@ impl TypeChecker {
                 arguments[fields.len()].span,
             ));
         }
+        // Positional sub-patterns before named ones give the fields they stand for, so each of
+        // those must be visible, as a named one (D4 of `field-visibility`).
+        if invalid.is_none() && seen_named {
+            for (index, slot) in slots.iter_mut().enumerate().take(positional) {
+                let Some(visibility) = self.hidden_field(id, index) else {
+                    continue;
+                };
+                let argument = slot.take().expect("a positional sub-pattern");
+                let error = self.hidden_field_error(
+                    id,
+                    index,
+                    visibility,
+                    HiddenFieldUse::NamedPattern,
+                    argument.span,
+                );
+                self.errors.push(error);
+                self.check_pattern(&argument.pattern, &Type::Error, mode, bindings);
+            }
+        }
         // A positional pattern gives every field, so each must be visible (D4 of
         // `field-visibility`).
         let first_hidden = if invalid.is_none() && !seen_named && positional > 0 {
@@ -707,7 +731,7 @@ impl TypeChecker {
                 span,
             );
             self.errors.push(error);
-            self.sub_patterns_of_error(arguments, mode, bindings);
+            self.unchecked_sub_patterns_of_error(arguments, &checked, mode, bindings);
             return fields.iter().map(|_| Pattern::Wildcard).collect();
         }
         if let Some((message, span)) = invalid {
@@ -717,10 +741,13 @@ impl TypeChecker {
                 help: Some(format!(
                     "give every field in declaration order, or name the fields to match, as in '{}({} = ...)'",
                     id.name,
-                    fields.first().map_or("field", |(name, _, _)| name.as_str())
+                    // A field this file can name (D4 of `field-visibility`).
+                    (0..fields.len())
+                        .find(|index| self.hidden_field(id, *index).is_none())
+                        .map_or("field", |index| fields[index].0.as_str())
                 )),
             });
-            self.sub_patterns_of_error(arguments, mode, bindings);
+            self.unchecked_sub_patterns_of_error(arguments, &checked, mode, bindings);
             return fields.iter().map(|_| Pattern::Wildcard).collect();
         }
         slots
@@ -742,6 +769,24 @@ impl TypeChecker {
         bindings: &mut PatternBindings,
     ) {
         for argument in arguments {
+            self.check_pattern(&argument.pattern, &Type::Error, mode, bindings);
+        }
+    }
+
+    /// Checks the sub-patterns of a struct pattern in error against `Type::Error`, but for those
+    /// already `checked`, so that their bindings are not bound twice.
+    fn unchecked_sub_patterns_of_error(
+        &mut self,
+        arguments: &[PatternArgument],
+        checked: &[bool],
+        mode: SubjectMode,
+        bindings: &mut PatternBindings,
+    ) {
+        for (argument, _) in arguments
+            .iter()
+            .zip(checked)
+            .filter(|(_, checked)| !**checked)
+        {
             self.check_pattern(&argument.pattern, &Type::Error, mode, bindings);
         }
     }

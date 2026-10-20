@@ -1,0 +1,3 @@
+package bank
+public struct Entry { val owner: String, private val id: Int, val note: String }
+public fun entry(owner: String, note: String): Entry = Entry(owner, 7, note)

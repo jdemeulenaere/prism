@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+import /bank/entry
+import /prism/core
+fun h(x: &Entry): String = when (x) { Entry(val o, note = "paid") -> o.clone(); else -> "none" }
+fun main() {
+    println(h(&entry("ann", "paid")))
+    println(h(&entry("bob", "due")))
+}

@@ -12,7 +12,7 @@ A field marked `private` MUST be visible only in its struct's file, a field mark
 - **THEN** `shop/report.prism` typechecks, and `app/main.prism` is rejected with `E4007` at `cost`
 
 ### Requirement: Hidden Fields Are Not Accessed
-Where a field is not visible, reading, writing or borrowing it, capturing its path, or reading it through a bare name in an extension body MUST be `E4007`, through any `&`, `&mut`, `Heap<T>` or `?.`, naming the field, its visibility and its struct's module. When nothing else resolves the name, a hidden field MUST be reported with `E4007`, not `E4006`. Copying, moving, cloning, dropping and comparing whole values MUST be unaffected.
+Where a field is not visible, reading, writing or borrowing it, capturing its path, or reading, writing or borrowing it through a bare name in an extension body MUST be `E4007`, through any `&`, `&mut`, `Heap<T>` or `?.`, naming the field, its visibility and its struct's module. When nothing else resolves the name, a hidden field MUST be reported with `E4007`, not `E4006`. Copying, moving, cloning, dropping and comparing whole values MUST be unaffected.
 
 #### Scenario: Reading and writing a private field from another file
 - **WHEN** `bank/account.prism` exports `public struct Account { private var balance: Int, val owner: String }`, `public fun open(owner: String): Account = Account(0, owner)` and `public mut fun Account.deposit(n: Int): Unit { balance += n }`, and a file importing `/bank/account` declares `fun f(a: &mut Account): Int { a.balance = 5; return a.balance }` and `fun g(a: &Account): Int = a.owner.length`

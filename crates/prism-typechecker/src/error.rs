@@ -518,7 +518,7 @@ pub enum HiddenFieldUse {
     Construction,
     /// A positional struct pattern, which gives every field.
     PositionalPattern,
-    /// A named sub-pattern naming it.
+    /// A named sub-pattern naming it, or a positional one standing for it before named ones.
     NamedPattern,
     /// A destructuring entry naming it.
     Destructuring,
