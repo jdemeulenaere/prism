@@ -191,6 +191,14 @@ Rejected:
 - **Scenarios.** "Reloading a vararg function" was added to `vararg-parameters` (the brief asked for a hot-reload case); "A vararg call in MIR" now says the copy of `_1` goes through a temporary, as every argument copy does.
 - `prism check` plans `prism/collections::listOf<T>` per element type; `prism run` caches and reuses those instances (`cache_tests.rs`, `list_of_instances_are_cached`).
 
+### Measurements (apply, Apple arm64 release build, 2026-10-20, load average about 2.5 from other agents)
+
+- **Million adds** (`list_timing`): median 7.3 ms, p90 9.4 ms against the 20 ms target (4.2 ms recorded on 2026-10-18 on an idle machine; the program builds one list with `listOf<Int>()`, so the change adds one instance and one call).
+- **Startup** (`run_timing`, `examples/run/main.prism`): cold total to `main` median 11.2 ms (p90 12.1 ms), warm 2.2 ms (p90 2.5 ms), against 15 ms. A baseline build of the previous commit could not be measured without a second target directory, so the change's share was measured directly: a program building lists of 16 element types spends 0.84 ms more in code generation than the same program with one element type (both cold), so each `listOf<T>` instance costs at most about 55 µs, list glue of the extra types included; `examples/run/main.prism` instantiates it for two element types, under the 0.8 ms p90 spread of the cold runs, and warm runs load it from the cache. Not measurably slower.
+- **`vararg-calls`** (`compile_timing`, ms at 256 / 1,024 / 4,096 functions): type 3.3 / 14.2 / 59.4 (x4.2 per x4), mir 1.9 / 9.0 / 36.9, borrow 5.5 / 22.7 / 95.3, compose 0.4 / 2.0 / 9.1, lower 5.3 / 21.7 / 90.1, clif 22.5 / 92.1 / 369.8: linear, within the x4.6 bound (`list-literal`, one call of 4,096 elements, types in 1.1 ms).
+
+- **Full `compile_timing` under `PRISM_ASSERT_TIMING=1`**: every shape but one stays within its bound; `ui-calls` fails on `clif` at 4,096 (x9.3 per x4, 606 ms, against 195 ms in a release build of 2026-10-19 06:41). The program has no vararg and no `listOf`, so this change leaves its typed tree, MIR and code unchanged; the regression predates it and is left to a plain fix.
+
 ## Risks / Trade-offs
 
 - **[An allocation per call]** A vararg function that only reads its elements still gets an owned list, allocated by the caller. → As in Kotlin; zero elements allocate nothing; a borrowed-slice form or Tier 2 elision is a follow-up if profiles show it.

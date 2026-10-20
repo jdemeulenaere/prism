@@ -1184,6 +1184,33 @@ fn drop_hooks(n: usize) -> String {
     source
 }
 
+/// `n` functions, each calling a generic and a non-generic vararg function with eight
+/// elements, a spread and a named argument after the vararg (D16 of `vararg`): the vararg's
+/// binding plan, the expanded signatures of the existing inference and the list constructions.
+fn vararg_calls(n: usize) -> String {
+    let mut source = String::from(
+        "import /prism/collections\nimport /prism/core\n\
+         fun sum(vararg xs: Int, scale: Int = 1): Int = xs.size * scale\n\
+         fun <T> bag(vararg xs: T, last: T): List<T> {\n\
+         \x20   var list = xs\n\
+         \x20   list.add(last)\n\
+         \x20   return list\n\
+         }\n",
+    );
+    for i in 0..n {
+        writeln!(
+            source,
+            "fun f{i}(ys: List<Int>): Int {{\n\
+             \x20   val words = bag(\"a\", \"b\", \"c\", \"d\", \"e\", \"f\", \"g\", \"h\", last = \"z\")\n\
+             \x20   return sum(1, 2, 3, 4, 5, 6, 7, {i}, scale = 2) + words.size + sum(*ys)\n\
+             }}"
+        )
+        .unwrap();
+    }
+    source.push_str("fun main() { println(f0(listOf(1, 2))) }\n");
+    source
+}
+
 /// One generic struct with a drop and a clone hook, instantiated through a generic function at
 /// `n` struct types (D11 and D17 of `drop-and-clone-hooks`): `n` instances of the function and
 /// `2n` hook instances, requested from the file's summary.
@@ -1342,6 +1369,7 @@ fn shapes() -> Vec<Shape> {
             generic_hook_instances,
         ),
         shape("ui-calls", true, SIZES, ui_calls),
+        shape("vararg-calls", true, SIZES, vararg_calls),
     ]
 }
 
