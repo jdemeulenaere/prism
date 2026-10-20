@@ -72,6 +72,14 @@ A restart scope recomposed alone MUST be called with the addresses and versions 
 - **WHEN** the `Show` above and `compose fun Screen(items: &State<List<String>>, n: &State<Int>) { println("screen ${items.value.size}"); if (items.value.size > 0) { Show(items.value[0], n) } }` are declared and `fun main() { val items = mutableStateOf(listOf("a" + "b")); val n = mutableStateOf(0); val c = composition { Screen(items, n) }; items.value.removeAt(0); n.value = 1; println(c.recompose()) }` runs with `--check-allocations`
 - **THEN** stdout is `screen 1`, `show ab 0`, `screen 0` and `true`, one per line, and the exit status is 0
 
+#### Scenario: A remembered value replaced by its key is passed again by its parent
+- **WHEN** `struct Pick { val id: Int }`, `compose fun Show(p: &Pick) { println("show ${p.id}") }` and `compose fun Screen(k: &State<Int>) { val key = k.value; val p = remember(key) { Pick(key) }; println("screen"); Show(p) }` are declared and `fun main() { val k = mutableStateOf(1); val c = composition { Screen(k) }; k.value = 2; println(c.recompose()) }` runs with `--check-allocations`
+- **THEN** stdout is `screen`, `show 1`, `screen`, `show 2` and `true`, one per line, and the exit status is 0: the new value has a new address while the old one still exists, so `Show`'s kept identity differs
+
+#### Scenario: A borrow of a removed remembered value is never restarted
+- **WHEN** `compose fun Show(s: &String, n: &State<Int>) { println("show $s ${n.value}") }` and `compose fun Screen(on: &State<Bool>, n: &State<Int>) { println("screen"); if (on.value) { val s = remember { "a" + "b" }; Show(s, n) } }` are declared and `fun main() { val on = mutableStateOf(true); val n = mutableStateOf(0); val c = composition { Screen(on, n) }; on.value = false; n.value = 1; println(c.recompose()) }` runs with `--check-allocations`
+- **THEN** stdout is `screen`, `show ab 0`, `screen` and `true`, one per line, and the exit status is 0: `Screen` recomposes first and removes the branch, whose slot is freed after the pass
+
 ## MODIFIED Requirements
 
 ### Requirement: Parameters That Can Be Kept

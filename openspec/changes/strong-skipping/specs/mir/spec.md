@@ -47,7 +47,7 @@ Every state operation MUST lower to `Call` terminators of state operations, each
 
 #### Scenario: A compound assignment through a handle
 - **WHEN** `prism dump-mir` runs on `fun f(s: &MutableState<Int>) { s.value += 1 }`
-- **THEN** the body copies `s` into a temporary once, calls `state read<Int>` with it, adds 1 to a copy of the referent with an overflow check, and calls `state write<Int>` with the temporary and the sum
+- **THEN** the body borrows `*s` into a temporary once, calls `state read<Int>` with it, adds 1 to a copy of the referent with an overflow check, and calls `state write<Int>` with the temporary and the sum
 
 #### Scenario: An update call
 - **WHEN** `prism dump-mir` runs on `fun f(s: &MutableState<Int>) { s.update { n -> n * 2 } }`
