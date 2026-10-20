@@ -46,8 +46,8 @@ This group is one commit: the fixtures, examples and tests cannot pass between r
 
 ## 7. Verification
 
-- [ ] 7.1 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `prism check` on every file under `examples/`, `prism fmt --check examples/`, and the example runs of 5.10, all clean. Run `prism fmt --check library/`.
-- [ ] 7.2 Probe adversarially with small `.prism` files and record each in a fixture named after the closest scenario: a file declaring `fun println(n: Int)` without importing `/prism/core` and calling it; a workspace extension `fun <T> List<T>.size(): Int` without any import (`E4010`: members are everywhere); `Int.dp` declared by a file that does not import `/prism/compose/ui` (accepted); a library type received from a workspace module without the runtime import (`E4006` with the help); an unresolved name declared by two library modules (two help lines); a watch session whose edit adds `import /prism/core` and a `println` to a running program (the reload applies and prints).
+- [x] 7.1 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `prism check` on every file under `examples/`, `prism fmt --check examples/`, and the example runs of 5.10, all clean. Run `prism fmt --check library/`.
+- [x] 7.2 Probe adversarially with small `.prism` files and record each in a fixture named after the closest scenario: a file declaring `fun println(n: Int)` without importing `/prism/core` and calling it; a workspace extension `fun <T> List<T>.size(): Int` without any import (`E4010`: members are everywhere); `Int.dp` declared by a file that does not import `/prism/compose/ui` (accepted); a library type received from a workspace module without the runtime import (`E4006` with the help); an unresolved name declared by two library modules (two help lines); a watch session whose edit adds `import /prism/core` and a `println` to a running program (the reload applies and prints).
 
 ## Workflow follow-up
 

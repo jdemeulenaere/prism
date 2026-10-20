@@ -1,0 +1,6 @@
+// expect: ok
+// run: 0
+// watch: edits
+fun main() {
+    val n = 1
+}

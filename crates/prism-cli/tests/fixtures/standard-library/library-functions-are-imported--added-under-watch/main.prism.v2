@@ -1,0 +1,6 @@
+import /prism/core
+
+fun main() {
+    val n = 1
+    println(n + 1)
+}

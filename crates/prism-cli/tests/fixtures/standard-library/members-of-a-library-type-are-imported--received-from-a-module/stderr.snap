@@ -1,0 +1,5 @@
+error[E4014]: 'RecomposeScope' is defined in module 'prism/compose/runtime', which this file does not import; add 'import /prism/compose/runtime' to use the members of 'RecomposeScope'
+  --> app/main.prism:9:5
+    9 |     s.invalidate()
+      |     ^
+   = help: add 'import /prism/compose/runtime' to this file

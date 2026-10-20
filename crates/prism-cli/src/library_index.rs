@@ -229,6 +229,31 @@ mod tests {
         assert!(index.modules_declaring("LeafNode").is_empty());
     }
 
+    /// An unresolved name that two library modules declare gets one suggestion per module, in
+    /// the library's order (a library with an injected test module, which never shares the
+    /// bundled library's index).
+    #[test]
+    fn a_name_two_modules_declare_suggests_both() {
+        let library = Library::with_modules(vec![(
+            "prism/test".to_string(),
+            "package prism\n\npublic fun println(n: Int): Unit {}\n".to_string(),
+        )]);
+        assert!(!library.is_bundled());
+        let mut errors = vec![TypeError::UnresolvedSymbol {
+            name: "println".to_string(),
+            span: prism_ast::Span::dummy(),
+            import_suggestions: Vec::new(),
+        }];
+        suggest_library_imports(&library, &mut errors);
+        let TypeError::UnresolvedSymbol {
+            import_suggestions, ..
+        } = &errors[0]
+        else {
+            unreachable!()
+        };
+        assert_eq!(import_suggestions, &["prism/core", "prism/test"]);
+    }
+
     #[test]
     fn suggestions_fill_unresolved_names_and_members_only() {
         let span = prism_ast::Span::dummy();

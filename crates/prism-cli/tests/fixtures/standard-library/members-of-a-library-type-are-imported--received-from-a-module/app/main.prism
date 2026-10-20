@@ -1,0 +1,12 @@
+// expect: E4014
+// run: 1
+package app
+
+import /lib/scopes
+
+compose fun Screen() {
+    val s = scope()
+    s.invalidate()
+}
+
+fun main() {}

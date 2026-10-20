@@ -1,0 +1,5 @@
+package lib
+
+import /prism/compose/runtime
+
+public compose fun scope(): RecomposeScope = currentRecomposeScope()

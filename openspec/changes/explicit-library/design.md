@@ -215,6 +215,10 @@ A workspace file's check key hashes its direct imports' ABI hashes in import ord
 
 Rollback: revert the commits; the move is a pure rename.
 
+## Verification (apply)
+
+The adversarial probes of task 7.2, each a fixture named after its closest scenario: a file's own `fun println(n: Int)` without `import /prism/core` runs as the file's own (`a-file-s-own-declaration-of-a-library-name--own-println`); `fun <T> List<T>.size()` in a file without imports is `E4010`, members being everywhere (`a-workspace-extension-named-like-a-member--without-imports`); a file's own `Int.dp()` without the UI import runs (`an-extension-of-a-built-in-type-from-another-module-is-imported--own-dp`); a `RecomposeScope` received from a workspace module without the runtime import is `E4014` naming the import (`members-of-a-library-type-are-imported--received-from-a-module`, see D3's note); a name two library modules declare gets two help lines (`library_index.rs`, `a_name_two_modules_declare_suggests_both`, with an injected module, since no two bundled modules share a public name); and a watch session whose edit adds `import /prism/core` and a `println` reloads and prints (`library-functions-are-imported--added-under-watch`). The opt-in window tests (`PRISM_WINDOW_TESTS=1`: `window_input`, `app_windows`, `screenshot`) pass, as do the ignored benchmarks after their programs gained imports.
+
 ## Open Questions
 
 - After seeing the result, does the user want a shorter form for common imports (re-exports, an umbrella module), or a prelude for a few names after all (the user's "to be revisited")?

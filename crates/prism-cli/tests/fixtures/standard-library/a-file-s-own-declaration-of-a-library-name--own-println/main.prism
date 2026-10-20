@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+fun println(n: Int) {}
+
+fun main() { println(1) }

@@ -1,0 +1,5 @@
+// expect: ok
+// run: 0
+fun Int.dp(): Int = this * 2
+
+fun main() { val d = 3.dp() }
