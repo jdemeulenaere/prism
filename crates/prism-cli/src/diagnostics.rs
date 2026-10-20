@@ -640,7 +640,27 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
         }
         _ => {}
     }
-
+    // After any other help: the library modules whose import would resolve the name (D8 of
+    // `explicit-library`).
+    let (name, modules) = match err {
+        TypeError::UnresolvedSymbol {
+            name,
+            import_suggestions,
+            ..
+        } => (name, import_suggestions),
+        TypeError::UnknownField {
+            field_name,
+            import_suggestions,
+            ..
+        } => (field_name, import_suggestions),
+        _ => return out,
+    };
+    for module in modules {
+        out.push_str(&format!(
+            "   = help: '{}' is declared by the library module '/{}': add 'import /{}'\n",
+            name, module, module
+        ));
+    }
     out
 }
 

@@ -858,7 +858,13 @@ fn typecheck_file(
 
     // Pass 1 (file-level forward declarations) and Pass 2 (function body checks)
     let tree = checker.check_module(&node.source_file);
-    (tree, checker.errors)
+    let mut errors = checker.errors;
+    // A workspace file's unresolved library names get help naming their import; a library
+    // file imports its siblings by another form (D8 of `explicit-library`).
+    if !node.is_library() {
+        crate::library_index::suggest_library_imports(&graph.library, &mut errors);
+    }
+    (tree, errors)
 }
 
 /// The typed tree of one file, as `prism dump-typed-tree` prints it.

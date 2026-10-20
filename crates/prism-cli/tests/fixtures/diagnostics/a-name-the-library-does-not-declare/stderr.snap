@@ -1,0 +1,4 @@
+error[E4001]: unresolved symbol 'printn'
+  --> main.prism:3:14
+    3 | fun main() { printn(1) }
+      |              ^

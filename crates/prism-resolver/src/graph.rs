@@ -86,6 +86,10 @@ pub struct DependencyGraph {
     pub nodes: HashMap<PathBuf, SourceNode>,
     /// Strongly connected components ordered dependency-first (topological compilation schedule).
     pub sccs: Vec<SccCluster>,
+    /// The library the graph's `/prism/...` imports resolved in: the bundled one, or for tests
+    /// the bundled one with injected modules. Diagnostics consult it for the modules declaring
+    /// an unresolved name (D8 of `explicit-library`).
+    pub library: Library,
 }
 
 impl DependencyGraph {
@@ -133,6 +137,7 @@ impl DependencyGraph {
             workspace_root: PathBuf::new(),
             nodes,
             sccs,
+            library: library.clone(),
         })
     }
 
@@ -296,6 +301,7 @@ impl DependencyGraph {
             workspace_root: authoritative_root,
             nodes,
             sccs,
+            library: library.clone(),
         })
     }
 

@@ -1,0 +1,6 @@
+error[E4006]: unknown field 'background' on type 'Modifier'
+  --> main.prism:5:39
+    5 | compose fun Screen() { Box(modifier = Modifier.background(Color.Red)) { } }
+      |                                       ^
+   = help: no field or extension function 'background' is declared on 'Modifier' in this file or exported by its imports
+   = help: 'background' is declared by the library module '/prism/compose/foundation': add 'import /prism/compose/foundation'

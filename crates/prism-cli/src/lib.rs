@@ -2,6 +2,7 @@
 
 pub mod cache;
 pub mod diagnostics;
+mod library_index;
 pub mod plan;
 pub mod run;
 pub mod watch;

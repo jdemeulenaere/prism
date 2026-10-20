@@ -1,0 +1,5 @@
+error[E4001]: unresolved symbol 'Column'
+  --> main.prism:3:24
+    3 | compose fun Screen() { Column { } }
+      |                        ^
+   = help: 'Column' is declared by the library module '/prism/compose/layout': add 'import /prism/compose/layout'

@@ -634,6 +634,7 @@ impl TypeChecker {
                                 field_name: name.clone(),
                                 span: argument.span,
                                 help: None,
+                                import_suggestions: Vec::new(),
                             });
                             self.check_pattern(&argument.pattern, &Type::Error, mode, bindings);
                         }
@@ -796,6 +797,7 @@ impl TypeChecker {
                                 field_name: entry.field.clone(),
                                 span: entry.field_span,
                                 help,
+                                import_suggestions: Vec::new(),
                             });
                             self.bind_pattern_name(
                                 &entry.name,

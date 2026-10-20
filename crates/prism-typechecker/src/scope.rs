@@ -585,6 +585,7 @@ impl ScopeStack {
                 None => Err(TypeError::UnresolvedSymbol {
                     name: name.to_string(),
                     span,
+                    import_suggestions: Vec::new(),
                 }),
             },
         }

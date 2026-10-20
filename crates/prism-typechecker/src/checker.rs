@@ -1762,6 +1762,7 @@ impl TypeChecker {
                 field_name: member.to_string(),
                 span,
                 help: None,
+                import_suggestions: Vec::new(),
             });
             return Some((self.error_node(Vec::new(), span), None));
         }
@@ -5099,6 +5100,7 @@ impl TypeChecker {
                                 field_name: member.clone(),
                                 span,
                                 help: None,
+                                import_suggestions: Vec::new(),
                             });
                         }
                         (
@@ -7432,6 +7434,7 @@ impl TypeChecker {
                             field_name: arg_name.clone(),
                             span: arg.span,
                             help: None,
+                            import_suggestions: Vec::new(),
                         });
                         failed = true;
                     }
@@ -7667,6 +7670,7 @@ impl TypeChecker {
                         "'{}' may be null: call the extension with a safe call, '{}?.{}()'",
                         target, target, member
                     )),
+                    import_suggestions: Vec::new(),
                 });
                 call
             }
@@ -7701,6 +7705,7 @@ impl TypeChecker {
                             "the extension '{}' is declared on '{}', not on '{}'",
                             member, extension.receiver, reached
                         )),
+                        import_suggestions: Vec::new(),
                     });
                     return call;
                 }
@@ -9682,6 +9687,7 @@ impl TypeChecker {
                     if is_safe_nav { "?." } else { "." },
                     member
                 )),
+                import_suggestions: Vec::new(),
             });
             return self.error_node(vec![target_id], span);
         }
@@ -9882,6 +9888,7 @@ impl TypeChecker {
                         field_name: member.to_string(),
                         span,
                         help: None,
+                        import_suggestions: Vec::new(),
                     });
                     return (Type::Error, None);
                 }
@@ -9913,6 +9920,7 @@ impl TypeChecker {
                         field_name: member.to_string(),
                         span,
                         help: None,
+                        import_suggestions: Vec::new(),
                     });
                     (Type::Error, None)
                 }
@@ -9946,6 +9954,7 @@ impl TypeChecker {
                         field_name: member.to_string(),
                         span,
                         help: None,
+                        import_suggestions: Vec::new(),
                     });
                     (Type::Error, None)
                 }
@@ -9997,6 +10006,7 @@ impl TypeChecker {
                     field_name: member.to_string(),
                     span,
                     help,
+                    import_suggestions: Vec::new(),
                 });
                 (Type::Error, None)
             }

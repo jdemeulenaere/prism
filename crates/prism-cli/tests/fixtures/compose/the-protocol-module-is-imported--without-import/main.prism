@@ -1,4 +1,5 @@
 // expect: E4001
+// run: 1
 fun main() {
     val c = startComposition { k -> }
 }

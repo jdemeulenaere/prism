@@ -1,4 +1,5 @@
 // expect: E4006
+// run: 1
 import /prism/compose/ui
 import /prism/compose/layout
 compose fun Screen() { Box(modifier = Modifier.background(Color.Red)) { } }

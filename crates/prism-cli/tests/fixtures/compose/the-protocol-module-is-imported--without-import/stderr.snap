@@ -1,0 +1,5 @@
+error[E4001]: unresolved symbol 'startComposition'
+  --> main.prism:4:13
+    4 |     val c = startComposition { k -> }
+      |             ^
+   = help: 'startComposition' is declared by the library module '/prism/composer': add 'import /prism/composer'

@@ -72,7 +72,8 @@ pub const ROOT_PACKAGE: &str = "prism";
 /// with modules added or replaced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Library {
-    modules: Vec<LibraryModule>,
+    /// Shared, so that cloning a library (as every dependency graph does) copies a pointer.
+    modules: Arc<Vec<LibraryModule>>,
     prelude: Vec<String>,
 }
 
@@ -81,13 +82,15 @@ impl Library {
     pub fn bundled() -> &'static Library {
         static BUNDLED: OnceLock<Library> = OnceLock::new();
         BUNDLED.get_or_init(|| Library {
-            modules: MODULES
-                .iter()
-                .map(|(path, source)| LibraryModule {
-                    path: path.to_string(),
-                    source: source.to_string(),
-                })
-                .collect(),
+            modules: Arc::new(
+                MODULES
+                    .iter()
+                    .map(|(path, source)| LibraryModule {
+                        path: path.to_string(),
+                        source: source.to_string(),
+                    })
+                    .collect(),
+            ),
             prelude: PRELUDE.iter().map(|path| path.to_string()).collect(),
         })
     }
@@ -104,17 +107,22 @@ impl Library {
     /// but its sources and the compiler.
     pub fn with_modules(extra: Vec<(String, String)>) -> Library {
         let mut library = Library::bundled().clone();
+        let modules = Arc::make_mut(&mut library.modules);
         for (path, source) in extra {
-            match library
-                .modules
+            match modules
                 .iter_mut()
                 .find(|module| module.path == path)
             {
                 Some(module) => module.source = source,
-                None => library.modules.push(LibraryModule { path, source }),
+                None => modules.push(LibraryModule { path, source }),
             }
         }
         library
+    }
+
+    /// Whether this is the bundled library itself, not one with injected test modules.
+    pub fn is_bundled(&self) -> bool {
+        Arc::ptr_eq(&self.modules, &Library::bundled().modules)
     }
 
     /// The module whose path is `path` (`prism/core`), if the library has one.
@@ -168,6 +176,8 @@ mod tests {
             "package prism\nfun f() {}\n"
         );
         assert_eq!(library.modules().len(), MODULES.len() + 1);
+        assert!(!library.is_bundled() && Library::bundled().is_bundled());
+        assert!(Library::shared().is_bundled());
         // The bundled library is unchanged.
         assert_ne!(
             Library::bundled().module("prism/system").unwrap().source,

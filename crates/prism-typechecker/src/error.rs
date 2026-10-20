@@ -8,7 +8,13 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeError {
     /// E4001: Identifier not found in current lexical scope or module environment.
-    UnresolvedSymbol { name: String, span: Span },
+    UnresolvedSymbol {
+        name: String,
+        span: Span,
+        /// The library modules declaring `name` publicly, whose import would resolve it, which
+        /// the driver fills before rendering (D8 of `explicit-library`); empty when built.
+        import_suggestions: Vec<String>,
+    },
 
     /// E4001: A bare name found only on an outer receiver, a field (`field`) or an extension
     /// of `receiver`, which the innermost lambda with a receiver hides (D4 of
@@ -130,6 +136,9 @@ pub enum TypeError {
         span: Span,
         /// A fix to suggest, such as calling an extension with `?.` or `()`.
         help: Option<String>,
+        /// The library modules declaring an extension `field_name` that this receiver could
+        /// call, whose import would resolve it (D8 of `explicit-library`); empty when built.
+        import_suggestions: Vec<String>,
     },
 
     /// E4007: Attempting to access a `package`-visible symbol from an external package.
