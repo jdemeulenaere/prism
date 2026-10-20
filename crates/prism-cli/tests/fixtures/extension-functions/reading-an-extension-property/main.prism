@@ -1,0 +1,15 @@
+// expect: ok
+// run: 0
+import /prism/core
+
+struct Box : Copy { val w: Int, val h: Int }
+
+val Box.area: Int get() = w * h
+
+fun main() {
+    val b = Box(2, 3)
+    val r: &Box = &b
+    val none: Box? = null
+    println(b.area + r.area)
+    println(none?.area ?: -1)
+}

@@ -1,0 +1,9 @@
+// expect: E4003
+struct Box : Copy { val w: Int }
+
+val Box.twice: Int get() = w * 2
+
+fun f() {
+    var b = Box(1)
+    b.twice = 4
+}

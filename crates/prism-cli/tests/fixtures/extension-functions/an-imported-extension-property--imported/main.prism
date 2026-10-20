@@ -1,0 +1,4 @@
+// expect: ok
+import /geo/shapes
+
+fun f(b: Box): Int = b.area

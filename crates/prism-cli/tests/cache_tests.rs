@@ -234,6 +234,55 @@ fn modifying_non_generic_function_body() {
     );
 }
 
+/// The files of "Editing a getter recompiles nothing downstream" and "A property's type is part
+/// of the ABI" (`compilation-and-abi`): a library exporting an extension property with a getter,
+/// and an importer reading it.
+const GEO: &str = "package lib\npublic struct Box : Copy { val w: Int }\npublic val Box.twice: Int get() = w * 2\n";
+const BOX_MAIN: &str =
+    "package app\nimport /lib/geo\nimport /prism/core\nfun main() { println(Box(3).twice) }\n";
+
+/// compilation-and-abi: "Editing a getter recompiles nothing downstream".
+#[test]
+fn editing_a_getter_recompiles_nothing_downstream() {
+    let workspace = Workspace::new(
+        "getter",
+        &[("lib/geo.prism", GEO), ("app/main.prism", BOX_MAIN)],
+    );
+    let (stdout, _) = workspace.run_explain("app/main.prism");
+    assert_eq!(stdout, "6\n");
+    workspace.write("lib/geo.prism", &GEO.replace("w * 2", "w + w + 1"));
+    let (stdout, explained) = workspace.run_explain("app/main.prism");
+    assert_eq!(stdout, "7\n");
+    assert!(
+        explained.contains(&"checked lib/geo.prism".to_string()),
+        "{:?}",
+        explained
+    );
+    assert!(
+        explained.contains(&"reused app/main.prism".to_string()),
+        "{:?}",
+        explained
+    );
+}
+
+/// compilation-and-abi: "A property's type is part of the ABI".
+#[test]
+fn a_property_s_type_is_part_of_the_abi() {
+    let workspace = Workspace::new(
+        "property-type",
+        &[("lib/geo.prism", GEO), ("app/main.prism", BOX_MAIN)],
+    );
+    workspace.explain("app/main.prism");
+    workspace.write(
+        "lib/geo.prism",
+        &GEO.replace("twice: Int get() = w * 2", "twice: Double get() = 2.0"),
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&["checked lib/geo.prism", "checked app/main.prism"])
+    );
+}
+
 /// compilation-and-abi: "Modifying public function signature".
 #[test]
 fn modifying_public_function_signature() {

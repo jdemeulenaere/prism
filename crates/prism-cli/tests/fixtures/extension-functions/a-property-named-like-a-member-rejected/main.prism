@@ -1,0 +1,4 @@
+// expect: E4010
+val String.length: Int get() = 0
+
+val <T> List<T>.indices: Range get() = 0..<1

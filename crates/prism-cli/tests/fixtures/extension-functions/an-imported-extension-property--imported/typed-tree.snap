@@ -1,0 +1,9 @@
+module main
+import struct geo/shapes::Box : Copy
+  field 0 val w: Int
+  field 1 val h: Int
+fun main::f(b: Box): Int @4:1
+  local %0 b: Box (parameter)
+  call geo/shapes::Box.area: Int @4:22
+    receiver: borrow (receiver): &Box @4:22
+      local %0 b: Box @4:22

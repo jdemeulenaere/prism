@@ -1,0 +1,6 @@
+// expect: ok
+struct Pair<T> { val a: T, val b: T }
+
+val <T> Pair<T>.first: &T get() = &a
+
+fun f(p: &Pair<String>): Int = p.first.length

@@ -1,0 +1,6 @@
+// expect: ok
+struct Box : Copy { val w: Int, val h: Int }
+
+val Box.area: Int get() = w * h
+
+fun f(b: &Box): Int = b.area

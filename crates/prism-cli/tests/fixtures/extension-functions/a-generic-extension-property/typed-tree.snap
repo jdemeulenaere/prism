@@ -1,0 +1,19 @@
+module main
+struct main::Pair<T> @2:1
+  field 0 val a: T
+  field 1 val b: T
+fun <T> main::Pair<T>.first(this): &T @4:1
+  local %0 this: &Pair<T> (receiver)
+  borrow (written): &T @4:35
+    field 0 a: T @4:36
+      deref: Pair<T> @4:36
+        local %0 this: &Pair<T> @4:36
+fun main::f(p: &Pair<String>): Int @6:1
+  local %0 p: &Pair<String> (parameter)
+  call builtin length: Int @6:32
+    receiver: borrow (receiver): &String @6:32
+      deref: String @6:32
+        call main::Pair<T>.first<String>: &String @6:32
+          receiver: borrow (receiver): &Pair<String> @6:32
+            deref: Pair<String> @6:32
+              local %0 p: &Pair<String> @6:32

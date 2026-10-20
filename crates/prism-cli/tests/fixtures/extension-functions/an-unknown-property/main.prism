@@ -1,0 +1,4 @@
+// expect: E4006
+struct Box : Copy { val w: Int }
+
+fun f(b: Box): Int = b.area

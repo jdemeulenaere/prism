@@ -1,0 +1,9 @@
+// expect: E4008
+compose fun Leaf() {}
+
+struct Box : Copy { val w: Int }
+
+val Box.leaf: Int get() {
+    Leaf()
+    return 1
+}

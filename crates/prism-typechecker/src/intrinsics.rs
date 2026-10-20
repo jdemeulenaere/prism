@@ -31,6 +31,10 @@ pub struct Intrinsic {
 }
 
 const CORE: &str = "prism/core";
+
+/// The member module (D3 of `core-library-in-prism`): every extension it declares on a built-in
+/// type, intrinsic or written in Prism, is a member of that type.
+pub(crate) const MEMBER_MODULE: &str = CORE;
 const COLLECTIONS: &str = "prism/collections";
 const COMPOSE_RUNTIME: &str = prism_typed_tree::COMPOSE_RUNTIME_MODULE;
 const COMPOSE_UI: &str = prism_typed_tree::COMPOSE_UI_MODULE;

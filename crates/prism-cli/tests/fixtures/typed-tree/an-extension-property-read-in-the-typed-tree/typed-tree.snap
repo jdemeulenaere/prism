@@ -1,0 +1,19 @@
+module main
+struct main::Box : Copy @2:1
+  field 0 val w: Int
+  field 1 val h: Int
+fun main::Box.area(this): Int @4:1
+  local %0 this: &Box (receiver)
+  binary *: Int @4:27
+    field 0 w: Int @4:27
+      deref: Box @4:27
+        local %0 this: &Box @4:27
+    field 1 h: Int @4:31
+      deref: Box @4:31
+        local %0 this: &Box @4:31
+fun main::f(b: &Box): Int @6:1
+  local %0 b: &Box (parameter)
+  call main::Box.area: Int @6:23
+    receiver: borrow (receiver): &Box @6:23
+      deref: Box @6:23
+        local %0 b: &Box @6:23

@@ -49,20 +49,20 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 4. Type checker, typed tree and MIR: extension properties (D6)
 
-- [ ] 4.1 Declarations, in `checker.rs`:
+- [x] 4.1 Declarations, in `checker.rs`:
   - register a non-intrinsic extension property of the file as an extension with `property: true` and no built-in, in the table extension functions use, keyed by receiver constructor, name and context, so a property and a function of one name are `E4010`;
   - apply `register_extension_decl`'s checks for fields and members (`E4010`, naming the field, or the member's module);
   - check the getter body as an extension body with a shared receiver, the property's type parameters, no parameters and the property's type as its result, not a composable context;
   - in `ingest_file_abi`, turn an imported plain property into an imported extension (today it `continue`s when the catalog has no entry).
 
   Add fixtures under `extension-functions/` for "A property and a function of one name rejected", "A property named like a field rejected", "A getter calling a composable rejected" and "An unknown property". Verify with `cargo test -p prism-typechecker`.
-- [ ] 4.2 Reads, in `infer_member_access` and the place and assignment paths:
+- [x] 4.2 Reads, in `infer_member_access` and the place and assignment paths:
   - Replace the per-type name tests (`STRING_LENGTH`, `LIST_SIZE`, `LIST_INDICES`, the `Type::Int` branch) by one lookup. A field comes first. Then a member property: its catalog built-in through `builtin_member_call` when it has one, else its declared getter. Then the file's own extension properties, then the imports' (`E4012` when several imports match).
   - Build a getter read as a `Call` of `Callee::Declaration` with `has_receiver`, a shared receiver borrow (`BorrowOrigin::Receiver`) and type arguments solved from the receiver's.
   - `?.` gives `R?`. An assignment or compound assignment is `E4003` ("has no setter"). Parentheses call the value read.
 
   Add fixtures under `extension-functions/` for "Reading an extension property" (executable), "An imported extension property", "A generic extension property", "Assigning an extension property rejected", "Calling an extension property" and "A getter with a block body" (executable), and under `typed-tree/` for "An extension property read in the typed tree". Verify with `cargo test -p prism-typechecker -p prism-typed-tree`.
-- [ ] 4.3 MIR (`crates/prism-mir/src/build`): lower a getter's body as an extension body with no parameter, and a read as the `Call` terminator of its path with the receiver borrow first. Check that the borrow checker accepts a getter returning `&T` tied to its receiver by elision rule 2, and rejects using that borrow after the receiver is mutated (`E5003`), with a `references`-style fixture under `extension-functions/` named after "A generic extension property". Verify with `cargo test -p prism-mir -p prism-borrowck`.
+- [x] 4.3 MIR (`crates/prism-mir/src/build`): lower a getter's body as an extension body with no parameter, and a read as the `Call` terminator of its path with the receiver borrow first. Check that the borrow checker accepts a getter returning `&T` tied to its receiver by elision rule 2, and rejects using that borrow after the receiver is mutated (`E5003`), with a `references`-style fixture under `extension-functions/` named after "A generic extension property". Verify with `cargo test -p prism-mir -p prism-borrowck`.
 
 ## 5. Members of the built-in types in `/prism/core` (D3, D4, D9, D11)
 

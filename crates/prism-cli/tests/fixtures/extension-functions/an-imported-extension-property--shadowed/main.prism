@@ -1,0 +1,6 @@
+// expect: ok
+import /geo/shapes
+
+val Box.area: Int get() = 0
+
+fun g(b: Box): Int = b.area

@@ -1,0 +1,11 @@
+// expect: E5003
+struct Pair<T> { var a: T, val b: T }
+
+val <T> Pair<T>.first: &T get() = &a
+
+fun f(): Int {
+    var p = Pair("x", "y")
+    val r = p.first
+    val m = &mut p
+    return r.length
+}

@@ -1,0 +1,6 @@
+// expect: E4010
+struct Box : Copy { val w: Int }
+
+val Box.size: Int get() = w
+
+fun Box.size(): Int = w

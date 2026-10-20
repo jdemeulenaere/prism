@@ -1,0 +1,5 @@
+package geo
+
+public struct Box : Copy { val w: Int, val h: Int }
+
+public val Box.area: Int get() = w * h

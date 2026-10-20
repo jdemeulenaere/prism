@@ -823,9 +823,9 @@ impl TypeChecker {
             .or_else(|| self.member_scope.as_ref()?.member(&key))
     }
 
-    /// Whether `receiver` has an intrinsic property named `name` (`length` of `String`, `size`
+    /// Whether `receiver` has a member property named `name` (`length` of `String`, `size`
     /// and `indices` of `List<T>`), which reads like a field.
-    fn has_intrinsic_property(&self, receiver: &Type, name: &str) -> bool {
+    fn has_member_property(&self, receiver: &Type, name: &str) -> bool {
         self.member(receiver, name)
             .is_some_and(|member| member.property)
     }
@@ -2176,10 +2176,7 @@ impl TypeChecker {
                                 context: context_ty,
                                 is_operator: *is_operator,
                             };
-                            self.imported_extensions
-                                .entry(key)
-                                .or_default()
-                                .insert(&abi.module, extension);
+                            self.ingest_extension(&abi.module, key, extension);
                         }
                         None => {
                             match intrinsic {
@@ -2213,14 +2210,16 @@ impl TypeChecker {
                     visibility,
                     writable,
                 } => {
-                    if *kind != FunctionKind::Intrinsic {
-                        continue;
-                    }
-                    let constructor = abi_constructor_name(receiver);
-                    let Some(entry) =
-                        crate::intrinsics::lookup(&abi.module, Some(&constructor), name)
-                    else {
-                        continue;
+                    // An intrinsic property is a member of its receiver type (D7 of
+                    // `standard-library`) when the catalog knows it, and left out otherwise.
+                    let builtin = if *kind == FunctionKind::Intrinsic {
+                        let constructor = abi_constructor_name(receiver);
+                        match crate::intrinsics::lookup(&abi.module, Some(&constructor), name) {
+                            Some(entry) => Some(entry.builtin),
+                            None => continue,
+                        }
+                    } else {
+                        None
                     };
                     let type_parameters = type_parameters_from_abi(type_parameters);
                     let receiver_ty = type_from_abi(receiver, &type_parameters);
@@ -2237,17 +2236,24 @@ impl TypeChecker {
                     .with_module(abi.module.clone())
                     .with_type_parameters(type_parameters);
                     let key = (ReceiverKey::of(&receiver_ty), name.clone());
-                    self.members.entry(key).or_insert(Extension {
+                    let extension = Extension {
                         mode: ReceiverMode::Shared,
                         receiver: receiver_ty,
                         module: abi.module.clone(),
                         symbol,
-                        builtin: Some(entry.builtin),
+                        builtin,
                         property: true,
                         writable: *writable,
                         context: None,
                         is_operator: false,
-                    });
+                    };
+                    if builtin.is_some() {
+                        self.members.entry(key).or_insert(extension);
+                    } else {
+                        // A property with a getter is an extension read without parentheses (D6
+                        // and D12 of `core-library-in-prism`).
+                        self.ingest_extension(&abi.module, key, extension);
+                    }
                 }
                 ExportedSymbol::Struct {
                     name,
@@ -2335,6 +2341,20 @@ impl TypeChecker {
                     self.env.define_import(&abi.module, symbol);
                 }
             }
+        }
+    }
+
+    /// Adds the imported extension function or property `extension` of `module`, keyed by
+    /// `key`: a member of its receiver type when `/prism/core` declares it on a built-in type
+    /// (D3 of `core-library-in-prism`), an imported extension otherwise.
+    fn ingest_extension(&mut self, module: &str, key: (ReceiverKey, String), extension: Extension) {
+        if module == crate::intrinsics::MEMBER_MODULE && is_built_in_type(&extension.receiver) {
+            self.members.entry(key).or_insert(extension);
+        } else {
+            self.imported_extensions
+                .entry(key)
+                .or_default()
+                .insert(module, extension);
         }
     }
 
@@ -2669,10 +2689,18 @@ impl TypeChecker {
             }
         }
         for decl in &source_file.declarations {
-            if let Declaration::Function(f) = decl {
-                if f.receiver.is_some() && !f.is_intrinsic() {
-                    self.register_extension_decl(f);
+            match decl {
+                Declaration::Function(f) if f.receiver.is_some() && !f.is_intrinsic() => {
+                    self.register_extension_decl(f, false);
                 }
+                // A property with a getter is an extension read without parentheses, in the
+                // table extension functions use (D6 of `core-library-in-prism`).
+                Declaration::ExtensionProperty(p) => {
+                    if let Some(getter) = p.getter_function() {
+                        self.register_extension_decl(&getter, true);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -3096,7 +3124,10 @@ impl TypeChecker {
     /// an extension named `clone` on a `Clone` type, and one named like a built-in member
     /// (`toString` on `Int`, `Double`, `Bool` or `Char`, `length` on `String`) are rejected with
     /// `E4010`: all but the first could never be called, because members take precedence.
-    fn register_extension_decl(&mut self, f: &FunctionDecl) {
+    /// `property` says that `f` is the getter of an extension property, read without
+    /// parentheses (D6 of `core-library-in-prism`), which shares the table, and so the checks,
+    /// of extension functions.
+    fn register_extension_decl(&mut self, f: &FunctionDecl, property: bool) {
         let receiver = f.receiver.as_ref().expect("an extension has a receiver");
         if f.is_external() {
             self.check_external(f);
@@ -3153,11 +3184,16 @@ impl TypeChecker {
             });
             return;
         }
+        let (what, used) = if property {
+            ("extension property", "read")
+        } else {
+            ("extension", "called")
+        };
         if field_clash {
             self.errors.push(TypeError::UncallableExtension {
                 message: format!(
-                    "extension '{}.{}' can never be called: the field '{}' of '{}' always takes precedence",
-                    receiver_ty, f.name, f.name, receiver_ty
+                    "{} '{}.{}' can never be {}: the field '{}' of '{}' always takes precedence",
+                    what, receiver_ty, f.name, used, f.name, receiver_ty
                 ),
                 span: f.span,
             });
@@ -3185,8 +3221,8 @@ impl TypeChecker {
         } else if let Some(module) = member_clash {
             self.errors.push(TypeError::UncallableExtension {
                 message: format!(
-                    "extension '{}.{}' can never be called: the member '{}' of '{}' that '/{}' declares always takes precedence",
-                    receiver_ty, f.name, f.name, receiver_ty, module
+                    "{} '{}.{}' can never be {}: the member '{}' of '{}' that '/{}' declares always takes precedence",
+                    what, receiver_ty, f.name, used, f.name, receiver_ty, module
                 ),
                 span: f.span,
             });
@@ -3210,7 +3246,7 @@ impl TypeChecker {
             module: self.module_path.clone(),
             symbol,
             builtin: None,
-            property: false,
+            property,
             writable: false,
             context,
             is_operator: f.is_operator,
@@ -3277,6 +3313,13 @@ impl TypeChecker {
                     self.check_function_body(f);
                 }
                 Declaration::Var(v) => self.check_top_level_var(v),
+                // A getter is checked as the extension function it is (D6 of
+                // `core-library-in-prism`).
+                Declaration::ExtensionProperty(p) => {
+                    if let Some(getter) = p.getter_function() {
+                        self.check_function_body(&getter);
+                    }
+                }
                 _ => {}
             }
         }
@@ -3325,8 +3368,13 @@ impl TypeChecker {
                         items.push(item);
                     }
                 }
-                // An intrinsic property has no code: its reads are lowered where they are.
-                Declaration::ExtensionProperty(_) => {}
+                // A getter is a function item; an intrinsic property has no code: its reads
+                // are lowered where they are.
+                Declaration::ExtensionProperty(_) => {
+                    if let Some(item) = file.items.remove(&decl.span()) {
+                        items.push(item);
+                    }
+                }
             }
         }
         let externals = self.externals.clone();
@@ -5315,6 +5363,24 @@ impl TypeChecker {
                 }
                 let field_ty = self.ty(field_id);
                 match is_var {
+                    // A property is read by a call of its getter, and has no setter (D6 of
+                    // `core-library-in-prism`); so is a built-in one, such as `length`.
+                    Some(false)
+                        if matches!(self.builder.kind(field_id), ExpressionKind::Call(_)) =>
+                    {
+                        self.errors.push(TypeError::ImmutabilityViolation {
+                            message: format!(
+                                "cannot assign to the property '{}': it has no setter",
+                                member
+                            ),
+                            span,
+                            help: Some(
+                                "an extension property is read-only: its getter computes its value"
+                                    .to_string(),
+                            ),
+                        });
+                        (field_id, field_ty, false)
+                    }
                     Some(false) => {
                         self.errors.push(TypeError::ImmutabilityViolation {
                             message: format!(
@@ -8202,6 +8268,11 @@ impl TypeChecker {
             (lookup, reached) =
                 self.find_extension_through_indirection(start, &mutable, &mut layers);
         }
+        // A property is read, and the value read is called, as for a field (D6 of
+        // `core-library-in-prism`).
+        if self.names_extension_property(&reached, member) {
+            lookup = ExtensionLookup::None;
+        }
         match lookup {
             ExtensionLookup::Ambiguous(modules) => {
                 let call = self.give_up_call(receiver, args, span);
@@ -10296,11 +10367,9 @@ impl TypeChecker {
                 Type::Struct { id, .. } => {
                     return !self.is_layout_only(id) && self.types.field_index(id, name).is_some()
                 }
-                // Intrinsic properties read like fields: `length` of a `String`, `size` and
-                // `indices` of a list (D7 of `standard-library`).
-                Type::String | Type::List(_) | Type::Int => {
-                    return self.has_intrinsic_property(ty, name)
-                }
+                // Member properties read like fields: `length` of a `String`, `size` and
+                // `indices` of a list (D7 of `standard-library`, D3 of `core-library-in-prism`).
+                _ if is_built_in_type(ty) => return self.has_member_property(ty, name),
                 _ => return false,
             }
         }
@@ -10380,10 +10449,7 @@ impl TypeChecker {
         member: &str,
         span: Span,
     ) -> ExpressionId {
-        let builtin = self
-            .member(&Type::Int, member)
-            .and_then(|member| member.builtin)
-            .expect("an intrinsic property of Int");
+        let builtin = self.member_property_builtin(&Type::Int, member);
         let base = self.consume(base);
         let call = Call {
             callee: Callee::Builtin(builtin),
@@ -10398,6 +10464,14 @@ impl TypeChecker {
             operator: None,
         };
         self.add(ExpressionKind::Call(call), ty, span)
+    }
+
+    /// The built-in of the member property `member` of the built-in type `receiver`, which
+    /// [`Self::member_type`] found.
+    fn member_property_builtin(&self, receiver: &Type, member: &str) -> BuiltinFunction {
+        self.member(receiver, member)
+            .and_then(|member| member.builtin)
+            .expect("a built-in member property")
     }
 
     fn builtin_member_call(
@@ -10516,6 +10590,125 @@ impl TypeChecker {
         }
     }
 
+    /// Whether the extensions named `member` on the type constructor of `reached` that the file
+    /// sees, its own or else its imports', include a property: a read of the name then reads
+    /// it, and a call calls the value read (D6 of `core-library-in-prism`).
+    fn names_extension_property(&self, reached: &Type, member: &str) -> bool {
+        let key = (ReceiverKey::of(reached), member.to_string());
+        self.own_extensions
+            .get(&key)
+            .or_else(|| self.imported_extensions.get(&key))
+            .is_some_and(|extensions| {
+                extensions
+                    .by_context
+                    .values()
+                    .flatten()
+                    .any(|(_, extension)| extension.property)
+            })
+    }
+
+    /// A read of the property `member` with a getter on `target` (D6 of
+    /// `core-library-in-prism`): a member property of a built-in type that `/prism/core` writes
+    /// in Prism, else an extension property of the file or of an import, on the type reached
+    /// through every `&`, `&mut` and `Heap<T>` layer, and through a nullable with `?.`. The read
+    /// is a call of the getter with a shared receiver borrow, whose type arguments the receiver
+    /// solves, inside the chain of a `?.`. `None` when `member` names no such property: a field,
+    /// a variant, a state's value, a built-in property or an unknown name, which
+    /// [`Self::member_type`] types or reports.
+    fn extension_property_read(
+        &mut self,
+        target: ExpressionId,
+        member: &str,
+        is_safe_nav: bool,
+        span: Span,
+    ) -> Option<ExpressionId> {
+        let target_ty = self.ty(target);
+        let navigated = match peel_references(&target_ty) {
+            nullable @ Type::Nullable(_) if is_safe_nav => nullable,
+            _ => &target_ty,
+        };
+        let (base_ty, through_nullable) = match navigated {
+            Type::Nullable(inner) => (inner.as_ref(), true),
+            other => (other, false),
+        };
+        let reached = peel_indirection(base_ty).clone();
+        let field_or_variant = match &reached {
+            Type::Struct { id, .. } => {
+                !self.is_layout_only(id) && self.types.field_index(id, member).is_some()
+            }
+            Type::Enum { id, .. } => self.variant_index(id, member).is_some(),
+            Type::Error | Type::Nullable(_) => true,
+            _ => false,
+        };
+        if field_or_variant || self.state_value_member(&reached, member).is_some() {
+            return None;
+        }
+        let extension = match self.member(&reached, member) {
+            Some(found) if found.property && found.builtin.is_none() => found.clone(),
+            Some(_) => return None,
+            None => {
+                if !self.names_extension_property(&reached, member) {
+                    return None;
+                }
+                match self.find_extension(&reached, member) {
+                    ExtensionLookup::Found { extension, .. } if extension.property => *extension,
+                    ExtensionLookup::Ambiguous(modules) => {
+                        self.errors.push(TypeError::AmbiguousImport {
+                            name: format!("{}.{}", reached, member),
+                            modules,
+                            span,
+                        });
+                        return Some(self.error_node(vec![target], span));
+                    }
+                    _ => return None,
+                }
+            }
+        };
+        if self.reject_unimported_members(&reached, span)
+            || !self.check_visibility(&extension.symbol, span)
+        {
+            return Some(self.error_node(vec![target], span));
+        }
+        if !self.receiver_matches(&extension, &reached) {
+            self.errors.push(TypeError::UnknownField {
+                target_type: reached.clone(),
+                field_name: member.to_string(),
+                span,
+                help: Some(format!(
+                    "the extension property '{}' is declared on '{}', not on '{}'",
+                    member, extension.receiver, reached
+                )),
+                import_suggestions: Vec::new(),
+            });
+            return Some(self.error_node(vec![target], span));
+        }
+        let (joined, base) = if through_nullable {
+            self.open_chain(target)
+        } else {
+            (None, target)
+        };
+        let base = self.peel_indirection_nodes(base);
+        let receiver = self.borrow(false, BorrowOrigin::Receiver, base);
+        // The getter takes no argument, no type argument and no context, so the call's
+        // written parts are empty.
+        let name = Expr::new(ExprKind::Ident(member.to_string()), span);
+        let call = MethodCall {
+            callee: &name,
+            target: &name,
+            member,
+            is_safe_nav,
+            type_arguments: &[],
+            args: &[],
+            expected: None,
+        };
+        let read = self.call_extension(call, &extension, &reached, receiver, span);
+        Some(if through_nullable {
+            self.close_chain(joined, read, SafeNavigationOrigin::Written, span)
+        } else {
+            read
+        })
+    }
+
     fn infer_member_access(
         &mut self,
         target: &Expr,
@@ -10561,6 +10754,11 @@ impl TypeChecker {
         is_safe_nav: bool,
         span: Span,
     ) -> (ExpressionId, Option<bool>) {
+        // A property with a getter is a call of it, never a place (D6 of
+        // `core-library-in-prism`).
+        if let Some(read) = self.extension_property_read(target, member, is_safe_nav, span) {
+            return (read, Some(false));
+        }
         let target_ty = self.ty(target);
         let (member_ty, is_var) = self.member_type(&target_ty, member, is_safe_nav, span);
         if member_ty == Type::Error {
@@ -10611,18 +10809,17 @@ impl TypeChecker {
                 };
                 self.add(kind, field_ty, span)
             }
+            // A built-in member property: `length` of a `String`, `size` of a list (D7 of
+            // `standard-library`).
             Type::String => {
-                self.builtin_member_call(BuiltinFunction::StringLength, base, Vec::new(), span)
+                let builtin = self.member_property_builtin(&reached, member);
+                self.builtin_member_call(builtin, base, Vec::new(), span)
             }
-            Type::Int => self.int_property_read(base, member_ty.clone(), member, span),
             Type::List(element) => {
-                let builtin = if member == LIST_SIZE {
-                    BuiltinFunction::ListSize
-                } else {
-                    BuiltinFunction::ListIndices
-                };
+                let builtin = self.member_property_builtin(&reached, member);
                 self.list_member_read(builtin, (**element).clone(), base, span)
             }
+            Type::Int => self.int_property_read(base, member_ty.clone(), member, span),
             _ => {
                 let variant = self.variant_node(&reached, member, reached.clone(), span);
                 self.discard_then(base, variant)
@@ -10699,6 +10896,10 @@ impl TypeChecker {
     fn extension_named(&self, ty: &Type, name: &str) -> bool {
         let mut ty = ty;
         loop {
+            // A property is read like a field (D6 of `core-library-in-prism`).
+            if self.names_extension_property(ty, name) {
+                return false;
+            }
             if !matches!(self.find_extension(ty, name), ExtensionLookup::None) {
                 return true;
             }
@@ -10813,30 +11014,12 @@ impl TypeChecker {
                     (Type::Error, None)
                 }
             }
-            // The built-in `length`, which cannot be assigned: strings are immutable.
-            Type::String
-                if member == STRING_LENGTH && self.has_intrinsic_property(&peeled_ty, member) =>
+            // A built-in member property, which cannot be assigned: `length` of a `String`,
+            // `size` of a list (D7 of `standard-library`).
+            _ if self
+                .member(&peeled_ty, member)
+                .is_some_and(|m| m.property && m.builtin.is_some()) =>
             {
-                (wrap(Type::Int), Some(false))
-            }
-            // The intrinsic `size` and `indices` of a list, which are not assignable (D6 of
-            // `collections`).
-            Type::List(_)
-                if member == LIST_SIZE && self.has_intrinsic_property(&peeled_ty, member) =>
-            {
-                (wrap(Type::Int), Some(false))
-            }
-            Type::List(_)
-                if member == LIST_INDICES && self.has_intrinsic_property(&peeled_ty, member) =>
-            {
-                (
-                    wrap(Type::plain_struct(NominalId::builtin_range())),
-                    Some(false),
-                )
-            }
-            // An intrinsic property of an `Int` of a library module the file reaches, such as
-            // `16.dp` of `/prism/compose/ui` (D7 of `ui-toolkit`): not assignable.
-            Type::Int if self.has_intrinsic_property(&peeled_ty, member) => {
                 let property_ty = match &self
                     .member(&peeled_ty, member)
                     .expect("a member")
@@ -11406,15 +11589,8 @@ fn clone_target(receiver_ty: &Type, is_safe_nav: bool) -> (Type, bool) {
     }
 }
 
-/// The name of the built-in `length` member of `String` (D6 of `runtime-strings-and-drops`).
-const STRING_LENGTH: &str = "length";
-
-/// The names of the built-in `size` and `indices` of a list, read without parentheses (D6 of
-/// `collections`).
-const LIST_SIZE: &str = "size";
-const LIST_INDICES: &str = "indices";
-
-/// The name of the built-in `toString()` of the scalar types.
+/// The name of `toString()`, which gives a value its text form in templates and `print` (D6
+/// of `string-templates`).
 const TO_STRING: &str = "toString";
 
 /// The name of the built-in `unbox()` of `Heap<T>` (D6 of `heap-boxes`).
@@ -13243,5 +13419,22 @@ mod tests {
             error_codes(&check_source("struct Box<T>(val v: T)\nfun f(b: Box) {}\nfun g(b: Box<&Int>) {}\nfun <T> h(x: T<Int>) {}\n")),
             vec!["E4020", "E4022", "E4020"]
         );
+    }
+}
+
+/// Whether `ty` is one of the built-in types, whose members `/prism/core` declares (D3 of
+/// `core-library-in-prism`): the scalars, `String`, `Unit`, `List<T>`, `Heap<T>` and `Range`.
+pub(crate) fn is_built_in_type(ty: &Type) -> bool {
+    match ty {
+        Type::Int
+        | Type::Float
+        | Type::Bool
+        | Type::Char
+        | Type::String
+        | Type::Unit
+        | Type::List(_)
+        | Type::Heap(_) => true,
+        Type::Struct { id, .. } => *id == NominalId::builtin_range(),
+        _ => false,
     }
 }

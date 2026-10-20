@@ -1,0 +1,4 @@
+// expect: E4010
+struct Box : Copy { val w: Int }
+
+val Box.w: Int get() = 0
