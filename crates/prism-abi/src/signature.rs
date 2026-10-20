@@ -113,6 +113,10 @@ pub enum ExportedSymbol {
         /// The type parameters occurring in field types, which condition the marker.
         marker_parameters: Vec<u32>,
         fields: Vec<(String, bool, AbiType)>, // (name, is_var, type)
+        /// The visibility of each field, in the order of `fields`: `Public` for an unmarked
+        /// field and for an explicit `public`, which mean the same (D6 of `field-visibility`).
+        /// Hidden fields stay in `fields`, since importers lay values out.
+        field_visibilities: Vec<Visibility>,
         /// Whether it is an `intrinsic struct` of the bundled library, without fields, whose
         /// layout the compiler provides and is no part of the ABI (D16 of
         /// `compose-transform`).
@@ -248,6 +252,7 @@ impl ExportedSymbol {
                 marker,
                 marker_parameters,
                 fields,
+                field_visibilities,
                 intrinsic,
                 equality,
                 drop_hook,
@@ -265,9 +270,16 @@ impl ExportedSymbol {
                 hash_marker_parameters(marker_parameters, hasher);
                 hash_type_parameters(type_parameters, hasher);
                 hasher.write_u64(fields.len() as u64);
-                for (fname, is_var, fty) in fields {
+                for ((fname, is_var, fty), visibility) in fields.iter().zip(field_visibilities) {
                     hasher.write_str(fname);
-                    hasher.write_u8(if *is_var { 1 } else { 0 });
+                    // An unmarked field keeps the byte it always had; a hidden one adds its
+                    // visibility above the mutability bit (D6 of `field-visibility`).
+                    let hidden: u8 = match visibility {
+                        Visibility::Public => 0,
+                        Visibility::Private => 1,
+                        Visibility::Package => 2,
+                    };
+                    hasher.write_u8(u8::from(*is_var) | hidden << 1);
                     fty.hash_into(hasher);
                 }
                 // A type without an equality operator keeps the bytes it always had.
@@ -1195,6 +1207,11 @@ impl FileAbi {
 
                 Declaration::Struct(s) => {
                     let fields = struct_fields(s, &bind);
+                    let field_visibilities = s
+                        .fields
+                        .iter()
+                        .map(|field| field.visibility.unwrap_or(Visibility::Public))
+                        .collect();
 
                     symbols.push(ExportedSymbol::Struct {
                         visibility: vis,
@@ -1203,6 +1220,7 @@ impl FileAbi {
                         marker: s.marker,
                         marker_parameters: struct_header(s).marker_parameters,
                         fields,
+                        field_visibilities,
                         intrinsic: s.is_intrinsic(),
                         equality: equality.contains(s.name.as_str()),
                         drop_hook: hooks.drop.contains(s.name.as_str()),

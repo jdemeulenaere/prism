@@ -22,7 +22,8 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement fi
 
 ## 3. ABI (D6)
 
-- [ ] 3.1 `ExportedSymbol::Struct`'s fields carry their visibility, with an explicit `public` recorded as unmarked. The ABI hash covers it, and `prism abi` prints `private val id: Int` and `package val bank: String`. Update the ABI encoding of the build cache if it serializes fields. `AbiTypeDefinition` is unchanged. Add a fixture under `compilation-and-abi/` for "The ABI shows field modifiers", and a `cache_tests.rs` case for "Hiding a field re-checks importers", which needs two runs. Verify with `cargo test -p prism-abi -p prism-cli --test cache_tests`.
+- [x] 3.1 `ExportedSymbol::Struct`'s fields carry their visibility, with an explicit `public` recorded as unmarked. The ABI hash covers it, and `prism abi` prints `private val id: Int` and `package val bank: String`. Update the ABI encoding of the build cache if it serializes fields. `AbiTypeDefinition` is unchanged. Add a fixture under `compilation-and-abi/` for "The ABI shows field modifiers", and a `cache_tests.rs` case for "Hiding a field re-checks importers", which needs two runs. Verify with `cargo test -p prism-abi -p prism-cli --test cache_tests`.
+  - Done (apply): fixtures run `prism check`, not `prism abi`, so "The ABI shows field modifiers" is a `cache_tests.rs` case beside the other `prism abi` cases. The build cache stores no ABI symbol, so it had no encoding to update. The visibility is a list `field_visibilities` beside `fields`, which `AbiTypeMembers::Fields` shares unchanged; the hash folds it into the mutability byte, so an unmarked field hashes as before. The `E4007` half of "Hiding a field re-checks importers" is asserted with task 4.2.
 
 ## 4. Type checker (D2 to D5, D9)
 

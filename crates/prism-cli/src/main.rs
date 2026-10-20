@@ -626,6 +626,7 @@ fn run_abi(path: &str) {
                 marker,
                 marker_parameters,
                 fields,
+                field_visibilities,
                 equality,
                 drop_hook,
                 clone_hook,
@@ -633,8 +634,16 @@ fn run_abi(path: &str) {
             } => {
                 let f_str = fields
                     .iter()
-                    .map(|(f, is_var, t)| {
-                        format!("{} {}: {}", if *is_var { "var" } else { "val" }, f, t)
+                    .zip(field_visibilities)
+                    .map(|((f, is_var, t), visibility)| {
+                        // An unmarked field and an explicit `public` print alike (D6 of
+                        // `field-visibility`).
+                        let modifier = match visibility {
+                            prism_ast::Visibility::Public => String::new(),
+                            hidden => format!("{} ", hidden),
+                        };
+                        let keyword = if *is_var { "var" } else { "val" };
+                        format!("{}{} {}: {}", modifier, keyword, f, t)
                     })
                     .collect::<Vec<_>>()
                     .join(", ");

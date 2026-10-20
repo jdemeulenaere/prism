@@ -2046,3 +2046,56 @@ fn list_of_instances_are_cached() {
         ])
     );
 }
+
+// --- Field visibility (field-visibility)
+
+const ID_LIB: &str =
+    "package lib\npublic struct Id : Copy { val n: Int }\npublic fun id(n: Int): Id = Id(n)\n";
+const ID_IMPORTER: &str = "package app\nimport /lib/id\nfun f(x: Id): Int = x.n\n";
+
+/// compilation-and-abi: "Hiding a field re-checks importers".
+#[test]
+fn hiding_a_field_re_checks_importers() {
+    let workspace = Workspace::new(
+        "hiding_a_field",
+        &[("lib/id.prism", ID_LIB), ("app/main.prism", ID_IMPORTER)],
+    );
+    assert_eq!(
+        workspace.explain("app/main.prism"),
+        lines(&["checked lib/id.prism", "checked app/main.prism"])
+    );
+    let before = abi_hash(&workspace, "lib/id.prism");
+    workspace.write(
+        "lib/id.prism",
+        &ID_LIB.replace("{ val n: Int }", "{ private val n: Int }"),
+    );
+    assert_ne!(abi_hash(&workspace, "lib/id.prism"), before);
+    let output = workspace.run(&["check", "--explain-cache", "app/main.prism"]);
+    assert!(
+        explanation(&output).contains(&"checked app/main.prism".to_string()),
+        "{}",
+        report(&output)
+    );
+}
+
+/// compilation-and-abi: "The ABI shows field modifiers".
+#[test]
+fn the_abi_shows_field_modifiers() {
+    let workspace = Workspace::new(
+        "abi_field_modifiers",
+        &[(
+            "bank/account.prism",
+            "package bank\npublic struct Account { private var balance: Int, package val bank: String, public val owner: String }\n",
+        )],
+    );
+    let output = workspace.run(&["abi", "bank/account.prism"]);
+    assert_success(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(
+            "  public struct Account { private var balance: Int, package val bank: String, val owner: String }\n"
+        ),
+        "{}",
+        stdout
+    );
+}
