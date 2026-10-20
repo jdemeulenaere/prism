@@ -1,0 +1,18 @@
+// expect: ok
+// run: 0
+struct Item { val title: String, val n: MutableState<Int> }
+compose fun Row(item: &Item) { println("row ${item.title} ${item.n.value}") }
+compose fun Rows(items: &State<List<Item>>) {
+    println("rows ${items.value.size}")
+    for (item in items.value) {
+        key(item.n.value) { Row(item) }
+    }
+}
+fun main() {
+    val items = mutableStateOf(listOf(Item("a" + "b", mutableStateOf(1)), Item("c" + "d", mutableStateOf(2))))
+    val c = composition { Rows(items) }
+    items.value[0].n.value = 5
+    items.value.removeAt(0)
+    println(c.recompose())
+    println(c.recompose())
+}

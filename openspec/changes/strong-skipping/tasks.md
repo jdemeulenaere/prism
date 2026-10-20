@@ -34,7 +34,7 @@ Fixtures go under `crates/prism-cli/tests/fixtures/<spec>/`, one case per scenar
 
 ## 7. Memory safety of restarts (D9)
 
-- [ ] 7.1 Add adversarial Rust or fixture probes beyond the scenarios, each under `--check-allocations`: a row restarted after its list reallocated and its own state changed in the same frame; a row of a removed item whose state is written before the removal; a `remember(key)` value replaced while a child that kept it is invalid; a composable restarted after a reload that changed its borrowed type; a borrow of a local passed through two composables to a third that reads a state. Each must print the current data and free everything once. Keep them as fixtures named after the closest scenario (`<scenario-slug>--<form>`).
+- [x] 7.1 Add adversarial Rust or fixture probes beyond the scenarios, each under `--check-allocations`: a row restarted after its list reallocated and its own state changed in the same frame; a row of a removed item whose state is written before the removal; a `remember(key)` value replaced while a child that kept it is invalid; a composable restarted after a reload that changed its borrowed type; a borrow of a local passed through two composables to a third that reads a state. Each must print the current data and free everything once. Keep them as fixtures named after the closest scenario (`<scenario-slug>--<form>`).
 
 ## 8. Event scripts and counts (D14, D15)
 

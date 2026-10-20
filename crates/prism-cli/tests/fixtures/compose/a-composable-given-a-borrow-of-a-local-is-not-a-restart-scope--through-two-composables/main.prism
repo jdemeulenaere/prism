@@ -1,0 +1,18 @@
+// expect: ok
+// run: 0
+compose fun C(s: &String, n: &State<Int>) { println("c $s ${n.value}") }
+compose fun B(s: &String, n: &State<Int>) { println("b"); C(s, n) }
+compose fun A(s: &String, n: &State<Int>) { println("a"); B(s, n) }
+compose fun Screen(n: &State<Int>) {
+    val s = "a" + "b"
+    println("screen")
+    A(s, n)
+}
+fun main() {
+    val n = mutableStateOf(0)
+    val c = composition { Screen(n) }
+    n.value = 1
+    println(c.recompose())
+    n.value = 2
+    println(c.recompose())
+}

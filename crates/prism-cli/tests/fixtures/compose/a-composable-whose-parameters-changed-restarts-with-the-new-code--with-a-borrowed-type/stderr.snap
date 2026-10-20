@@ -1,0 +1,5 @@
+reload: applied main.prism
+reload: the signature of main::Label changed; code already running keeps calling its previous version
+reload: the captures of main::Counter#closure1 changed; values made before keep calling its previous version
+reload: the captures of main::Counter#closure2 changed; values made before keep calling its previous version
+watch: main returned with status 0; waiting for changes

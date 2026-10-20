@@ -1,0 +1,20 @@
+// expect: ok
+// run: 0
+struct Pick { val id: Int, val name: String }
+compose fun Show(p: &Pick, n: &State<Int>) { println("show ${p.id} ${p.name} ${n.value}") }
+compose fun Screen(k: &State<Int>, n: &State<Int>) {
+    val key = k.value
+    val p = remember(key) { Pick(key, "p" + "$key") }
+    println("screen")
+    Show(p, n)
+}
+fun main() {
+    val k = mutableStateOf(1)
+    val n = mutableStateOf(0)
+    val c = composition { Screen(k, n) }
+    n.value = 1
+    k.value = 2
+    println(c.recompose())
+    n.value = 2
+    println(c.recompose())
+}

@@ -1,0 +1,22 @@
+// expect: ok
+// run: 0
+struct Item { val title: String, val n: MutableState<Int> }
+compose fun Row(item: &Item) { println("row ${item.title} ${item.n.value}") }
+compose fun Rows(items: &State<List<Item>>) {
+    println("rows ${items.value.size}")
+    for (item in items.value) {
+        Row(item)
+    }
+}
+fun main() {
+    val items = mutableStateOf(listOf(Item("a" + "b", mutableStateOf(0))))
+    val c = composition { Rows(items) }
+    // Growing the list moves its items; the first item's own state changes in the same frame.
+    for (i in 1..20) {
+        items.value.add(Item("x" + "$i", mutableStateOf(i)))
+    }
+    items.value[0].n.value = 5
+    println(c.recompose())
+    items.value[0].n.value = 6
+    println(c.recompose())
+}
