@@ -201,9 +201,20 @@ pub struct State {
     pub reload_targets: Vec<Handle>,
     /// The scopes reloads invalidated since `--timings` last asked.
     pub invalidated_by_reloads: usize,
+    /// The next version a state cell is given (D3 of `strong-skipping`): one counter per
+    /// thread, from 2, so a version names one cell between two writes and is never 0 (no
+    /// identity) or 1 (permanent).
+    pub next_version: u64,
 }
 
 impl State {
+    /// A version no cell of the thread had before (D3 of `strong-skipping`).
+    pub fn fresh_version(&mut self) -> u64 {
+        let version = self.next_version;
+        self.next_version += 1;
+        version
+    }
+
     const fn new() -> State {
         State {
             pass_counter: 0,
@@ -233,6 +244,7 @@ impl State {
             reload_walk: Vec::new(),
             reload_targets: Vec::new(),
             invalidated_by_reloads: 0,
+            next_version: 2,
         }
     }
 }

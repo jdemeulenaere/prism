@@ -33,6 +33,11 @@
 //! - **Frees** (D12 of `state-handles`). Freeing a cell drops its value through its record and
 //!   frees its block, outside the thread's state; a cell held by a guard or `update` when its
 //!   free is due becomes stale at once and is freed when the last hold ends.
+//! - **Versions** (D3 of `strong-skipping`). Each cell holds a 64-bit version from one counter
+//!   per thread: a fresh one when it is created, and a new one whenever a write stores a value
+//!   (not an equal one), `put` stores `update`'s result, an exclusive guard is taken, or it is
+//!   retired. A composable keeps a borrow of a state's contents with the state's version, so a
+//!   changed version means the data may have changed. Reading it registers no reader.
 //! - **Errors** (D14). An entry that fails records the error's kind in the thread's state and
 //!   returns a failure result; generated code then calls `prism_compose_state_error` with the
 //!   access's location.
@@ -144,6 +149,8 @@ pub struct Cell {
     /// Whether its free came due while a guard or `update` held it: it is stale from then on,
     /// and freed when the last hold ends (D12 of `state-handles`).
     pub released: bool,
+    /// Its version, renewed by every change of its value (D3 of `strong-skipping`).
+    pub version: u64,
 }
 
 /// A state error waiting for its location (D14).
@@ -264,6 +271,7 @@ impl States {
             }
             let block = allocate_block(&*record);
             std::ptr::copy_nonoverlapping(value, block, (*record).size);
+            let version = state.fresh_version();
             Ok(state.cells.insert(Cell {
                 record,
                 value: block,
@@ -271,6 +279,7 @@ impl States {
                 readers: Readers::default(),
                 retired: false,
                 released: false,
+                version,
             }))
         })
     }
@@ -286,6 +295,9 @@ impl States {
                 return None;
             }
             cell.retired = true;
+            let version = state.fresh_version();
+            let cell = state.cells.get_mut(handle).unwrap();
+            cell.version = version;
             // A reader that ran in the pass whose releases retire the cell read the states it
             // needs then; any other reader showed the retired state (D7 of `owned-state`).
             let releasing = state.releasing_pass;
@@ -381,6 +393,19 @@ impl States {
         })
     }
 
+    /// The cell's version (D3 of `strong-skipping`), validating the handle and record as
+    /// [`States::read`] does; it registers no reader. During a pass no state is written, so a
+    /// version read in a pass holds until the pass ends.
+    pub fn version(handle: Handle, record: *const SlotType) -> StateResult<u64> {
+        with_state(|state| {
+            let cell = cell_mut(state, handle, record)?;
+            if matches!(cell.flag, Flag::Empty | Flag::Exclusive) {
+                return Err(StateError::Borrowed);
+            }
+            Ok(cell.version)
+        })
+    }
+
     /// Replaces the cell's value with the value at `value`, moved in (D10): an equal value is
     /// dropped and invalidates nothing; otherwise the old value is dropped and the readers are
     /// invalidated.
@@ -418,6 +443,12 @@ impl States {
             drop(old);
         }
         std::ptr::copy_nonoverlapping(value, old, (*record).size);
+        with_state(|state| {
+            let version = state.fresh_version();
+            if let Some(cell) = state.cells.get_mut(handle) {
+                cell.version = version;
+            }
+        });
         Self::end_hold(handle, true);
         Ok(())
     }
@@ -501,6 +532,8 @@ impl States {
                 return Ok(state.cells.remove(handle));
             }
             std::ptr::copy_nonoverlapping(value, cell.value, (*cell.record).size);
+            let version = state.fresh_version();
+            state.cells.get_mut(handle).unwrap().version = version;
             invalidate_readers(state, handle);
             Ok(None)
         })?;
@@ -522,7 +555,11 @@ impl States {
                 return Err(StateError::Borrowed);
             }
             cell.flag = Flag::Exclusive;
-            Ok(cell.value)
+            let value = cell.value;
+            // What the guard's holder writes cannot be compared, so the version changes now.
+            let version = state.fresh_version();
+            state.cells.get_mut(handle).unwrap().version = version;
+            Ok(value)
         })
     }
 

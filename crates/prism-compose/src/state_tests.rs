@@ -449,3 +449,98 @@ fn a_side_effect_runs_as_a_handler_and_may_write() {
     assert_eq!(read::<i64>(made, int), Err(StateError::Stale));
     reset();
 }
+
+/// compose: "Versions are never repeated": creating, writing, an exclusive guard, `update`,
+/// retiring, and a cell created after the first was freed each give a new, increasing version,
+/// never 0 or 1.
+#[test]
+fn versions_are_never_repeated() {
+    let int = slot_type::<i64>("Int");
+    let c = Composition::start(Box::new(NodeTree::new()), content(|_: Composer| {})).unwrap();
+    let first = create(int, 1i64).unwrap();
+    let mut versions = vec![States::version(first, int).unwrap()];
+    write(first, int, 2i64).unwrap();
+    versions.push(States::version(first, int).unwrap());
+    States::begin_edit(first, int).unwrap();
+    States::end_edit(first);
+    versions.push(States::version(first, int).unwrap());
+    let mut taken = 0i64;
+    unsafe { States::take(first, int, (&mut taken as *mut i64).cast()) }.unwrap();
+    unsafe { States::put(first, int, (&mut taken as *mut i64).cast()) }.unwrap();
+    versions.push(States::version(first, int).unwrap());
+    States::retire(first);
+    versions.push(States::version(first, int).unwrap());
+    // The next pass frees the retired cell; a new cell may reuse its storage, never its version.
+    invalidate_root(c);
+    Composition::recompose(c).unwrap();
+    assert_eq!(States::version(first, int), Err(StateError::Stale));
+    let second = create(int, 1i64).unwrap();
+    versions.push(States::version(second, int).unwrap());
+    assert!(
+        versions.iter().all(|version| *version > 1),
+        "{:?}",
+        versions
+    );
+    assert!(
+        versions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{:?}",
+        versions
+    );
+    // A version read registers no reader, and fails like a read on a held cell.
+    States::begin_edit(second, int).unwrap();
+    assert_eq!(States::version(second, int), Err(StateError::Borrowed));
+    States::end_edit(second);
+    States::retire(second);
+    Composition::dispose(c).unwrap();
+    reset();
+}
+
+/// compose: "An equal write keeps the version".
+#[test]
+fn an_equal_write_keeps_the_version() {
+    let int = slot_type::<i64>("Int");
+    let cell = create(int, 5i64).unwrap();
+    let before = States::version(cell, int).unwrap();
+    write(cell, int, 5i64).unwrap();
+    assert_eq!(States::version(cell, int), Ok(before), "an equal write");
+    write(cell, int, 6i64).unwrap();
+    assert!(
+        States::version(cell, int).unwrap() > before,
+        "a different write"
+    );
+    States::retire(cell);
+    reset();
+}
+
+/// D19 of `strong-skipping`: a value `remember` lends is stored in a new block each time, even
+/// without a drop entry, while `set_slot` overwrites such a value in place.
+#[test]
+fn a_lent_remembered_value_gets_a_new_block() {
+    let int = slot_type::<i64>("Int");
+    let addresses = Rc::new(RefCell::new(Vec::new()));
+    let seen = addresses.clone();
+    let c = Composition::start(
+        Box::new(NodeTree::new()),
+        content(move |k: Composer| {
+            let mut lent = 7i64;
+            let mut kept = 8i64;
+            let lent = unsafe { k.remember_slot(int, (&mut lent as *mut i64).cast()) }.unwrap();
+            let kept = unsafe { k.set_slot(int, (&mut kept as *mut i64).cast()) }.unwrap();
+            seen.borrow_mut().push((lent, kept));
+        }),
+    )
+    .unwrap();
+    invalidate_root(c);
+    Composition::recompose(c).unwrap();
+    let addresses = addresses.borrow();
+    assert_ne!(
+        addresses[0].0, addresses[1].0,
+        "a new block for the lent value"
+    );
+    assert_eq!(
+        addresses[0].1, addresses[1].1,
+        "the kept value overwritten in place"
+    );
+    Composition::dispose(c).unwrap();
+    reset();
+}

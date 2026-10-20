@@ -170,6 +170,7 @@ pub fn leak_slot() {
 pub fn leak_cell() {
     let record = slot_type::<i64>("Int");
     crate::thread::with_state(|state| {
+        let version = state.fresh_version();
         state.cells.insert(crate::state::Cell {
             record,
             value: std::ptr::null_mut(),
@@ -177,6 +178,7 @@ pub fn leak_cell() {
             readers: Default::default(),
             retired: false,
             released: false,
+            version,
         });
     });
 }

@@ -184,6 +184,24 @@ impl Composer {
         })
     }
 
+    /// [`Composer::set_slot`] for the value a `remember` lends: always moved into a new block,
+    /// the old slot forgotten until the end of the pass, so a borrow of the old value kept as
+    /// an identity never matches the new one (D19 of `strong-skipping`).
+    ///
+    /// # Safety
+    ///
+    /// As for [`Composer::set_slot`].
+    pub unsafe fn remember_slot(
+        self,
+        slot_type: *const SlotType,
+        value: *mut u8,
+    ) -> ComposeResult<*const u8> {
+        with_state(|state| {
+            slot_position(state, self)?;
+            Ok(store_new(state, slot_type, value) as *const u8)
+        })
+    }
+
     /// Compares the value at `value` with the slot at the cursor: `false` when the slot has
     /// its type and the type's equality entry finds them equal, after which the new value is
     /// released; otherwise the new value is stored there, forgetting any old slot, and `true`.
@@ -504,6 +522,29 @@ unsafe fn store(state: &mut State, slot_type: *const SlotType, value: *mut u8) -
             stored
         }
     };
+    advance(state);
+    stored
+}
+
+/// Puts a value of `slot_type` in a new block at the cursor of the innermost open group,
+/// forgetting any slot there until the end of the pass, and moves past it.
+///
+/// # Safety
+///
+/// As for [`Composer::set_slot`].
+unsafe fn store_new(state: &mut State, slot_type: *const SlotType, value: *mut u8) -> *mut u8 {
+    let frame = *state.frames.last().unwrap();
+    let cursor = frame.slot_cursor as usize;
+    let slots = &mut state.groups.get_mut(frame.group).unwrap().slots;
+    let slot = Slot::typed(slot_type, value);
+    let stored = slot.typed_match(slot_type).expect("the slot just stored");
+    match slots.get_mut(cursor) {
+        Some(old) => {
+            let old = std::mem::replace(old, slot);
+            state.releases.push_back(Release::Slot(old));
+        }
+        None => slots.push(slot),
+    }
     advance(state);
     stored
 }

@@ -192,6 +192,21 @@ pub unsafe extern "C" fn prism_compose_set_slot(
     or_misuse(Composer(composer).set_slot(slot_type, value))
 }
 
+/// Moves the value `remember` lends into a new block at the cursor, forgetting the old slot
+/// there, and gives its address (D19 of `strong-skipping`).
+///
+/// # Safety
+///
+/// `slot_type` must be a valid record and `value` a value of it that the caller gives up.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_remember_slot(
+    composer: u64,
+    slot_type: *const SlotType,
+    value: *mut u8,
+) -> *const u8 {
+    or_misuse(Composer(composer).remember_slot(slot_type, value))
+}
+
 /// Compares the value at `value` with the slot at the cursor; 1 when it changed and was
 /// stored.
 ///
@@ -279,6 +294,16 @@ pub unsafe extern "C" fn prism_compose_state_read(
     record: *const SlotType,
 ) -> *const u8 {
     or_record(States::read(Handle(handle), record), std::ptr::null())
+}
+
+/// The version of the cell `handle` (D3 of `strong-skipping`), or 0.
+///
+/// # Safety
+///
+/// `record` must be a valid record.
+#[no_mangle]
+pub unsafe extern "C" fn prism_compose_state_version(handle: u64, record: *const SlotType) -> u64 {
+    or_record(States::version(Handle(handle), record), 0)
 }
 
 /// Replaces the value of the cell `handle` with the value at `value`, moved in; 1, or 0.
