@@ -1930,6 +1930,9 @@ impl Codec for Body {
             groups,
             origin,
             body_key,
+            // Recomputed from the blocks when decoding, so the encoding (and every hash of it)
+            // is that of the blocks alone.
+            requests_instances: _,
             span,
         } = self;
         owner.encode(encoder);
@@ -1949,7 +1952,7 @@ impl Codec for Body {
         span.encode(encoder);
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
-        Some(Body {
+        let mut body = Body {
             owner: decoder.decode()?,
             is_compose: decoder.decode()?,
             type_parameters: decoder.decode()?,
@@ -1964,8 +1967,11 @@ impl Codec for Body {
             groups: decoder.decode()?,
             origin: decoder.decode()?,
             body_key: decoder.decode()?,
+            requests_instances: false,
             span: decoder.decode()?,
-        })
+        };
+        body.requests_instances = body.scan_requests_instances();
+        Some(body)
     }
 }
 

@@ -240,7 +240,7 @@ pub(crate) fn restart_body(
         })
         .collect();
     blocks.alloc(block(deads, TerminatorKind::Return, span));
-    Body {
+    let mut body = Body {
         owner: BodyOwner::Restart { function },
         is_compose: false,
         type_parameters: original.type_parameters.clone(),
@@ -255,8 +255,12 @@ pub(crate) fn restart_body(
         groups: Arena::new(),
         origin: None,
         body_key: None,
+        requests_instances: false,
         span,
-    }
+    };
+    // The call of a generic composable names its type parameters.
+    body.requests_instances = body.scan_requests_instances();
+    body
 }
 
 /// The root content adapter of the body `parent`, whose content has type `content_type`.
@@ -314,6 +318,8 @@ pub(crate) fn root_content_body(
         groups: Arena::new(),
         origin: None,
         body_key: None,
+        // It calls only its content value.
+        requests_instances: false,
         span,
     }
 }

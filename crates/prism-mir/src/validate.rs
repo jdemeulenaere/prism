@@ -185,6 +185,14 @@ impl Validator<'_> {
                 ));
             }
         }
+        // What the body records of its instance requests is what its calls make, so a file's
+        // summary may skip the bodies that make none.
+        if body.requests_instances != body.scan_requests_instances() {
+            self.report(format!(
+                "the body records that it requests instances: {}, but its calls say {}",
+                body.requests_instances, !body.requests_instances
+            ));
+        }
         // Only a closure that owns a capture records why it does.
         let owns = body.capture_modes.contains(&CaptureMode::Owned);
         if self.file.phase == MirPhase::Elaborated && owns && body.ownership_reason.is_none() {
@@ -1542,6 +1550,11 @@ mod tests {
             target: Some(BlockId(1)),
             is_compose: false,
         });
+        assert_reports(
+            &file,
+            "the body records that it requests instances: false, but its calls say true",
+        );
+        body(&mut file).requests_instances = true;
         assert_reports(&file, "operand 0 has type Int, expected String");
         let mut file = small_file();
         body(&mut file).locals[LocalId(2)].ty = parameter_t();

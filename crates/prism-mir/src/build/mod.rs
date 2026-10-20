@@ -505,7 +505,7 @@ impl<'a> Builder<'a> {
             });
         }
         let blocks = merge_blocks(built);
-        Body {
+        let mut body = Body {
             owner: self.owner,
             is_compose: self.is_compose,
             type_parameters: self.type_parameters,
@@ -520,8 +520,12 @@ impl<'a> Builder<'a> {
             groups: self.groups,
             origin: self.origin,
             body_key: None,
+            requests_instances: false,
             span: self.span,
-        }
+        };
+        // Read while the blocks are at hand, so a file's summary need not visit them again.
+        body.requests_instances = body.scan_requests_instances();
+        body
     }
 
     // Blocks.

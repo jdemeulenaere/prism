@@ -191,6 +191,12 @@ pub struct Body {
     /// function and closure it composes: what a reload's affected bodies are named by (D5 of
     /// `compose-hot-reload`). `None` for every other body, and before composition.
     pub body_key: Option<u64>,
+    /// Whether a call of the body requests an instance: a call of a function or a default
+    /// generator with type arguments ([`crate::InstanceRequest::of_call`]). Recorded where the
+    /// body is built, while its blocks are at hand, so that a file's summary visits only the
+    /// bodies that request instances instead of every block of the file
+    /// ([`Body::scan_requests_instances`]; the validator checks that they agree).
+    pub requests_instances: bool,
     pub span: Span,
 }
 
@@ -295,6 +301,12 @@ impl ClosureStep {
 }
 
 impl Body {
+    /// Whether a call of the body requests an instance, read from its blocks: what
+    /// [`Body::requests_instances`] records.
+    pub fn scan_requests_instances(&self) -> bool {
+        crate::InstanceRequest::of_body(self).next().is_some()
+    }
+
     /// The type of the return place.
     pub fn return_type(&self) -> &Type {
         &self.locals[LocalId::RETURN].ty

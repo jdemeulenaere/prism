@@ -191,7 +191,7 @@ pub fn collect_instances(files: &[&MirFile]) -> Result<Vec<InstanceUnit>, Vec<In
         let file_records = GenericRecord::of_file(file);
         // No record is stored or keyed, so no hash is needed.
         let hashes = vec![[0; 32]; file_records.len()];
-        summaries.push(FileSummary::of(file, &file_records, &hashes, None));
+        summaries.push(FileSummary::for_instances(file, &file_records, &hashes));
         for record in file_records {
             records.insert(generic_name(&record.path), record);
         }

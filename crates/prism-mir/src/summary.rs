@@ -178,20 +178,43 @@ impl FileSummary {
         record_hashes: &[[u8; 32]],
         entry_point: Option<DeclarationPath>,
     ) -> FileSummary {
+        let mut summary = Self::for_instances(file, records, record_hashes);
+        summary.entry_point = entry_point;
+        for (_, body) in file.bodies.iter() {
+            if let (BodyOwner::Function(path), Some(key)) = (&body.owner, body.body_key) {
+                summary
+                    .composable_functions
+                    .push((key, declaration_name(path)));
+            }
+            // A compiled body: generic bodies and their closures are compiled as instances.
+            if body.type_parameters.is_empty() {
+                summary.composable_bodies.extend(body.body_key);
+            }
+        }
+        summary
+    }
+
+    /// The parts of [`FileSummary::of`] that instance planning (`prism_codegen::plan_instances`)
+    /// reads: the
+    /// roots and the generics, without an entry point or composable bodies. Its cost is one
+    /// visit of each body's header, the blocks of the bodies that request instances
+    /// ([`Body::requests_instances`]) and the records, so planning a large file's instances
+    /// never reads its other blocks or names.
+    pub fn for_instances(
+        file: &MirFile,
+        records: &[GenericRecord],
+        record_hashes: &[[u8; 32]],
+    ) -> FileSummary {
         let mut roots = Vec::new();
-        let mut composable_bodies = Vec::new();
-        let mut composable_functions = Vec::new();
         let mut seen: HashSet<(DeclarationPath, Option<DefaultParameter>, Vec<Type>)> =
             HashSet::new();
         for (_, body) in file.bodies.iter() {
-            if let (BodyOwner::Function(path), Some(key)) = (&body.owner, body.body_key) {
-                composable_functions.push((key, path.to_string()));
-            }
             // A compiled body: generic bodies and their closures are compiled as instances.
-            if !body.type_parameters.is_empty() {
+            // Visiting only the bodies that request instances keeps the summary from reading
+            // every block of a large file, whose blocks outgrow the caches.
+            if !body.type_parameters.is_empty() || !body.requests_instances {
                 continue;
             }
-            composable_bodies.extend(body.body_key);
             for request in InstanceRequest::of_body(body) {
                 let key = (
                     request.callee.clone(),
@@ -209,11 +232,11 @@ impl FileSummary {
             .map(|(record, hash)| generic_summary(record, *hash))
             .collect();
         FileSummary {
-            entry_point,
+            entry_point: None,
             roots,
             generics,
-            composable_bodies,
-            composable_functions,
+            composable_bodies: Vec::new(),
+            composable_functions: Vec::new(),
         }
     }
 
@@ -226,6 +249,19 @@ impl FileSummary {
     pub fn decode(bytes: &[u8]) -> Option<FileSummary> {
         crate::codec::decode(bytes)
     }
+}
+
+/// `path` as its `Display` writes it, built without the formatting machinery for a plain
+/// declaration, the common case: one allocation of the exact size and two copies.
+fn declaration_name(path: &DeclarationPath) -> String {
+    if path.receiver.is_some() {
+        return path.to_string();
+    }
+    let mut name = String::with_capacity(path.module.len() + 2 + path.name.len());
+    name.push_str(&path.module);
+    name.push_str("::");
+    name.push_str(&path.name);
+    name
 }
 
 /// The summary of `record`, whose Monomorphization Hash is `record_hash`: each closure's calls

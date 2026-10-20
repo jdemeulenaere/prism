@@ -200,6 +200,7 @@ mod tests {
             groups: Arena::new(),
             origin: None,
             body_key: None,
+            requests_instances: false,
             span: Span::dummy(),
         }
     }

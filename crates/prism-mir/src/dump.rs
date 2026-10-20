@@ -652,6 +652,7 @@ pub(crate) mod tests {
             groups: Arena::new(),
             origin: None,
             body_key: None,
+            requests_instances: false,
             span: span(1, 1),
         };
         let mut bodies = Arena::new();

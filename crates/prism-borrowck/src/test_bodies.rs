@@ -58,6 +58,7 @@ pub(crate) fn body_with_edges(successors: &[&[u32]]) -> Body {
         groups: Arena::new(),
         origin: None,
         body_key: None,
+        requests_instances: false,
         span: Span::dummy(),
     }
 }

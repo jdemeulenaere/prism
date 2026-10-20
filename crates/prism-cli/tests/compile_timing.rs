@@ -35,6 +35,10 @@
 //! (`n^1.1`), or one of [`LINEAR_BORROW_HEAVY`] faster than x4.8 per x4, or when a stage of at
 //! least 5 ms of a shape of [`LINEAR_DEPTH`] grows on average faster than x2.5 per doubling of
 //! the depth (`n^1.3`), only when `PRISM_ASSERT_TIMING=1` is set.
+//!
+//! `instances_are_collected_in_linear_time` times the `inst` stage alone, warm, on the shapes of
+//! [`LINEAR_INSTANCES`], and fails when one grows on average faster than x4.6 per x4 under
+//! `PRISM_ASSERT_TIMING=1`.
 
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_jit::{JITBuilder, JITModule};
@@ -1593,6 +1597,92 @@ fn prelude_costs_a_lookup_per_file() {
     std::thread::Builder::new()
         .stack_size(8 << 20)
         .spawn(prelude_benchmark)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// The composed MIR of `source`, compiled as [`compile`] compiles it.
+fn composed_file(source: &str) -> prism_mir::MirFile {
+    let file = prism_parser::parse_source(source).unwrap_or_else(|error| panic!("{:?}", error));
+    let package = file.package.as_ref().map(|p| p.package_string());
+    let mut checker = prism_typechecker::TypeChecker::new(package, "bench")
+        .with_prelude(prism_typechecker::test_prelude());
+    let tree = checker.check_module(&file);
+    assert!(
+        checker.errors.is_empty(),
+        "type errors: {:?}",
+        checker.errors
+    );
+    let elaborated = prism_borrowck::check_file(&prism_mir::lower_file(&tree))
+        .unwrap_or_else(|errors| panic!("borrow errors: {:?}", errors));
+    prism_cli::compose_file(&elaborated)
+}
+
+/// The shapes whose instance collection is held to near-linear growth while its data is in the
+/// caches (`INSTANCE_GROWTH` per x4 on average): the collection reads each body's header and
+/// only the blocks of the bodies that request instances (`Body::requests_instances`), so a
+/// large file whose composables make no generic call costs a visit per body. Reading every
+/// block, as it did, grew x10 per x4 at 4,096 composables, the 360-byte blocks of the composed
+/// file outgrowing the caches. The single cold run of the main benchmark's `inst` column stays
+/// under a millisecond, too little for its growth to be measured reliably.
+const LINEAR_INSTANCES: [(&str, Generator); 3] = [
+    ("borrowed-arguments", borrowed_arguments),
+    ("many-composables", many_composables),
+    ("many-instances", many_instances),
+];
+const INSTANCE_GROWTH: f64 = 4.6;
+
+/// A shape's generator: its program at a size.
+type Generator = fn(usize) -> String;
+
+fn instance_benchmark() {
+    println!("instance collection in us, warm, best of 20 runs:");
+    let mut too_fast_growth = Vec::new();
+    for (name, generate) in LINEAR_INSTANCES {
+        let mut times = Vec::new();
+        for size in SIZES {
+            let file = composed_file(&generate(*size));
+            let collect = || {
+                let start = Instant::now();
+                let instances = prism_codegen::collect_instances(&[&file])
+                    .unwrap_or_else(|errors| panic!("instances rejected: {:?}", errors));
+                prism_codegen::check_instances(&instances)
+                    .unwrap_or_else(|errors| panic!("unsupported instances: {:?}", errors));
+                start.elapsed()
+            };
+            collect();
+            let best = (0..20).map(|_| collect()).min().unwrap();
+            println!(
+                "  {:<28} {:>10.1}",
+                format!("{}-{}", name, size),
+                best.as_secs_f64() * 1e6
+            );
+            times.push((*size, best));
+        }
+        let ((first_size, first), (last_size, last)) = (times[0], times[times.len() - 1]);
+        let steps = (last_size as f64 / first_size as f64).log(4.0);
+        let growth = (last.as_secs_f64() / first.as_secs_f64()).powf(1.0 / steps);
+        println!("  {:<28} inst x{:.2} per x4 on average", name, growth);
+        if growth > INSTANCE_GROWTH {
+            too_fast_growth.push(format!("{} (inst x{:.2} per x4)", name, growth));
+        }
+    }
+    if std::env::var_os("PRISM_ASSERT_TIMING").is_some_and(|value| value == "1") {
+        assert!(
+            too_fast_growth.is_empty(),
+            "instance collection grows super-linearly for {:?}",
+            too_fast_growth
+        );
+    }
+}
+
+#[test]
+#[ignore = "a benchmark: run it with --ignored --nocapture"]
+fn instances_are_collected_in_linear_time() {
+    std::thread::Builder::new()
+        .stack_size(8 << 20)
+        .spawn(instance_benchmark)
         .unwrap()
         .join()
         .unwrap();
