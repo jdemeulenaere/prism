@@ -1,0 +1,11 @@
+// expect: ok
+// entry: app/main.prism
+// run: 0
+package app
+
+import /prism/core
+
+struct Owned<T>(val v: T)
+operator mut fun <T> Owned<T>.drop() { println("drop owned") }
+fun <T> wrap(x: T) { val o = Owned(x) }
+fun main() { wrap(true) }

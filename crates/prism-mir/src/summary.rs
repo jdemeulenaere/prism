@@ -9,12 +9,22 @@
 //! exactly the requests instantiating its body would find, so the instances of a whole program,
 //! and its cross-file polymorphic recursion (`E6004`), follow from the summaries alone. A summary
 //! is one pass over the file's calls, and is small: a few dozen bytes per call.
+//!
+//! Hooks of generic types are instances too (D11 of `drop-and-clone-hooks`): a body that holds a
+//! value of a generic struct or enum with a drop or clone hook, in a local or in a part of one,
+//! or passes one as a type argument, requests the hook's instance as it would a call. Roots and
+//! generics' calls therefore also hold, once per distinct type reached, a request of
+//! `<Type>.drop` for each generic type with a drop hook that a body's local types and call type
+//! arguments reach through fields, payloads, nullables, boxes and lists, and of `<Type>.clone`
+//! for each such type with a clone hook that is `Clone` at its arguments. A generic's requests
+//! keep its type parameters, which planning substitutes. A file whose types have no generic
+//! hook walks nothing.
 
 use crate::codec::{Codec, Decoder, Encoder};
 use crate::mir::{Body, BodyId, BodyOwner, Callee, MirFile, TerminatorKind};
 use crate::record::GenericRecord;
 use prism_ast::Span;
-use prism_typed_tree::{DeclarationPath, Type, TypeParameter};
+use prism_typed_tree::{DeclarationPath, Type, TypeParameter, TypeTable};
 use std::collections::{HashMap, HashSet};
 
 /// What planning needs from one file.
@@ -226,6 +236,26 @@ impl FileSummary {
                 }
             }
         }
+        // The hook instances the compiled bodies' values need (D11 of `drop-and-clone-hooks`),
+        // each type walked once per file.
+        if let Some(mut walk) = HookWalk::new(&file.types) {
+            let mut requests = Vec::new();
+            for (_, body) in file.bodies.iter() {
+                if body.type_parameters.is_empty() {
+                    walk.body(body, &mut requests);
+                }
+            }
+            for request in requests {
+                let key = (
+                    request.callee.clone(),
+                    request.default.clone(),
+                    request.type_arguments.clone(),
+                );
+                if seen.insert(key) {
+                    roots.push(request);
+                }
+            }
+        }
         let generics = records
             .iter()
             .zip(record_hashes)
@@ -286,6 +316,7 @@ fn generic_summary(record: &GenericRecord, record_hash: [u8; 32]) -> GenericSumm
             calls: InstanceRequest::of_body(body).collect(),
         })
         .collect();
+    let mut closure_roots = Vec::with_capacity(record.closures.len());
     for (closure, id) in record.closures.iter().zip(&record.closure_ids) {
         let Some(parent) = crate::record::parent_of(&closure.owner) else {
             continue;
@@ -299,6 +330,30 @@ fn generic_summary(record: &GenericRecord, record_hash: [u8; 32]) -> GenericSumm
             Some(index) => &mut defaults[index].calls,
         };
         target.extend(InstanceRequest::of_body(closure));
+        closure_roots.push((closure, root));
+    }
+    // The hook instances of the generic types its bodies hold, with its type parameters left
+    // as they are (D11 of `drop-and-clone-hooks`): one walk for the function and its closures,
+    // and one for each default and its closures, since each is instantiated alone.
+    if HookWalk::new(&record.types).is_some() {
+        let targets = std::iter::once((None, &record.function)).chain(
+            record
+                .defaults
+                .iter()
+                .enumerate()
+                .map(|(i, body)| (Some(i), body)),
+        );
+        for (root, body) in targets {
+            let mut walk = HookWalk::new(&record.types).expect("a generic type has a hook");
+            let target = match root {
+                None => &mut calls,
+                Some(index) => &mut defaults[index].calls,
+            };
+            walk.body(body, target);
+            for (closure, _) in closure_roots.iter().filter(|(_, r)| *r == root) {
+                walk.body(closure, target);
+            }
+        }
     }
     let composable_bodies = record
         .function
@@ -318,6 +373,125 @@ fn generic_summary(record: &GenericRecord, record_hash: [u8; 32]) -> GenericSumm
         calls,
         defaults,
         composable_bodies,
+    }
+}
+
+/// The walk of the types a file's bodies hold for the generic types with hooks they reach (D11
+/// of `drop-and-clone-hooks`): each type is visited once, so the walk is linear in the distinct
+/// types of the bodies walked and of their definitions.
+struct HookWalk<'t> {
+    types: &'t TypeTable,
+    visited: HashSet<Type>,
+    /// The requests already made, so that each is made once.
+    requested: HashSet<(String, Vec<Type>)>,
+}
+
+impl<'t> HookWalk<'t> {
+    /// The walk over `types`, or `None` when no generic struct or enum of `types` has a hook,
+    /// so that nothing can be requested.
+    fn new(types: &'t TypeTable) -> Option<Self> {
+        let generic_hook = types
+            .drop_hook_types()
+            .chain(types.clone_hook_types())
+            .any(|id| !types.parameters(id).is_empty());
+        generic_hook.then(|| HookWalk {
+            types,
+            visited: HashSet::new(),
+            requested: HashSet::new(),
+        })
+    }
+
+    /// Requests into `out` the hook instances the local types of `body` and the type arguments
+    /// of its calls reach.
+    fn body(&mut self, body: &Body, out: &mut Vec<InstanceRequest>) {
+        for (_, local) in body.locals.iter() {
+            self.walk(&local.ty, local.span, out);
+        }
+        if !body.requests_instances {
+            return;
+        }
+        for (_, block) in body.blocks.iter() {
+            if let TerminatorKind::Call { type_arguments, .. } = &block.terminator.kind {
+                for argument in type_arguments {
+                    self.walk(argument, block.terminator.span, out);
+                }
+            }
+        }
+    }
+
+    /// Requests the hook instances of the generic types with hooks that `ty` reaches through
+    /// fields, payloads, nullables, boxes and lists. A reference or a function value is not
+    /// walked: a borrow drops and clones nothing, and a closure's captures are its own body's
+    /// locals.
+    fn walk(&mut self, ty: &Type, span: Span, out: &mut Vec<InstanceRequest>) {
+        let mut pending = vec![ty.clone()];
+        while let Some(ty) = pending.pop() {
+            if !self.visited.insert(ty.clone()) {
+                continue;
+            }
+            match &ty {
+                Type::Nullable(inner) | Type::Heap(inner) | Type::List(inner) => {
+                    pending.push(inner.as_ref().clone())
+                }
+                Type::Struct { id, arguments } | Type::Enum { id, arguments } => {
+                    if !arguments.is_empty() {
+                        if self.types.has_drop_hook(id) {
+                            self.request(id, arguments, "drop", span, out);
+                        }
+                        if self.types.has_clone_hook(id) && self.types.is_clone(&ty) {
+                            self.request(id, arguments, "clone", span, out);
+                        }
+                    }
+                    if let Some(fields) = self.types.instantiated_fields(id, arguments) {
+                        pending.extend(fields.into_iter().map(|(_, _, field)| field));
+                    }
+                    if let Some(variants) = self.types.instantiated_variants(id, arguments) {
+                        pending.extend(variants.into_iter().flat_map(|(_, payloads)| payloads));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Requests the instance of the hook `name` of the generic type `id` for `arguments`.
+    fn request(
+        &mut self,
+        id: &prism_typed_tree::NominalId,
+        arguments: &[Type],
+        name: &str,
+        span: Span,
+        out: &mut Vec<InstanceRequest>,
+    ) {
+        if !self.requested.insert((
+            format!("{}::{}.{}", id.module, id.name, name),
+            arguments.to_vec(),
+        )) {
+            return;
+        }
+        let parameters: Vec<Type> = self
+            .types
+            .parameters(id)
+            .iter()
+            .map(TypeParameter::as_type)
+            .collect();
+        let receiver = if self.types.enum_variants(id).is_some() {
+            Type::Enum {
+                id: id.clone(),
+                arguments: parameters,
+            }
+        } else {
+            Type::Struct {
+                id: id.clone(),
+                arguments: parameters,
+            }
+        };
+        out.push(InstanceRequest {
+            callee: DeclarationPath::extension(id.module.clone(), receiver, name),
+            default: None,
+            type_arguments: arguments.to_vec(),
+            span,
+        });
     }
 }
 

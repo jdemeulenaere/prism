@@ -2756,3 +2756,25 @@ fn an_importer_s_glue_calls_the_hook_of_an_imported_type() {
     );
     assert!(glue.contains("call_indirect"), "{}", glue);
 }
+
+/// code-generation: "Clone glue calls a generic type's clone hook instance".
+#[test]
+fn clone_glue_calls_a_generic_type_s_clone_hook_instance() {
+    let directory = single_file(
+        "generic_clone_hook_glue",
+        "import /prism/core\nstruct Owned<T> : Clone { val v: T }\noperator fun <T : Clone> Owned<T>.clone(): Owned<T> = Owned(v.clone())\nfun f(o: &Owned<String>): Owned<String> = o.clone()\n",
+    );
+    let output = prism(&["dump-clif", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let dump = stdout(&output);
+    let glue = function_ir(&dump, "main#clone(main::Owned<String>)");
+    assert!(
+        glue.contains("symbol %\"main::main.Owned.clone<String>#slot\""),
+        "{}",
+        glue
+    );
+    assert!(glue.contains("call_indirect"), "{}", glue);
+    let output = prism(&["dump-clif", "--instances", "main.prism"], &directory);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    function_ir(&stdout(&output), "main::main.Owned.clone<String>");
+}

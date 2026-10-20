@@ -1817,3 +1817,67 @@ fn editing_a_hook_s_body_recompiles_nothing_downstream() {
         lines(&["checked lib/net.prism", "reused app/main.prism"])
     );
 }
+
+/// compilation-and-abi: "Hook instances of a generic type".
+#[test]
+fn hook_instances_of_a_generic_type() {
+    let workspace = Workspace::new(
+        "hook_instances",
+        &[
+            (
+                "lib/own.prism",
+                "package lib\nimport /prism/core\npublic struct Owned<T>(val v: T)\n\
+                 operator mut fun <T> Owned<T>.drop() { println(\"drop owned\") }\n",
+            ),
+            (
+                "app/main.prism",
+                "package app\nimport /prism/collections\nimport /lib/own\nfun <T> hold(x: T) {}\n\
+                 fun main() { hold(Owned(1)); val xs = listOf(Owned(\"a\")) }\n",
+            ),
+        ],
+    );
+    let explanation = workspace.explain("app/main.prism");
+    for line in [
+        "instantiate lib/own::Owned.drop<Int>",
+        "instantiate lib/own::Owned.drop<String>",
+    ] {
+        assert!(
+            explanation.contains(&line.to_string()),
+            "{} in {:?}",
+            line,
+            explanation
+        );
+    }
+    let output = workspace.run(&["run", "--check-allocations", "app/main.prism"]);
+    assert_success(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "drop owned\ndrop owned\n"
+    );
+}
+
+/// compilation-and-abi: "A hook instance requested inside a generic".
+#[test]
+fn a_hook_instance_requested_inside_a_generic() {
+    let workspace = Workspace::new(
+        "hook_instance_in_generic",
+        &[(
+            "app/main.prism",
+            "package app\nimport /prism/core\nstruct Owned<T>(val v: T)\n\
+             operator mut fun <T> Owned<T>.drop() { println(\"drop owned\") }\n\
+             fun <T> wrap(x: T) { val o = Owned(x) }\nfun main() { wrap(true) }\n",
+        )],
+    );
+    let explanation = workspace.explain("app/main.prism");
+    for line in [
+        "instantiate app/main::wrap<Bool>",
+        "instantiate app/main::Owned.drop<Bool>",
+    ] {
+        assert!(
+            explanation.contains(&line.to_string()),
+            "{} in {:?}",
+            line,
+            explanation
+        );
+    }
+}

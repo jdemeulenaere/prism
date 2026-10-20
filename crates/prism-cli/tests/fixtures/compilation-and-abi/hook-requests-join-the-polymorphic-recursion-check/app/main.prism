@@ -1,0 +1,9 @@
+// expect: E6004
+// entry: app/main.prism
+package app
+
+import /prism/collections
+
+struct Owned<T>(val v: T)
+operator mut fun <T> Owned<T>.drop() { val deeper = Owned(listOf<T>()) }
+fun main() { val o = Owned(1) }

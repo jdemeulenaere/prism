@@ -13,7 +13,7 @@ Drop and clone glue MUST call a type's hook as a call of a Prism function: throu
 
 #### Scenario: Clone glue calls a generic type's clone hook instance
 - **WHEN** a file declares `struct Owned<T> : Clone { val v: T }`, `operator fun <T : Clone> Owned<T>.clone(): Owned<T> = Owned(v.clone())` and `fun f(o: &Owned<String>): Owned<String> = o.clone()`
-- **THEN** `prism dump-clif --instances main.prism` prints `main#clone(main::Owned<String>)`, which calls the instance `main::main.Owned.clone<String>` through its slot, and the instance's unit
+- **THEN** `prism dump-clif main.prism` prints `main#clone(main::Owned<String>)`, which calls the instance `main::main.Owned.clone<String>` through its slot, and `prism dump-clif --instances main.prism` prints the instance's unit
 
 ## MODIFIED Requirements
 

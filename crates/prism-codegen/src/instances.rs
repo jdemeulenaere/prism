@@ -213,7 +213,7 @@ fn check_cross_file_recursion(
     generics: &HashMap<String, &GenericSummary>,
     order: &[String],
 ) -> Result<(), Vec<InstanceError>> {
-    let mut sites: Vec<(String, Span)> = Vec::new();
+    let mut sites: Vec<(String, Span, bool)> = Vec::new();
     let mut edges = Vec::new();
     for name in order {
         let generic = generics[name];
@@ -222,7 +222,11 @@ fn check_cross_file_recursion(
             if !generics.contains_key(&callee) {
                 continue;
             }
-            sites.push((generic.path.module.clone(), call.span));
+            // A request of a hook's instance by a value that holds its type (D11 of
+            // `drop-and-clone-hooks`), which the type checker's `E4027` never sees.
+            let hook = call.callee.receiver.is_some()
+                && (call.callee.name == "drop" || call.callee.name == "clone");
+            sites.push((generic.path.module.clone(), call.span, hook));
             edges.extend(edges_of(
                 name,
                 &callee,
@@ -235,7 +239,10 @@ fn check_cross_file_recursion(
         .into_iter()
         .map(|cycle| {
             let growing = &cycle[0];
-            let names = cycle_generics(&cycle);
+            let names: Vec<String> = cycle_generics(&cycle)
+                .iter()
+                .map(|name| shown_generic(generics, name))
+                .collect();
             let parameter = generics[&growing.to.generic]
                 .type_parameters
                 .get(growing.to.parameter as usize)
@@ -243,23 +250,42 @@ fn check_cross_file_recursion(
             let quoted: Vec<String> = names.iter().map(|name| format!("'{}'", name)).collect();
             let mut steps = quoted.clone();
             steps.push(quoted[0].clone());
-            let (module, span) = sites[growing.site].clone();
+            let (module, span, hook) = sites[growing.site].clone();
+            let across_files = cycle_generics(&cycle)
+                .iter()
+                .any(|name| generics[name].path.module != module);
+            let message = if quoted.len() == 1 {
+                format!(
+                    "polymorphic recursion: {} instantiates itself with '{}' for '{}'",
+                    quoted[0], growing.argument, parameter
+                )
+            } else {
+                format!(
+                    "polymorphic recursion{}: {} instantiates itself through {} with '{}' for '{}'",
+                    if across_files { " across files" } else { "" },
+                    quoted[0],
+                    quoted[1..].join(", "),
+                    growing.argument,
+                    parameter
+                )
+            };
+            let mut notes = vec![format!(
+                "the cycle {} would need infinitely many instances",
+                steps.join(" -> ")
+            )];
+            if hook {
+                notes.push(
+                    "a value of a generic type with a drop or clone hook requests the hook's instance for its type arguments"
+                        .to_string(),
+                );
+            }
             InstanceError {
                 module,
                 error: CodegenError {
                     kind: CodegenErrorKind::PolymorphicRecursionAcrossFiles,
-                    message: format!(
-                        "polymorphic recursion across files: {} instantiates itself through {} with '{}' for '{}'",
-                        quoted[0],
-                        quoted[1..].join(", "),
-                        growing.argument,
-                        parameter
-                    ),
+                    message,
                     span,
-                    notes: vec![format!(
-                        "the cycle {} would need infinitely many instances",
-                        steps.join(" -> ")
-                    )],
+                    notes,
                     help: Some(
                         "pass the same type arguments on every recursive call, or wrap the value in a non-generic type"
                             .to_string(),
@@ -272,6 +298,21 @@ fn check_cross_file_recursion(
         Ok(())
     } else {
         Err(errors)
+    }
+}
+
+/// The generic named `name` (its [`generic_name`]) as diagnostics show it: its module, `::`, for
+/// an extension its receiver type's name and `.`, and its name (`app/main::Owned.drop`).
+fn shown_generic(generics: &HashMap<String, &GenericSummary>, name: &str) -> String {
+    let Some(generic) = generics.get(name) else {
+        return name.to_string();
+    };
+    let path = &generic.path;
+    match &path.receiver {
+        Some(Type::Struct { id, .. } | Type::Enum { id, .. }) => {
+            format!("{}::{}.{}", path.module, id.name, path.name)
+        }
+        _ => name.to_string(),
     }
 }
 

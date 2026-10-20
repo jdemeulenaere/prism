@@ -1,0 +1,10 @@
+// expect: ok
+// entry: app/main.prism
+// run: 0
+package app
+
+import /prism/collections
+import /lib/own
+
+fun <T> hold(x: T) {}
+fun main() { hold(Owned(1)); val xs = listOf(Owned("a")) }

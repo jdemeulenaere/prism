@@ -1,0 +1,6 @@
+package lib
+
+import /prism/core
+
+public struct Owned<T>(val v: T)
+operator mut fun <T> Owned<T>.drop() { println("drop owned") }
