@@ -11,8 +11,8 @@
 //! same type has the same fingerprint in every unit.
 //!
 //! A **slot contract** is what a slot's code expects of its callers: its kind, its parameter
-//! and result fingerprints, and for closure code its captures with their modes and fingerprints
-//! and how its environment is held. A reload repoints a slot only to code of the same contract;
+//! and result fingerprints, and for closure code its captures with their modes, fingerprints
+//! and paths (`t.id`), and how its environment is held. A reload repoints a slot only to code of the same contract;
 //! code of a different contract gets a new slot ([`crate::link::FunctionTable::slot_for`]).
 //!
 //! Fingerprints are memoized per unit, so a unit's contracts cost time linear in the
@@ -295,9 +295,9 @@ impl BodyKind {
 }
 
 /// The contract of the code of `body`: its kind, compose flag, parameter and result
-/// fingerprints, and for a closure its captures in order, each with its mode and fingerprint,
-/// and its environment's kind (`environment`, `None` outside closures). Parameter names are not
-/// part of it.
+/// fingerprints, and for a closure its captures in order, each with its mode, fingerprint and,
+/// for a closure written in source, its path, and its environment's kind (`environment`, `None`
+/// outside closures). Parameter names are not part of it.
 pub fn slot_contract(
     body: &Body,
     environment: Option<EnvironmentKind>,
@@ -332,6 +332,15 @@ pub fn slot_contract(
                 None => 0,
             });
             hasher.write_hash(&fingerprints.fingerprint(&body.locals[local].ty));
+            // A closure written in source takes each capture by its path, the binding's name
+            // and its fields' names (`t.id`), which says what the environment's value is: two
+            // paths of one type (`t.id`, `t.count`) are different captures, so a value made
+            // before a reload never runs code that reads its copy of one path as the other.
+            // A restart function's or root content adapter's captures are its composable's
+            // arguments, matched by position as a function's parameters are.
+            if matches!(body.owner, BodyOwner::Closure { .. }) {
+                hasher.write_str(body.locals[local].name.as_deref().unwrap_or(""));
+            }
         }
         hasher.write_u8(match environment {
             None => 0,
@@ -584,5 +593,18 @@ mod tests {
             "fun main() { val k = 1; val j = 5; val f: (Int) -> Int = { n -> n + k + j }; println(f(1)) }\n",
         ));
         assert_ne!(one, two);
+    }
+
+    #[test]
+    fn a_captured_path_swapped_for_one_of_the_same_type_changes_a_closures_contract() {
+        let closure = |path: &str| {
+            closure_contract(&lower_source(&format!(
+                "struct T {{ val id: Int, val count: Int }}\n\
+                 fun make(t: &T): () -> Int = {{ {} }}\n",
+                path
+            )))
+        };
+        assert_eq!(closure("t.id"), closure("t.id + 1"));
+        assert_ne!(closure("t.id"), closure("t.count"));
     }
 }

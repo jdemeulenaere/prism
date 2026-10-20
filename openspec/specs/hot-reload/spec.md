@@ -63,7 +63,7 @@ A frame that is already running when a reload is applied MUST continue in the co
 - **THEN** stdout holds `2` and `3`
 
 ### Requirement: Slots Record the Contract of Their Code
-Each slot of the function table MUST record the contract of the code it holds: the type fingerprints of its parameter and result types and, for a closure's code, its environment's captures with their modes and type fingerprints. A type fingerprint MUST be a structural hash of the type. It covers the names, markers, type arguments, fields, variants and payloads of every struct and enum the type reaches, with type arguments substituted.
+Each slot of the function table MUST record the contract of the code it holds: the type fingerprints of its parameter and result types and, for a closure's code, its environment's captures with their modes, type fingerprints and paths (`t.id`). A type fingerprint MUST be a structural hash of the type. It covers the names, markers, type arguments, fields, variants and payloads of every struct and enum the type reaches, with type arguments substituted.
 
 #### Scenario: A changed field type keeps old values with old code
 - **WHEN** `struct P { val x: Int }`, `fun show(p: &P) { println(p.x) }` and `fun main() { val p = P(1); show(p); show(p) }` run under `after line 1: edit main.prism main.prism.v2`, where `main.prism.v2` declares `struct P { val x: Double }`, `fun show(p: &P) { println(p.x + 0.5) }` and `fun main() { val p = P(1.0); show(p); show(p) }`
@@ -90,6 +90,10 @@ A reload MUST repoint a symbol's slot only to code with the same contract. Code 
 #### Scenario: A closure whose captures changed keeps its old code for old values
 - **WHEN** `fun main() { val k = 1; val f: (Int) -> Int = { n -> n + k }; println(f(1)); println(f(1)) }` runs under `after line 1: edit main.prism main.prism.v2`, where `main.prism.v2` declares `val j = 5` before `f` and the closure `{ n -> n + k + j }`
 - **THEN** stdout holds `2` and `2`
+
+#### Scenario: A closure whose captured path changed keeps its old code for old values
+- **WHEN** `struct T { val id: Int, val count: Int }`, `struct Holder { val f: () -> Int }`, `fun make(t: &T): () -> Int = { t.id }` and a `main` that keeps `Holder(make(t))` for `val t = T(1, 10)`, prints `holder.f()`, then builds `val fresh = make(t)` and prints `holder.f()` and `fresh()` run under `after line 1: edit main.prism main.prism.v2`, where the closure becomes `{ t.count + 1000 }`
+- **THEN** stdout holds `1`, `1` and `1010`, and stderr notes that the captures of `main::make#closure0` changed: the value made before keeps its copy of `t.id` with the code that reads it as `t.id`
 
 ### Requirement: Contract Changes Are Reported
 When a reload gives a symbol a new slot while the program runs, it MUST say so on stderr after its `reload: applied` line. For a function the line is `reload: the signature of <symbol> changed; code already running keeps calling its previous version`. For a closure it is `reload: the captures of <symbol> changed; values made before keep calling its previous version`.

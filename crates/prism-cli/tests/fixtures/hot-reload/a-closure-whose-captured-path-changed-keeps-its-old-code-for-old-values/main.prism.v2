@@ -1,0 +1,16 @@
+// expect: ok
+// run: 0
+// watch: edits
+// The closure `make` returns copies the path `t.id`; the new one copies `t.count`, of the same
+// type, so its contract changes and the value made before the reload keeps its old code.
+struct T { val id: Int, val count: Int }
+struct Holder { val f: () -> Int }
+fun make(t: &T): () -> Int = { t.count + 1000 }
+fun main() {
+    val t = T(1, 10)
+    val holder = Holder(make(t))
+    println(holder.f())
+    val fresh = make(t)
+    println(holder.f())
+    println(fresh())
+}
