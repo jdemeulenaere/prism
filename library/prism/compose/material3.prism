@@ -85,9 +85,9 @@ package compose fun SurfaceBox(
     Node(
         boxKind,
         { node ->
-            prism_ui_set_alignment(node, Alignment.TopStart.code)
-            prism_ui_set_content_color(node, contentColor.argb)
-            prism_ui_set_modifier(node, modifier)
+            prism_ui_set_alignment(node.word, Alignment.TopStart.code)
+            prism_ui_set_content_color(node.word, contentColor.argb)
+            prism_ui_set_modifier(node.word, modifier)
         },
     ) {
         content()

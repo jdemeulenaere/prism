@@ -397,10 +397,7 @@ impl Builder<'_> {
     ) -> Operand {
         let function = match &call.callee {
             TreeCallee::Function(function) => function.clone(),
-            TreeCallee::Builtin(builtin) => builtin
-                .declaration_with_defaults()
-                .expect("internal error: an omitted argument of an intrinsic without defaults"),
-            _ => panic!("internal error: an omitted argument of a function value"),
+            _ => panic!("internal error: an omitted argument of a function value or a built-in"),
         };
         let function = &function;
         // The generator is as generic as its function: it is called with the call's type

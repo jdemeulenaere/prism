@@ -935,19 +935,6 @@ impl TypeChecker {
         });
     }
 
-    /// Reports `E4030` for a call of the composition operation `operation` in a composable
-    /// context (D17 of `compose-transform`). A closure that is not composable, a handler
-    /// written in a composable, is no composable context, so it may start compositions.
-    fn reject_composition_in_composable(&mut self, builtin: BuiltinFunction, span: Span) {
-        let starts_or_drives = matches!(builtin, BuiltinFunction::RunApp);
-        if starts_or_drives && self.is_in_compose() {
-            self.errors.push(TypeError::CompositionInComposable {
-                operation: builtin.name().to_string(),
-                span,
-            });
-        }
-    }
-
     /// Reports `E4029` for each annotation of `source_file` that breaks a rule of library
     /// annotations (D2 of `compose-library-in-prism`): an unknown name, a declaration of a kind
     /// it does not apply to, a repeat, and `@DrivesComposition` on a composable. Only library
@@ -8065,7 +8052,6 @@ impl TypeChecker {
                     None
                 };
                 let callee = if let Some(builtin) = intrinsic {
-                    self.reject_composition_in_composable(builtin, span);
                     Callee::Builtin(builtin)
                 } else if self.is_external(&path) {
                     Callee::External(path)
@@ -9355,7 +9341,6 @@ impl TypeChecker {
                 }
                 let callee = match extension.builtin {
                     Some(builtin) => {
-                        self.reject_composition_in_composable(builtin, span);
                         self.reject_state_member_in_composable(builtin, span);
                         Callee::Builtin(builtin)
                     }

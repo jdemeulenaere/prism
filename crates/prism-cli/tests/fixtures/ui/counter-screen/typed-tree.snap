@@ -78,6 +78,8 @@ import struct prism/compose/ui::Dp : Copy
   field 0 val value: Int
 import struct prism/compose/ui::Dps : Copy
   field 0 val Unspecified: Dp
+import struct prism/compose/ui::HandlerId : Copy
+  field 0 val word: Int
 import struct prism/compose/ui::Modifier : Copy
   field 0 val count: Int
   field 1 val first: ModifierElements
@@ -104,6 +106,8 @@ import struct prism/compose/ui::ModifierElements : Copy
   field 5 val e5: ModifierElement
   field 6 val e6: ModifierElement
   field 7 val e7: ModifierElement
+import struct prism/compose/ui::NodeId : Copy
+  field 0 val word: Int
 import struct prism/compose/ui::Role : Copy
   field 0 val code: Int
 import struct prism/compose/ui::Roles : Copy
@@ -204,7 +208,7 @@ compose fun main::Counter(): Unit @10:1
 fun main::main(): Unit @17:1
   block: Unit @17:12
     expression @17:14
-      call builtin runApp: Unit @17:14
+      call prism/compose/ui::runApp: Unit @17:14
         argument title: default
         argument width: literal 400: Int @17:29
         argument height: literal 300: Int @17:43

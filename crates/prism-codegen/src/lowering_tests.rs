@@ -1223,12 +1223,6 @@ fn a_ui_entry_point_declared_with_the_wrong_signature() {
     );
 }
 
-/// The intrinsic structs of `/prism/compose/ui` and an external over each, for the tests of
-/// one-word intrinsic structs.
-const UI_HANDLES: &str = "package prism.compose\n\
-    package intrinsic struct NodeId : Copy\n\
-    public intrinsic struct HandlerId : Copy\n";
-
 /// The machine IR of function `symbol` in the dump `dump`.
 fn function_ir<'d>(dump: &'d str, symbol: &str) -> &'d str {
     let start = dump
@@ -1239,43 +1233,44 @@ fn function_ir<'d>(dump: &'d str, symbol: &str) -> &'d str {
     &rest[..end]
 }
 
-/// ui (code-generation delta): "An external taking a node handle": a `NodeId` travels as a
-/// 64-bit word, not by address.
-#[test]
-fn an_external_taking_a_node_handle() {
-    let source = format!(
-        "{}package fun disable(node: NodeId): Unit = prism_ui_set_enabled(node, false)\n\
-         private external fun prism_ui_set_enabled(node: NodeId, enabled: Bool): Unit\n",
-        UI_HANDLES
-    );
-    let file = lower_files(&[("prism/compose/ui", &source)]).remove(0);
-    check_file(&file).expect("the signature matches the entry point's");
-    let dump = crate::dump::dump_file(&file).expect("it lowers");
-    let disable = function_ir(&dump, "prism/compose/ui::disable");
-    assert!(
-        disable.contains("(i64) system_v") || disable.contains("(i64) apple_aarch64"),
-        "{}",
-        disable
-    );
-    assert!(disable.contains("(i64, i8 uext)"), "{}", disable);
-}
-
-/// ui (code-generation delta): "Comparing handler ids": `==` and the equality glue of a
-/// struct holding one call `prism_ui_handlers_equal` with the two words.
+/// code-generation: "Comparing handler ids" (`compose-library-in-prism` D8): `==` of two
+/// `HandlerId`s and the comparison of a struct holding one call `HandlerId`'s `equals`
+/// operator through its slot, which compares the handlers through `prism_ui_handlers_equal`.
 #[test]
 fn comparing_handler_ids() {
-    let source = format!(
-        "{}public fun same(a: HandlerId, b: HandlerId): Bool = a == b\n\
-         public struct Pair : Copy {{ val h: HandlerId }}\n\
-         public fun pairs(a: Pair, b: Pair): Bool = a == b\n",
-        UI_HANDLES
+    let source = "package prism.compose\n\
+        import /prism/compose/ui\n\
+        public fun same(a: HandlerId, b: HandlerId): Bool = a == b\n\
+        public struct Pair : Copy { val h: HandlerId }\n\
+        public fun pairs(a: Pair, b: Pair): Bool = a == b\n";
+    let files = lower_files(&[
+        (
+            "prism/composer",
+            include_str!("../../../library/prism/composer.prism"),
+        ),
+        (
+            "prism/compose/ui",
+            include_str!("../../../library/prism/compose/ui.prism"),
+        ),
+        ("prism/compose/test", source),
+    ]);
+    let dump = crate::dump::dump_file(&files[2]).expect("it lowers");
+    let equals = "prism/compose/ui.HandlerId.equals#slot";
+    let same = function_ir(&dump, "prism/compose/test::same");
+    assert!(
+        same.contains(equals) && same.contains("call_indirect"),
+        "{}",
+        same
     );
-    let file = lower_files(&[("prism/compose/ui", &source)]).remove(0);
-    let dump = crate::dump::dump_file(&file).expect("it lowers");
-    let same = function_ir(&dump, "prism/compose/ui::same");
-    assert!(same.contains("prism_ui_handlers_equal"), "{}", same);
-    let pairs = function_ir(&dump, "prism/compose/ui::pairs");
-    assert!(pairs.contains("prism_ui_handlers_equal"), "{}", pairs);
+    assert!(!same.contains("prism_ui_handlers_equal"), "{}", same);
+    // The comparison of two `Pair`s, inline here, compares their handler ids the same way.
+    let pairs = function_ir(&dump, "prism/compose/test::pairs");
+    assert!(pairs.contains(equals), "{}", pairs);
+    assert!(!pairs.contains("prism_ui_handlers_equal"), "{}", pairs);
+    // The operator itself calls the UI runtime's entry.
+    let ui = crate::dump::dump_file(&files[1]).expect("it lowers");
+    let operator = function_ir(&ui, "prism/compose/ui::prism/compose/ui.HandlerId.equals");
+    assert!(operator.contains("prism_ui_handlers_equal"), "{}", operator);
 }
 
 /// Every UI entry point is found by the backend's lookup and resolved by the JIT's linker.

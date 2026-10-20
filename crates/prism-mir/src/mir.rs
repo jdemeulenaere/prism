@@ -1013,9 +1013,6 @@ pub enum ComposerOperation {
     StartGroup { key: GroupKey },
     /// `(composer, data key)`: starts the movable group of a `key` call.
     StartMovableGroup { key: GroupKey },
-    /// `(composer, kind) -> NodeId`: starts the node group of a `Node` or `LeafNode` call,
-    /// giving its node, created for a new group (D3 of `ui-toolkit`).
-    StartNodeGroup { key: GroupKey },
     /// `(composer)`: ends a replaceable or movable group.
     EndGroup,
     /// `(composer, restart function moved)`: ends a restart group, which keeps the function.
@@ -1061,7 +1058,6 @@ impl ComposerOperation {
             ComposerOperation::StartRestartGroup { .. } => "start_restart_group",
             ComposerOperation::StartGroup { .. } => "start_group",
             ComposerOperation::StartMovableGroup { .. } => "start_movable_group",
-            ComposerOperation::StartNodeGroup { .. } => "start_node_group",
             ComposerOperation::EndGroup => "end_group",
             ComposerOperation::EndRestartGroup => "end_restart_group",
             ComposerOperation::Skipping => "skipping",

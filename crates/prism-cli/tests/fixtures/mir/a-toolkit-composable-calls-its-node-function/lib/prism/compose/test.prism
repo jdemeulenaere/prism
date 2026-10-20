@@ -1,0 +1,7 @@
+package prism.compose
+
+import ui
+
+public compose fun T(text: &String): Unit {
+    LeafNode(4) { node -> }
+}

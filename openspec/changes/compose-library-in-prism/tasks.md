@@ -42,7 +42,7 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
   Add fixtures for "Annotations outside the bundled library rejected" (`standard-library/`) and "Misused annotations in the library".
 - [x] 2.4 ABI (D12): `ExportedSymbol::Struct` and `AbiTypeDefinition` gain `keeper`, and `ExportedSymbol::Function` gains `drives_composition`, all hashed. Importers fill `TypeTable` from both sources, as for `equality` and the hook flags. `prism abi` prints the annotations. Add cases for "Annotations change the ABI hash" and, after group 5, "A keeper reached without its module". Verify with `cargo test -p prism-abi -p prism-cli --test cache_tests`.
-- [ ] 2.5 Make the keeper and `E4030` read the flags instead of names:
+- [x] 2.5 Make the keeper and `E4030` read the flags instead of names:
   - `Type::contains_keeper` reads the keeper flag through the type table;
   - `E4030` is reported for direct calls of functions with the drives-composition flag, naming the function.
 
@@ -92,7 +92,7 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 6. The UI module in Prism (D8 to D10, D13)
 
-- [ ] 6.1 `library/prism/compose/ui.prism`:
+- [x] 6.1 `library/prism/compose/ui.prism`:
   - `NodeId` and `HandlerId` as structs over a `package` word, and `HandlerId.equals`;
   - the UI externals take and return `Int` words;
   - `Node` and `LeafNode` with `@ExplicitGroupsComposable`, starting node groups with key 125 through private externals of the compose runtime;
@@ -100,7 +100,7 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
   - `import /prism/composer`.
 
   Update `foundation.prism`, `layout.prism` and `material3.prism` (`node.word`, `HandlerId(...)` around registrations).
-- [ ] 6.2 Remove:
+- [x] 6.2 Remove:
   - `IntrinsicStruct::{NodeId, HandlerId}` and the equality entry;
   - `BuiltinFunction::{RunApp, UiNode, UiLeafNode}` and `ComposerOperation::StartNodeGroup`, with their transform, codec and backend arms.
 
@@ -109,7 +109,7 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
   - "A toolkit composable calls its node function" (`mir/`);
   - "Comparing handler ids" and "A weak reference passed as a word" (`code-generation/`);
   - "Inserting a button before a text keeps the text's node" (`ui/`, kept).
-- [ ] 6.3 Run every `ui/` fixture, the example sessions (`example_app_sessions`) and `library_tests.rs`. Re-bless only the dumps D14 lists, and read each diff. Verify with `cargo test --workspace`.
+- [x] 6.3 Run every `ui/` fixture, the example sessions (`example_app_sessions`) and `library_tests.rs`. Re-bless only the dumps D14 lists, and read each diff. Verify with `cargo test --workspace`.
 
 ## 7. Catalog, timing and verification (D11, D14 to D16)
 

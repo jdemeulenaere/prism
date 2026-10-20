@@ -1,5 +1,5 @@
 // expect: ok
 // library: lib
-import /prism/compose/ui
+import /prism/compose/test
 
 fun main() {}

@@ -1,0 +1,4 @@
+// expect: E4007
+import /prism/compose/ui
+
+fun word(h: HandlerId): Int = h.word

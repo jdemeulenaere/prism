@@ -57,12 +57,6 @@ pub enum IntrinsicStruct {
     /// `MutableState<T>`, an owned state object that may be written; it converts to
     /// `State<T>`.
     MutableState,
-    /// `NodeId`, a `Copy` handle of a node of the UI tree, `package` to the toolkit (D3 of
-    /// `ui-toolkit`).
-    NodeId,
-    /// `HandlerId`, a `Copy` handle of an entry of the UI handler table, compared by the
-    /// runtime entry `prism_ui_handlers_equal` (D23 of `ui-toolkit`).
-    HandlerId,
     /// `WeakReference<T>`, a `Copy` word naming a state without keeping it (D11 of
     /// `owned-state`).
     WeakReference,
@@ -70,17 +64,15 @@ pub enum IntrinsicStruct {
 
 impl IntrinsicStruct {
     /// Every intrinsic struct, in the order of the library's declarations.
-    pub const ALL: [IntrinsicStruct; 5] = [
+    pub const ALL: [IntrinsicStruct; 3] = [
         IntrinsicStruct::State,
         IntrinsicStruct::MutableState,
         IntrinsicStruct::WeakReference,
-        IntrinsicStruct::NodeId,
-        IntrinsicStruct::HandlerId,
     ];
 
     /// The intrinsic struct `id` names, if any: by its defining module and name.
     pub fn of(id: &NominalId) -> Option<Self> {
-        if id.module != COMPOSE_RUNTIME_MODULE && id.module != COMPOSE_UI_MODULE {
+        if id.module != COMPOSE_RUNTIME_MODULE {
             return None;
         }
         Self::ALL
@@ -93,8 +85,6 @@ impl IntrinsicStruct {
         match self {
             IntrinsicStruct::State => "State",
             IntrinsicStruct::MutableState => "MutableState",
-            IntrinsicStruct::NodeId => "NodeId",
-            IntrinsicStruct::HandlerId => "HandlerId",
             IntrinsicStruct::WeakReference => "WeakReference",
         }
     }
@@ -102,7 +92,6 @@ impl IntrinsicStruct {
     /// The names of its type parameters: `T`, the value type, for the state handles.
     pub fn type_parameters(self) -> &'static [&'static str] {
         match self {
-            IntrinsicStruct::NodeId | IntrinsicStruct::HandlerId => &[],
             IntrinsicStruct::State
             | IntrinsicStruct::MutableState
             | IntrinsicStruct::WeakReference => &["T"],
@@ -114,30 +103,14 @@ impl IntrinsicStruct {
         matches!(self, IntrinsicStruct::State | IntrinsicStruct::MutableState)
     }
 
-    /// The library module declaring it.
+    /// The library module declaring it, `/prism/compose/runtime` for every one.
     pub fn module(self) -> &'static str {
-        match self {
-            IntrinsicStruct::NodeId | IntrinsicStruct::HandlerId => COMPOSE_UI_MODULE,
-            _ => COMPOSE_RUNTIME_MODULE,
-        }
+        COMPOSE_RUNTIME_MODULE
     }
 
-    /// The visibility its declaration must write: `package` for `NodeId`, which no public
-    /// API hands out yet (D3 of `ui-toolkit`), `public` for the others.
+    /// The visibility its declaration must write.
     pub fn visibility(self) -> &'static str {
-        match self {
-            IntrinsicStruct::NodeId => "package",
-            _ => "public",
-        }
-    }
-
-    /// The runtime entry that compares two of its values, `(word, word) -> Bool`, when `==`
-    /// is not the comparison of their words (D23 of `ui-toolkit`).
-    pub fn equality_entry(self) -> Option<&'static str> {
-        match self {
-            IntrinsicStruct::HandlerId => Some("prism_ui_handlers_equal"),
-            _ => None,
-        }
+        "public"
     }
 
     /// Its identity.
@@ -153,9 +126,7 @@ impl IntrinsicStruct {
             IntrinsicStruct::State | IntrinsicStruct::MutableState => None,
             // The markers of an intrinsic struct hold for every type argument: a weak reference
             // is `Copy` whatever it names.
-            IntrinsicStruct::WeakReference
-            | IntrinsicStruct::NodeId
-            | IntrinsicStruct::HandlerId => Some(TypeMarker::Copy),
+            IntrinsicStruct::WeakReference => Some(TypeMarker::Copy),
         }
     }
 

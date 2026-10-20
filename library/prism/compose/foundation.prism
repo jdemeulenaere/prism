@@ -31,7 +31,7 @@ public fun Modifier.clickable(
     role: Role? = null,
     onClick: attached () -> Unit,
 ): Modifier = append(
-    ModifierElement.Clickable(prism_ui_register_click(onClick), enabled, roleCode(role)),
+    ModifierElement.Clickable(HandlerId(prism_ui_register_click(onClick)), enabled, roleCode(role)),
 )
 
 // This chain followed by a toggle target over the bounds of the rest of the chain, calling
@@ -43,7 +43,7 @@ public fun Modifier.toggleable(
     onValueChange: attached (Bool) -> Unit,
 ): Modifier = append(
     ModifierElement.Toggleable(
-        prism_ui_register_toggle(onValueChange),
+        HandlerId(prism_ui_register_toggle(onValueChange)),
         value,
         enabled,
         roleCode(role),
@@ -65,9 +65,9 @@ public compose fun BasicText(
     style: TextStyle = TextStyle.Default,
 ): Unit {
     LeafNode(textKind) { node ->
-        prism_ui_set_text(node, text)
-        prism_ui_set_text_style(node, style.color.argb, style.fontSize.value)
-        prism_ui_set_modifier(node, modifier)
+        prism_ui_set_text(node.word, text)
+        prism_ui_set_text_style(node.word, style.color.argb, style.fontSize.value)
+        prism_ui_set_modifier(node.word, modifier)
     }
 }
 
@@ -82,10 +82,10 @@ public compose fun BasicTextField(
 ): Unit {
     val handler = prism_ui_register_text(onValueChange)
     LeafNode(textFieldKind) { node ->
-        prism_ui_set_text(node, value)
-        prism_ui_set_text_style(node, textStyle.color.argb, textStyle.fontSize.value)
-        prism_ui_set_enabled(node, enabled)
-        prism_ui_set_on_value_change(node, handler)
-        prism_ui_set_modifier(node, modifier)
+        prism_ui_set_text(node.word, value)
+        prism_ui_set_text_style(node.word, textStyle.color.argb, textStyle.fontSize.value)
+        prism_ui_set_enabled(node.word, enabled)
+        prism_ui_set_on_value_change(node.word, handler)
+        prism_ui_set_modifier(node.word, modifier)
     }
 }

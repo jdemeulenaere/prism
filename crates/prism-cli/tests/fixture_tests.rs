@@ -607,7 +607,7 @@ const COMPOSED_SCENARIOS: &[&str] = &[
     "a-composition-started-in-mir",
     "dumping-composed-mir",
     "composed-remember-of-a-state",
-    "a-toolkit-composable-starts-a-node-group",
+    "a-toolkit-composable-calls-its-node-function",
     "the-composer-read-in-a-composable",
     "a-node-function-s-body",
 ];

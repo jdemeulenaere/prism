@@ -7,24 +7,40 @@
 // plain data, an ordered chain of elements that its node applies; no modifier composes.
 package prism.compose
 
+import /prism/composer
+
 // A node of the UI tree: one word naming a node of the UI runtime, `Copy`.
-package intrinsic struct NodeId : Copy
+package struct NodeId : Copy { package val word: Int }
 
 // A handler of the UI runtime's handler table, named by a modifier element: one word, `Copy`,
-// that no program constructs. Two ids are equal when they name handlers with the same code and
-// equal captures.
-public intrinsic struct HandlerId : Copy
+// that no program constructs.
+public struct HandlerId : Copy { package val word: Int }
+
+// Whether two ids name handlers with the same code and equal captures.
+public operator fun HandlerId.equals(other: &HandlerId): Bool = prism_ui_handlers_equal(
+    word,
+    other.word,
+)
 
 // A node group of `kind`: `update` receives its node on every pass, then `content` composes
-// its children.
-package intrinsic compose fun Node(
-    kind: Int,
-    update: (NodeId) -> Unit,
-    content: compose () -> Unit,
-): Unit
+// its children. It starts no group but its node group, whose key is Compose's node key, 125:
+// node groups match their old siblings in order, and a node of another kind is a new node.
+// Compose's `ComposeNode`.
+@ExplicitGroupsComposable
+package compose fun Node(kind: Int, update: (NodeId) -> Unit, content: compose () -> Unit): Unit {
+    val composer = currentComposer()
+    update(NodeId(prism_compose_start_node_group(composer, 125, kind)))
+    content()
+    prism_compose_end_group(composer)
+}
 
 // A node group of `kind` without children: `update` receives its node on every pass.
-package intrinsic compose fun LeafNode(kind: Int, update: (NodeId) -> Unit): Unit
+@ExplicitGroupsComposable
+package compose fun LeafNode(kind: Int, update: (NodeId) -> Unit): Unit {
+    val composer = currentComposer()
+    update(NodeId(prism_compose_start_node_group(composer, 125, kind)))
+    prism_compose_end_group(composer)
+}
 
 // The node kind of a column.
 package val columnKind: Int = 1
@@ -45,37 +61,37 @@ package val spacerKind: Int = 5
 package val textFieldKind: Int = 6
 
 // Sets the text of a text node, or the value of a text field.
-package external fun prism_ui_set_text(node: NodeId, text: &String): Unit
+package external fun prism_ui_set_text(node: Int, text: &String): Unit
 
 // Sets a node's text colour (an `argb` word) and font size, either unspecified.
-package external fun prism_ui_set_text_style(node: NodeId, color: Int, fontSize: Int): Unit
+package external fun prism_ui_set_text_style(node: Int, color: Int, fontSize: Int): Unit
 
 // Sets a node's modifier chain.
-package external fun prism_ui_set_modifier(node: NodeId, modifier: &Modifier): Unit
+package external fun prism_ui_set_modifier(node: Int, modifier: &Modifier): Unit
 
 // Sets a row's or column's arrangement: its code and spacing.
-package external fun prism_ui_set_arrangement(node: NodeId, code: Int, space: Int): Unit
+package external fun prism_ui_set_arrangement(node: Int, code: Int, space: Int): Unit
 
 // Sets a box's content alignment, or the cross-axis alignment of a row or column.
-package external fun prism_ui_set_alignment(node: NodeId, code: Int): Unit
+package external fun prism_ui_set_alignment(node: Int, code: Int): Unit
 
 // Sets the colour a node's texts take when their own is unspecified.
-package external fun prism_ui_set_content_color(node: NodeId, color: Int): Unit
+package external fun prism_ui_set_content_color(node: Int, color: Int): Unit
 
 // Sets whether a text field takes input.
-package external fun prism_ui_set_enabled(node: NodeId, enabled: Bool): Unit
+package external fun prism_ui_set_enabled(node: Int, enabled: Bool): Unit
 
 // Gives a text field the handler its edits call.
-package external fun prism_ui_set_on_value_change(node: NodeId, handler: HandlerId): Unit
+package external fun prism_ui_set_on_value_change(node: Int, handler: Int): Unit
 
 // Moves a click handler into the handler table, until a node claims it.
-package external fun prism_ui_register_click(handler: attached () -> Unit): HandlerId
+package external fun prism_ui_register_click(handler: attached () -> Unit): Int
 
 // Moves a toggle handler into the handler table, until a node claims it.
-package external fun prism_ui_register_toggle(handler: attached (Bool) -> Unit): HandlerId
+package external fun prism_ui_register_toggle(handler: attached (Bool) -> Unit): Int
 
 // Moves a text field's edit handler into the handler table, until a node claims it.
-package external fun prism_ui_register_text(handler: attached (String) -> Unit): HandlerId
+package external fun prism_ui_register_text(handler: attached (String) -> Unit): Int
 
 // Ends the program: a chain cannot hold a seventeenth element.
 package external fun prism_ui_modifier_overflow(): Nothing
@@ -337,9 +353,27 @@ package fun Modifier.textFieldFrame(unfocused: Color, focused: Color): Modifier 
 // Runs an app composing `content` in a window titled `title` of `width` × `height` logical
 // pixels, until the window closes or a headless run's event script ends; then frees everything
 // the app holds and returns. Compose Desktop's `singleWindowApplication`.
-public intrinsic fun runApp(
+@DrivesComposition
+public fun runApp(
     title: &String = "Prism",
     width: Int = 800,
     height: Int = 600,
     content: attached compose () -> Unit,
-): Unit
+): Unit = prism_ui_run_app(title, width, height, content)
+
+// Runs an app of composable content.
+private external fun prism_ui_run_app(
+    title: &String,
+    width: Int,
+    height: Int,
+    content: attached compose () -> Unit,
+)
+
+// Whether two handlers have the same code and equal captures.
+private external fun prism_ui_handlers_equal(a: Int, b: Int): Bool
+
+// Starts a node group.
+private external fun prism_compose_start_node_group(composer: Int, key: Int, kind: Int): Int
+
+// Ends a node group.
+private external fun prism_compose_end_group(composer: Int)

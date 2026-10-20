@@ -501,8 +501,7 @@ fn composer_operation(operation: &crate::mir::ComposerOperation) -> String {
     let detail = match operation {
         Operation::StartRestartGroup { key }
         | Operation::StartGroup { key }
-        | Operation::StartMovableGroup { key }
-        | Operation::StartNodeGroup { key } => {
+        | Operation::StartMovableGroup { key } => {
             format!(" key 0x{:016x} /* {} */", key.hash, key.label)
         }
         Operation::Changed(ty) | Operation::SetSlot(ty) | Operation::Keep(ty) => {

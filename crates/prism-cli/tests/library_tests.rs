@@ -483,11 +483,12 @@ fn the_modifier_mirrors_match_the_layout_of_the_ui_module() {
     }
 }
 
-/// standard-library: "The public signature of runApp" (`ui-toolkit`): the ABI of
-/// `/prism/compose/ui` exports `runApp` with a default for each of its first three parameters,
-/// `HandlerId` and the unit properties, and none of the `package` node layer.
+/// standard-library: "The public UI declarations" (`compose-library-in-prism` D8 to D10): the
+/// ABI of `/prism/compose/ui` exports `runApp` with a default for each of its first three
+/// parameters, `HandlerId` with its `equals` operator, and the unit properties, and none of
+/// the `package` node layer.
 #[test]
-fn the_public_signature_of_run_app() {
+fn the_public_ui_declarations() {
     use prism_abi::ExportedSymbol;
     use prism_ast::Visibility;
     let library = Library::bundled();
@@ -524,7 +525,7 @@ fn the_public_signature_of_run_app() {
         .expect("runApp is exported");
     assert_eq!(
         run_app.0.declaration_text().unwrap(),
-        "public intrinsic fun runApp(title: &String, width: Int, height: Int, content: attached compose () -> Unit): Unit"
+        "@DrivesComposition public fun runApp(title: &String, width: Int, height: Int, content: attached compose () -> Unit): Unit"
     );
     let defaults: Vec<bool> = run_app.1.iter().map(|p| p.default.is_some()).collect();
     assert_eq!(defaults, [true, true, true, false]);
@@ -537,7 +538,7 @@ fn the_public_signature_of_run_app() {
     for expected in [
         "public val Int.dp: Dp",
         "public val Int.sp: TextUnit",
-        "public intrinsic struct HandlerId : Copy",
+        "public operator fun HandlerId.equals(other: &HandlerId): Bool",
     ] {
         assert!(
             public.iter().any(|text| text == expected),
@@ -546,6 +547,35 @@ fn the_public_signature_of_run_app() {
             public
         );
     }
+    // `HandlerId` is a public struct over a `package` word (`compose-library-in-prism` D8).
+    let handler = abi
+        .symbols
+        .iter()
+        .find_map(|symbol| match symbol {
+            ExportedSymbol::Struct {
+                name,
+                visibility,
+                marker,
+                fields,
+                field_visibilities,
+                intrinsic,
+                ..
+            } if name == "HandlerId" => Some((
+                *visibility,
+                *marker,
+                fields.clone(),
+                field_visibilities.clone(),
+                *intrinsic,
+            )),
+            _ => None,
+        })
+        .expect("HandlerId is exported");
+    assert_eq!(handler.0, Visibility::Public);
+    assert_eq!(handler.1, Some(prism_ast::TypeMarker::Copy));
+    assert_eq!(handler.2.len(), 1);
+    assert_eq!(handler.2[0].0, "word");
+    assert_eq!(handler.3, [Visibility::Package]);
+    assert!(!handler.4, "HandlerId is no intrinsic struct");
     for hidden in ["NodeId", "Node", "LeafNode"] {
         let named = |symbol: &&ExportedSymbol| match symbol {
             ExportedSymbol::Struct { name, .. } | ExportedSymbol::Function { name, .. } => {

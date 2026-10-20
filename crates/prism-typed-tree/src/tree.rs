@@ -765,14 +765,6 @@ pub enum BuiltinFunction {
     /// borrow of a state object reaching it, the reference's own word viewed as one (D11 of
     /// `owned-state`). Its type argument is the state object's type `S`.
     WeakGet,
-    /// `Node(kind, update, content)` of `/prism/compose/ui`, a composable: a node group of
-    /// `kind` whose node `update` receives, holding `content` (D3 of `ui-toolkit`).
-    UiNode,
-    /// `LeafNode(kind, update)`: a node group without content.
-    UiLeafNode,
-    /// `runApp(title, width, height, content)` of `/prism/compose/ui`: runs an app of the
-    /// composable `content` until its window closes (D15 of `ui-toolkit`).
-    RunApp,
     /// `currentComposer()` of `/prism/composer`, a composable: the composer word of the body
     /// running it, which the compose transform reads from the body's `$composer` argument (D3
     /// of `compose-library-in-prism`). It adds no group.
@@ -819,23 +811,7 @@ impl BuiltinFunction {
             BuiltinFunction::StateUpdate => "update",
             BuiltinFunction::StateWeak => "weak",
             BuiltinFunction::WeakGet => "get",
-            BuiltinFunction::UiNode => "Node",
-            BuiltinFunction::UiLeafNode => "LeafNode",
-            BuiltinFunction::RunApp => "runApp",
             BuiltinFunction::CurrentComposer => "currentComposer",
-        }
-    }
-
-    /// The declaration path of an intrinsic whose declaration gives default values, whose
-    /// generators a call that omits an argument calls: `runApp` of `/prism/compose/ui` (D5 of
-    /// `ui-toolkit`, R8 of `standard-library`).
-    pub fn declaration_with_defaults(self) -> Option<crate::DeclarationPath> {
-        match self {
-            BuiltinFunction::RunApp => Some(crate::DeclarationPath::new(
-                crate::types::COMPOSE_UI_MODULE,
-                "runApp",
-            )),
-            _ => None,
         }
     }
 
@@ -955,9 +931,6 @@ impl BuiltinFunction {
                 | BuiltinFunction::Remember
                 | BuiltinFunction::Key
                 | BuiltinFunction::MutableStateOf
-                | BuiltinFunction::UiNode
-                | BuiltinFunction::UiLeafNode
-                | BuiltinFunction::RunApp
                 | BuiltinFunction::CurrentComposer
         )
     }
@@ -967,12 +940,7 @@ impl BuiltinFunction {
     pub fn is_compose_runtime(self) -> bool {
         matches!(
             self,
-            BuiltinFunction::Remember
-                | BuiltinFunction::Key
-                | BuiltinFunction::UiNode
-                | BuiltinFunction::UiLeafNode
-                | BuiltinFunction::RunApp
-                | BuiltinFunction::CurrentComposer
+            BuiltinFunction::Remember | BuiltinFunction::Key | BuiltinFunction::CurrentComposer
         )
     }
 

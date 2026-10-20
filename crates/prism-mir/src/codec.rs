@@ -785,8 +785,8 @@ impl Codec for StateOperation {
 /// scalar), 10 (`indices`), 11 (`isEmpty`) and 12 (`isNotEmpty`), now members written in Prism,
 /// 38 (`dp`) and 39 (`sp`), now extension properties written in Prism (D11 of
 /// `core-library-in-prism`), and 21 to 24 (`composition`, `setContent`, `recompose`, `dump`),
-/// 27 (`currentRecomposeScope`), 28 (`invalidate`) and 34 (`SideEffect`), now written in Prism
-/// (D13 of `compose-library-in-prism`).
+/// 27 (`currentRecomposeScope`), 28 (`invalidate`), 34 (`SideEffect`), 35 (`Node`), 36
+/// (`LeafNode`) and 37 (`runApp`), now written in Prism (D13 of `compose-library-in-prism`).
 impl Codec for BuiltinFunction {
     fn encode(&self, encoder: &mut Encoder) {
         encoder.u8(match self {
@@ -814,9 +814,6 @@ impl Codec for BuiltinFunction {
             BuiltinFunction::StateWeak => 31,
             BuiltinFunction::StateUpdate => 32,
             BuiltinFunction::WeakGet => 33,
-            BuiltinFunction::UiNode => 35,
-            BuiltinFunction::UiLeafNode => 36,
-            BuiltinFunction::RunApp => 37,
             BuiltinFunction::RangeContains => 40,
             BuiltinFunction::CurrentComposer => 41,
         });
@@ -847,9 +844,6 @@ impl Codec for BuiltinFunction {
             31 => BuiltinFunction::StateWeak,
             32 => BuiltinFunction::StateUpdate,
             33 => BuiltinFunction::WeakGet,
-            35 => BuiltinFunction::UiNode,
-            36 => BuiltinFunction::UiLeafNode,
-            37 => BuiltinFunction::RunApp,
             40 => BuiltinFunction::RangeContains,
             41 => BuiltinFunction::CurrentComposer,
             _ => return None,
@@ -1455,9 +1449,9 @@ impl Codec for crate::mir::GroupKey {
 }
 
 /// The tags of the composer operations. A retired operation's tag is never reused: 12 to 17
-/// (`current_scope`, `start_composition`, `set_content`, `recompose`, `dump`, `invalidate`)
-/// and 21 (`side_effect`), now calls of library functions written in Prism (D13 of
-/// `compose-library-in-prism`).
+/// (`current_scope`, `start_composition`, `set_content`, `recompose`, `dump`, `invalidate`),
+/// 21 (`side_effect`) and 22 (`start_node_group`), now calls of library functions written in
+/// Prism (D13 of `compose-library-in-prism`).
 impl Codec for crate::mir::ComposerOperation {
     fn encode(&self, encoder: &mut Encoder) {
         use crate::mir::ComposerOperation as Operation;
@@ -1499,10 +1493,6 @@ impl Codec for crate::mir::ComposerOperation {
             }
             Operation::BeginRemember => encoder.u8(19),
             Operation::EndRemember => encoder.u8(20),
-            Operation::StartNodeGroup { key } => {
-                encoder.u8(22);
-                key.encode(encoder);
-            }
             Operation::KeptVersion { index, ty } => {
                 encoder.u8(23);
                 index.encode(encoder);
@@ -1537,9 +1527,6 @@ impl Codec for crate::mir::ComposerOperation {
             18 => Operation::Keep(decoder.decode()?),
             19 => Operation::BeginRemember,
             20 => Operation::EndRemember,
-            22 => Operation::StartNodeGroup {
-                key: decoder.decode()?,
-            },
             23 => Operation::KeptVersion {
                 index: decoder.decode()?,
                 ty: decoder.decode()?,

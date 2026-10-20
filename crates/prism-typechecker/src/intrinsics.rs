@@ -36,7 +36,6 @@ const CORE: &str = "prism/core";
 /// type, intrinsic or written in Prism, is a member of that type.
 pub(crate) const MEMBER_MODULE: &str = CORE;
 const COMPOSE_RUNTIME: &str = prism_typed_tree::COMPOSE_RUNTIME_MODULE;
-const COMPOSE_UI: &str = prism_typed_tree::COMPOSE_UI_MODULE;
 const COMPOSER: &str = "prism/composer";
 
 const fn entry(
@@ -235,32 +234,6 @@ pub const CATALOG: &[Intrinsic] = &[
         "get",
         BuiltinFunction::WeakGet,
         "public intrinsic fun <T> WeakReference<T>.get(): (&T)?",
-        false,
-    ),
-    // `/prism/compose/ui` (D3 and D15 of `ui-toolkit`): the two node composables the toolkit is
-    // written over, which the transform lowers to node groups, and the app's entry.
-    entry(
-        COMPOSE_UI,
-        None,
-        "Node",
-        BuiltinFunction::UiNode,
-        "package intrinsic compose fun Node(kind: Int, update: (NodeId) -> Unit, content: compose () -> Unit): Unit",
-        false,
-    ),
-    entry(
-        COMPOSE_UI,
-        None,
-        "LeafNode",
-        BuiltinFunction::UiLeafNode,
-        "package intrinsic compose fun LeafNode(kind: Int, update: (NodeId) -> Unit): Unit",
-        false,
-    ),
-    entry(
-        COMPOSE_UI,
-        None,
-        "runApp",
-        BuiltinFunction::RunApp,
-        "public intrinsic fun runApp(title: &String, width: Int, height: Int, content: attached compose () -> Unit): Unit",
         false,
     ),
     // `/prism/composer` (D3 of `compose-library-in-prism`): the composer of the running body,

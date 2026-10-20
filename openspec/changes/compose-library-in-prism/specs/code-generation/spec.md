@@ -16,7 +16,7 @@
 
 #### Scenario: Comparing handler ids
 - **WHEN** `prism dump-clif` runs on a library test module `/prism/compose/test`, of the package `prism.compose`, that imports `ui` and declares `fun same(a: HandlerId, b: HandlerId): Bool = a == b` and `struct Pair : Copy { val h: HandlerId }`, with a comparison of two `Pair`s
-- **THEN** the body of `same` and the equality glue of `Pair` each call `prism/compose/ui::HandlerId.equals` through its slot
+- **THEN** the body of `same` and the comparison of the two `Pair`s each call `prism/compose/ui::HandlerId.equals` through its slot, and only that operator calls `prism_ui_handlers_equal`
 
 ### Requirement: Intrinsic State Handles Travel as Words
 A value of `State<T>`, `MutableState<T>` or `WeakReference<T>`, the intrinsic structs the catalog lays out as one word, MUST be passed to and returned from functions and externals as a 64-bit word, not by address. Its representation is fixed by the catalog, so no signature depends on a declared type's layout.

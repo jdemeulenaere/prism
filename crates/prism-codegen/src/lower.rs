@@ -1792,15 +1792,6 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 let character = self.builder.inst_results(call)[0];
                 self.write_place(destination, Lowered::Scalar(character), false)?;
             }
-            // `runApp(title, width, height, content)`: the UI runtime's entry, which takes the
-            // composable content by move (D4 of `compose-library-in-prism`).
-            Callee::Builtin(BuiltinFunction::RunApp) => {
-                let title = self.operand(&arguments[0], span)?.scalar()?;
-                let width = self.operand(&arguments[1], span)?.scalar()?;
-                let height = self.operand(&arguments[2], span)?.scalar()?;
-                let content = self.slot_value(&arguments[3], &parameters[3], span)?;
-                self.call_runtime("prism_ui_run_app", &[title, width, height, content])?;
-            }
             Callee::Builtin(builtin @ (BuiltinFunction::Print | BuiltinFunction::PrintLine)) => {
                 let mut values = Vec::new();
                 for argument in arguments {
@@ -1906,14 +1897,6 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 let key = key(self, group);
                 let data = word(self, 1)?;
                 self.call_runtime("prism_compose_start_movable_group", &[composer, key, data])?;
-            }
-            Operation::StartNodeGroup { key: group } => {
-                let composer = word(self, 0)?;
-                let key = key(self, group);
-                let kind = word(self, 1)?;
-                let node =
-                    self.call_runtime("prism_compose_start_node_group", &[composer, key, kind])?[0];
-                self.write_place(destination, Lowered::Scalar(node), false)?;
             }
             Operation::EndGroup => {
                 let composer = word(self, 0)?;

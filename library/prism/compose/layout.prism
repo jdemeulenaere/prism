@@ -126,8 +126,8 @@ public compose fun Box(
     Node(
         boxKind,
         { node ->
-            prism_ui_set_alignment(node, contentAlignment.code)
-            prism_ui_set_modifier(node, modifier)
+            prism_ui_set_alignment(node.word, contentAlignment.code)
+            prism_ui_set_modifier(node.word, modifier)
         },
     ) {
         content(BoxScope())
@@ -145,9 +145,9 @@ public compose fun Column(
     Node(
         columnKind,
         { node ->
-            prism_ui_set_arrangement(node, verticalArrangement.code, verticalArrangement.space)
-            prism_ui_set_alignment(node, horizontalAlignment.code)
-            prism_ui_set_modifier(node, modifier)
+            prism_ui_set_arrangement(node.word, verticalArrangement.code, verticalArrangement.space)
+            prism_ui_set_alignment(node.word, horizontalAlignment.code)
+            prism_ui_set_modifier(node.word, modifier)
         },
     ) {
         content(ColumnScope())
@@ -165,9 +165,13 @@ public compose fun Row(
     Node(
         rowKind,
         { node ->
-            prism_ui_set_arrangement(node, horizontalArrangement.code, horizontalArrangement.space)
-            prism_ui_set_alignment(node, verticalAlignment.code)
-            prism_ui_set_modifier(node, modifier)
+            prism_ui_set_arrangement(
+                node.word,
+                horizontalArrangement.code,
+                horizontalArrangement.space,
+            )
+            prism_ui_set_alignment(node.word, verticalAlignment.code)
+            prism_ui_set_modifier(node.word, modifier)
         },
     ) {
         content(RowScope())
@@ -177,6 +181,6 @@ public compose fun Row(
 // An empty node whose size comes from its modifier and its constraints.
 public compose fun Spacer(modifier: Modifier): Unit {
     LeafNode(spacerKind) { node ->
-        prism_ui_set_modifier(node, modifier)
+        prism_ui_set_modifier(node.word, modifier)
     }
 }

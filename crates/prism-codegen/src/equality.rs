@@ -226,9 +226,7 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
             Type::Reference { inner, .. } | Type::Heap(inner) | Type::Nullable(inner) => {
                 self.calls(inner)
             }
-            Type::Struct { id, .. } if id.intrinsic().is_some() => Ok(id
-                .intrinsic()
-                .is_some_and(|intrinsic| intrinsic.equality_entry().is_some())),
+            Type::Struct { id, .. } if id.intrinsic().is_some() => Ok(false),
             _ if self.has_equality_operator(ty) => Ok(true),
             Type::Struct { .. } | Type::Enum { .. } => {
                 let layout = self.layout(ty)?;
@@ -665,22 +663,11 @@ impl<'r, 'b, 'm, M: Module> Comparison<'r, 'b, 'm, M> {
                     comparison.part(inner, left, right)
                 })?;
             }
-            // A one-word intrinsic struct compares its handle words, or calls its catalog
-            // equality entry with them (D23 of `ui-toolkit`: handler ids compare by the
-            // handlers they name).
+            // A one-word intrinsic struct, a state handle, compares its handle words.
             Type::Struct { id, .. } if id.intrinsic().is_some() => {
-                let intrinsic = id.intrinsic().expect("an intrinsic struct");
                 let (left, right) = (left.scalar()?, right.scalar()?);
-                match intrinsic.equality_entry() {
-                    Some(entry) => {
-                        let id = self.context.runtime_function(entry)?;
-                        self.call(id, &[left, right])?;
-                    }
-                    None => {
-                        let equal = self.builder.ins().icmp(IntCC::Equal, left, right);
-                        self.join(equal);
-                    }
-                }
+                let equal = self.builder.ins().icmp(IntCC::Equal, left, right);
+                self.join(equal);
             }
             _ if self.has_equality_operator(ty) => self.call_equals(ty, left, right)?,
             Type::Struct { .. } => {
