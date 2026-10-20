@@ -761,14 +761,10 @@ fn a_file_without_imports_has_the_member_module_nodes_first() {
     let graph = DependencyGraph::from_entry(&main).unwrap();
     let node = graph.get_node(&main).unwrap();
     assert!(node.direct_imports.is_empty());
-    assert_eq!(
-        node.member_imports,
-        vec![
-            PathBuf::from("prism/core.prism"),
-            PathBuf::from("prism/collections.prism"),
-        ]
-    );
-    assert_eq!(graph.len(), 3);
+    // `/prism/core` is the one member module (D3 of `core-library-in-prism`), so a file without
+    // imports reaches no other library module.
+    assert_eq!(node.member_imports, vec![PathBuf::from("prism/core.prism")]);
+    assert_eq!(graph.len(), 2);
     let order: Vec<PathBuf> = graph.sccs().iter().flat_map(|c| c.files.clone()).collect();
     assert_eq!(order.last(), Some(&main), "library nodes come first");
     for key in &node.member_imports {

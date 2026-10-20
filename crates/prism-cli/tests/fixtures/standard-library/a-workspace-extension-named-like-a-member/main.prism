@@ -4,3 +4,5 @@ fun Int.toString(): String = "x"
 fun String.length(): Int = 0
 
 fun <T> List<T>.add(element: T) {}
+
+fun <T> List<T>.isNotEmpty(): Bool = false

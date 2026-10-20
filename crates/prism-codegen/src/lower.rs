@@ -1801,22 +1801,6 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 let content = self.slot_value(&arguments[3], &parameters[3], span)?;
                 self.call_runtime("prism_ui_run_app", &[title, width, height, content])?;
             }
-            Callee::Builtin(BuiltinFunction::ToString) => {
-                let receiver = arguments
-                    .first()
-                    .ok_or_else(|| BackendError::new("toString without a receiver"))?;
-                let name = match parameters.first() {
-                    Some(Type::Int) => "prism_rt_int_to_string",
-                    Some(Type::Float) => "prism_rt_double_to_string",
-                    Some(Type::Bool) => "prism_rt_bool_to_string",
-                    Some(Type::Char) => "prism_rt_char_to_string",
-                    other => return Err(BackendError::new(format!("toString of {:?}", other))),
-                };
-                let value = self.operand(receiver, span)?.scalar()?;
-                let destination = self.address(destination)?;
-                let function = self.runtime_function(name)?;
-                self.builder.ins().call(function, &[destination, value]);
-            }
             Callee::Builtin(builtin @ (BuiltinFunction::Print | BuiltinFunction::PrintLine)) => {
                 let mut values = Vec::new();
                 for argument in arguments {
@@ -2631,34 +2615,6 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             BuiltinFunction::ListSize => {
                 let size = self.list_word(list, ListField::Size);
                 self.write_place(destination, Lowered::Scalar(size), false)?;
-            }
-            BuiltinFunction::ListIsEmpty | BuiltinFunction::ListIsNotEmpty => {
-                let size = self.list_word(list, ListField::Size);
-                let condition = if builtin == BuiltinFunction::ListIsEmpty {
-                    IntCC::Equal
-                } else {
-                    IntCC::NotEqual
-                };
-                let test = self.builder.ins().icmp_imm_s(condition, size, 0);
-                self.write_place(destination, Lowered::Scalar(test), false)?;
-            }
-            // `0..<size`: the MIR's `Range`, with `endInclusive` false.
-            BuiltinFunction::ListIndices => {
-                let size = self.list_word(list, ListField::Size);
-                let range = destination.ty(self.body, self.types());
-                let range_layout = self.layout(&range)?;
-                let Shape::Struct { fields } = &range_layout.shape else {
-                    return Err(BackendError::new(format!("indices into a {}", range)));
-                };
-                let fields = fields.clone();
-                let address = self.address(destination)?;
-                let zero = self.builder.ins().iconst(types::I64, 0);
-                let exclusive = self.builder.ins().iconst(types::I8, 0);
-                for (field, value) in fields.iter().zip([zero, size, exclusive]) {
-                    self.builder
-                        .ins()
-                        .store(aligned(), value, address, field.offset as i32);
-                }
             }
             // Written in place; the runtime is called only to grow a full buffer.
             BuiltinFunction::ListAdd => {

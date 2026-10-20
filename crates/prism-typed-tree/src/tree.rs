@@ -702,9 +702,6 @@ pub enum BuiltinFunction {
     /// `s[i]` of a `String`, called with a shared receiver borrow and the `Int` index: the
     /// character at character index `i` (D5).
     StringCharacter,
-    /// `x.toString()` of an `Int`, `Double`, `Bool` or `Char`, called with the receiver copied
-    /// out of any reference: the text `print(x)` writes (D6).
-    ToString,
     /// `Heap(value)`: allocates a box and moves the value into it (D2 of `heap-boxes`). Declared
     /// like `fun <T> Heap(value: T): Heap<T>`: its parameter is the type parameter `T` and its
     /// type argument the contents' type.
@@ -721,12 +718,6 @@ pub enum BuiltinFunction {
     /// as an extension on `List<T>` ([`BuiltinFunction::list_member_signature`]) with the
     /// element type as its type argument (D6 of `collections`).
     ListSize,
-    /// `xs.indices` of a `List<T>`: the `Range` `0..<xs.size`.
-    ListIndices,
-    /// `xs.isEmpty()`.
-    ListIsEmpty,
-    /// `xs.isNotEmpty()`.
-    ListIsNotEmpty,
     /// `xs.contains(element)`: whether an element equals `element`.
     ListContains,
     /// `xs.indexOf(element)`: the first index of an element equal to `element`, or -1.
@@ -822,14 +813,10 @@ impl BuiltinFunction {
             BuiltinFunction::RangeContains => "contains",
             // The name Kotlin gives the `[]` operator.
             BuiltinFunction::StringCharacter => "get",
-            BuiltinFunction::ToString => "toString",
             BuiltinFunction::HeapAllocate => "Heap",
             BuiltinFunction::Unbox => "unbox",
             BuiltinFunction::VarargList => "varargList",
             BuiltinFunction::ListSize => "size",
-            BuiltinFunction::ListIndices => "indices",
-            BuiltinFunction::ListIsEmpty => "isEmpty",
-            BuiltinFunction::ListIsNotEmpty => "isNotEmpty",
             BuiltinFunction::ListContains => "contains",
             BuiltinFunction::ListIndexOf => "indexOf",
             BuiltinFunction::ListAdd => "add",
@@ -886,12 +873,10 @@ impl BuiltinFunction {
         )
     }
 
-    /// The built-in list members, in the order of D5 of `collections`.
-    pub const LIST_MEMBERS: [BuiltinFunction; 12] = [
+    /// The built-in list members, in the order of D5 of `collections`; `indices`, `isEmpty` and
+    /// `isNotEmpty` are written in Prism (D4 of `core-library-in-prism`).
+    pub const LIST_MEMBERS: [BuiltinFunction; 9] = [
         BuiltinFunction::ListSize,
-        BuiltinFunction::ListIndices,
-        BuiltinFunction::ListIsEmpty,
-        BuiltinFunction::ListIsNotEmpty,
         BuiltinFunction::ListContains,
         BuiltinFunction::ListIndexOf,
         BuiltinFunction::ListAdd,
@@ -922,14 +907,6 @@ impl BuiltinFunction {
         };
         let (mode, parameters, result) = match self {
             BuiltinFunction::ListSize => (ReceiverMode::Shared, vec![], Type::Int),
-            BuiltinFunction::ListIndices => (
-                ReceiverMode::Shared,
-                vec![],
-                Type::plain_struct(NominalId::builtin_range()),
-            ),
-            BuiltinFunction::ListIsEmpty | BuiltinFunction::ListIsNotEmpty => {
-                (ReceiverMode::Shared, vec![], Type::Bool)
-            }
             BuiltinFunction::ListContains => (
                 ReceiverMode::Shared,
                 vec![("element", borrowed)],

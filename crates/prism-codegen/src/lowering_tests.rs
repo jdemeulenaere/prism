@@ -6,13 +6,30 @@ use crate::{check_file, Program};
 use prism_mir::MirFile;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-fn compile_files(files: Vec<MirFile>) -> Program {
+/// The program of `files`, with the member module `/prism/core` beside them, since every file
+/// may call its members written in Prism (D3 of `core-library-in-prism`).
+fn compile_files(mut files: Vec<MirFile>) -> Program {
+    if !files.iter().any(|file| file.module == "prism/core") {
+        files.insert(0, core_mir().clone());
+    }
     for file in &files {
         if let Err(errors) = check_file(file) {
             panic!("{} is not supported: {:?}", file.module, errors);
         }
     }
     Program::compile(&files).unwrap_or_else(|error| panic!("{}", error))
+}
+
+/// The composed MIR of the bundled `/prism/core`, lowered once per process.
+fn core_mir() -> &'static MirFile {
+    static CORE: std::sync::OnceLock<MirFile> = std::sync::OnceLock::new();
+    CORE.get_or_init(|| {
+        lower_files(&[(
+            "prism/core",
+            include_str!("../../../library/prism/core.prism"),
+        )])
+        .remove(0)
+    })
 }
 
 fn compile(source: &str) -> Program {

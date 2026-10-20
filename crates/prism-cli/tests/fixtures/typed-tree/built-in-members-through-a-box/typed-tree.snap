@@ -1,0 +1,16 @@
+module main
+fun main::f(h: Heap<Int>): String @4:1
+  local %0 h: Heap<Int> (parameter)
+  call prism/core::Int.toString: String @4:31
+    receiver: borrow (receiver): &Int @4:31
+      deref: Int @4:31
+        local %0 h: Heap<Int> @4:31
+fun main::g(s: Heap<String>): Unit @6:1
+  local %0 s: Heap<String> (parameter)
+  block: Unit @6:24
+    expression @7:5
+      call builtin println: Unit @7:5
+        argument 0: call builtin length: Int @7:13
+          receiver: borrow (receiver): &String @7:13
+            deref: String @7:13
+              local %0 s: Heap<String> @7:13

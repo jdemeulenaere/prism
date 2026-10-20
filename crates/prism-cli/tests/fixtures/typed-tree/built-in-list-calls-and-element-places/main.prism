@@ -4,5 +4,6 @@ import /prism/collections
 fun f(xs: &List<Int>, i: Int): Int {
     var ys = listOf(1, 2)
     ys.add(xs[i])
+    if (ys.isEmpty()) return 0
     return ys.size + xs[0]
 }

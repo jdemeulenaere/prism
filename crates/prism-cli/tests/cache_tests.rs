@@ -283,6 +283,51 @@ fn a_property_s_type_is_part_of_the_abi() {
     );
 }
 
+/// compilation-and-abi: "Instances of generic members": `isEmpty`, `isNotEmpty` and `indices`
+/// are generics of `/prism/core`, which files call without importing it, directly or through
+/// another generic, and whose instances are planned for the program and cached like an import's
+/// (D4 of `core-library-in-prism`).
+#[test]
+fn instances_of_generic_members() {
+    let workspace = Workspace::new(
+        "generic_members",
+        &[
+            (
+                "lib/check.prism",
+                "package lib\npublic fun empty(xs: &List<String>): Bool = xs.isEmpty()\npublic fun <T> count(xs: &List<T>): Int {\n    var n = 0\n    for (i in xs.indices) n += 1\n    return n\n}\n",
+            ),
+            (
+                "app/main.prism",
+                "package app\nimport /lib/check\nimport /prism/collections\nimport /prism/core\nfun main() {\n    val xs = listOf(\"a\")\n    println(xs.isNotEmpty() && !empty(xs) && count(xs) == 1)\n}\n",
+            ),
+        ],
+    );
+    let all_lines = |output: &Output| -> Vec<String> {
+        String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .skip_while(|line| !line.starts_with("Cache: "))
+            .skip(1)
+            .take_while(|line| line.starts_with("  "))
+            .map(|line| line.trim().to_string())
+            .collect()
+    };
+    for verb in ["instantiate", "reused instance"] {
+        let output = workspace.run(&["run", "--explain-cache", "app/main.prism"]);
+        assert_success(&output);
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "true\n");
+        let explained = all_lines(&output);
+        for instance in [
+            "prism/core::List.isEmpty<String>",
+            "prism/core::List.isNotEmpty<String>",
+            "prism/core::List.indices<String>",
+            "lib/check::count<String>",
+        ] {
+            let line = format!("{} {}", verb, instance);
+            assert!(explained.contains(&line), "{}: {:?}", line, explained);
+        }
+    }
+}
+
 /// compilation-and-abi: "Modifying public function signature".
 #[test]
 fn modifying_public_function_signature() {
@@ -993,9 +1038,11 @@ fn explaining_a_warm_check() {
     // entries another workspace wrote for them.
     let output = workspace.run(&["check", "--explain-cache", "app/main.prism"]);
     let all = all_explanation_lines(&output);
+    // `/prism/core` alone: the program imports no library module (D3 of
+    // `core-library-in-prism`).
     assert_eq!(
         all[..2],
-        lines(&["reused prism/collections.prism", "reused prism/core.prism"])
+        lines(&["reused prism/core.prism", "reused lib/box.prism"])
     );
 }
 
@@ -1024,11 +1071,7 @@ fn unreached_modules_are_not_parsed() {
         .unwrap();
     assert_eq!(
         all_explanation_lines(&output),
-        lines(&[
-            "checked prism/collections.prism",
-            "checked prism/core.prism",
-            "checked main.prism",
-        ])
+        lines(&["checked prism/core.prism", "checked main.prism"])
     );
     fs::remove_dir_all(&base).ok();
 }
@@ -1052,7 +1095,6 @@ fn an_imported_module_is_parsed() {
     assert_eq!(
         all_explanation_lines(&output),
         lines(&[
-            "checked prism/collections.prism",
             "checked prism/compose/runtime.prism",
             "checked prism/core.prism",
             "checked main.prism",
@@ -1209,9 +1251,9 @@ fn library_entries_are_shared_between_workspaces() {
     assert_eq!(
         outputs[0],
         lines(&[
+            "checked prism/core.prism",
             "checked prism/collections.prism",
             "checked prism/compose/runtime.prism",
-            "checked prism/core.prism",
             "checked main.prism",
             // `listOf` is a library generic (D10 of `vararg`), instantiated for the program.
             "instantiate prism/collections::listOf<String>",
@@ -1220,9 +1262,9 @@ fn library_entries_are_shared_between_workspaces() {
     assert_eq!(
         outputs[1],
         lines(&[
+            "reused prism/core.prism",
             "reused prism/collections.prism",
             "reused prism/compose/runtime.prism",
-            "reused prism/core.prism",
             "checked main.prism",
             // A check plans instances without caching their code.
             "instantiate prism/collections::listOf<String>",

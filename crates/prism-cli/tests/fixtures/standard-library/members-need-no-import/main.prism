@@ -1,5 +1,6 @@
 // expect: ok
 fun f(xs: &mut List<Int>, s: &String): Int {
     xs.add(1)
-    return xs.size + s.length + 42.toString().length + xs.indexOf(1)
+    if (xs.isEmpty()) return 0
+    return xs.size + s.length + 42.toString().length + xs.indexOf(1) + xs.indices.end
 }

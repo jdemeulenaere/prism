@@ -14,7 +14,7 @@ fun main::f(s: &String, n: Int): Char @2:1
             local %0 s: &String @2:41
 fun main::g(n: &Int): String @3:1
   local %0 n: &Int (parameter)
-  call builtin toString: String @3:26
-    receiver: copy: Int @3:26
+  call prism/core::Int.toString: String @3:26
+    receiver: borrow (receiver): &Int @3:26
       deref: Int @3:26
         local %0 n: &Int @3:26

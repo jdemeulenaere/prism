@@ -44,7 +44,7 @@ A vararg's list, `size` and each intrinsic list member MUST be `Call` terminator
 
 #### Scenario: Built-in list calls
 - **WHEN** `fun f(): Int { var xs = listOf(1, 2); xs.add(3); if (xs.isNotEmpty()) return xs.removeAt(0); return 0 }` is lowered
-- **THEN** the MIR calls `builtin varargList` with `1` and `2` into a temporary and `prism/collections::listOf` with a move of that temporary into `xs`, then `builtin add` with a mutable borrow of `xs` and `3`, `prism/core::List.isNotEmpty<Int>` with a shared borrow of `xs`, and `builtin removeAt` with a mutable borrow of `xs` and `0` into the return place
+- **THEN** the MIR calls `builtin varargList` with `1` and `2` into a temporary and `prism/collections::listOf` with a move of that temporary into `xs`, then `builtin add` with a mutable borrow of `xs` and `3`, `prism/core::List<T>.isNotEmpty<Int>` with a shared borrow of `xs`, and `builtin removeAt` with a mutable borrow of `xs` and `0` into the return place
 
 ## REMOVED Requirements
 

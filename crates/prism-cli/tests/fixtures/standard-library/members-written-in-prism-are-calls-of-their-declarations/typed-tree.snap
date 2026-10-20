@@ -1,0 +1,26 @@
+module main
+fun main::f(n: Int, xs: &List<Int>): Bool @2:1
+  local %0 n: Int (parameter)
+  local %1 xs: &List<Int> (parameter)
+  logical &&: Bool @2:39
+    logical &&: Bool @2:39
+      binary >: Bool @2:39
+        call builtin length: Int @2:39
+          receiver: borrow (receiver): &String @2:39
+            temporary: String @2:39
+              call prism/core::Int.toString: String @2:39
+                receiver: borrow (receiver): &Int @2:39
+                  local %0 n: Int @2:39
+        literal 0: Int @2:61
+      call prism/core::List<T>.isEmpty<Int>: Bool @2:66
+        receiver: borrow (receiver): &List<Int> @2:66
+          deref: List<Int> @2:66
+            local %1 xs: &List<Int> @2:66
+    binary ==: Bool @2:82
+      field 0 start: Int @2:82
+        temporary: Range @2:82
+          call prism/core::List<T>.indices<Int>: Range @2:82
+            receiver: borrow (receiver): &List<Int> @2:82
+              deref: List<Int> @2:82
+                local %1 xs: &List<Int> @2:82
+      literal 0: Int @2:102

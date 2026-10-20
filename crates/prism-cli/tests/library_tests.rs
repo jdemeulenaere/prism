@@ -74,12 +74,14 @@ fn every_declaration_says_what_it_does() {
     }
 }
 
-/// The member modules declare the members of the built-in types (D2 of `explicit-library`):
-/// every intrinsic extension they declare has a built-in receiver, since the member scope gives
-/// every workspace file each of them.
+/// The member module declares the members of the built-in types (D2 of `explicit-library`, D3
+/// of `core-library-in-prism`): every extension it exports, plain or intrinsic, function or
+/// property, has a built-in receiver, since the member scope gives every workspace file each of
+/// them, and it exports no other function than `print` and `println`.
 #[test]
 fn the_member_modules_declare_members_of_built_in_types() {
     let library = Library::bundled();
+    assert_eq!(MEMBER_MODULES, ["prism/core"]);
     for module in MEMBER_MODULES {
         let source = &library.module(module).expect("a member module").source;
         let file = prism_parser::parse_source(source).expect("the module parses");
@@ -97,13 +99,21 @@ fn the_member_modules_declare_members_of_built_in_types() {
             let receiver = match symbol {
                 prism_abi::ExportedSymbol::Function {
                     receiver: Some(receiver),
-                    kind: prism_abi::FunctionKind::Intrinsic,
                     ..
                 } => prism_abi::receiver_constructor(&receiver.ty),
                 prism_abi::ExportedSymbol::ExtensionProperty { receiver, .. } => {
                     prism_abi::receiver_constructor(receiver)
                 }
-                _ => continue,
+                prism_abi::ExportedSymbol::Function { name, .. } => {
+                    assert!(
+                        name == "print" || name == "println",
+                        "{} exports the function '{}', which is not a member",
+                        module,
+                        name
+                    );
+                    continue;
+                }
+                other => panic!("{} exports {:?}, which is not a member", module, other),
             };
             // `List<T>` without its type arguments.
             let receiver = receiver.split('<').next().unwrap_or_default().to_string();
@@ -117,6 +127,61 @@ fn the_member_modules_declare_members_of_built_in_types() {
         }
         assert!(members > 0, "{} declares no member", module);
     }
+}
+
+/// standard-library: "Declarations of the core module", and compilation-and-abi: "The ABI of
+/// a library module": `/prism/core` exports intrinsic and ordinary members, each entry with its
+/// kind, and no external; changing an entry from intrinsic to ordinary changes its ABI hash.
+#[test]
+fn declarations_of_the_core_module() {
+    let library = Library::bundled();
+    let source = &library
+        .module("prism/core")
+        .expect("the core module")
+        .source;
+    let abi_of = |source: &str| {
+        let file = prism_parser::parse_source(source).expect("the module parses");
+        let no_definition = |_: &str, _: &str| None;
+        prism_abi::FileAbi::extract_with_origin(
+            &file,
+            "prism/core",
+            &prism_abi::no_imports,
+            &no_definition,
+            true,
+        )
+        .expect("the module's ABI")
+    };
+    let abi = abi_of(source);
+    let texts: BTreeSet<String> = abi
+        .symbols
+        .iter()
+        .filter_map(prism_abi::ExportedSymbol::declaration_text)
+        .collect();
+    for expected in [
+        "public fun Int.toString(): String",
+        "public intrinsic val String.length: Int",
+        "public intrinsic val <T> List<T>.size: Int",
+        "public fun <T> List<T>.isEmpty(): Bool",
+        "public val <T> List<T>.indices: Range",
+        "public intrinsic mut fun <T> List<T>.add(element: T): Unit",
+    ] {
+        assert!(
+            texts.contains(expected),
+            "{} is missing from {:?}",
+            expected,
+            texts
+        );
+    }
+    assert!(
+        !texts.iter().any(|text| text.contains("external")),
+        "{:?}",
+        texts
+    );
+    let ordinary = abi_of(&source.replace(
+        "public intrinsic mut fun <T> List<T>.add(element: T): Unit",
+        "public mut fun <T> List<T>.add(element: T): Unit {}",
+    ));
+    assert_ne!(abi.abi_hash, ordinary.abi_hash);
 }
 
 #[test]

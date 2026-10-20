@@ -776,6 +776,9 @@ impl Codec for StateOperation {
     }
 }
 
+/// The tags of the built-ins. A retired built-in's tag is never reused: 5 (`toString` of a
+/// scalar), 10 (`indices`), 11 (`isEmpty`) and 12 (`isNotEmpty`), now members written in Prism
+/// (D11 of `core-library-in-prism`).
 impl Codec for BuiltinFunction {
     fn encode(&self, encoder: &mut Encoder) {
         encoder.u8(match self {
@@ -784,14 +787,10 @@ impl Codec for BuiltinFunction {
             BuiltinFunction::PrintLine => 2,
             BuiltinFunction::StringLength => 3,
             BuiltinFunction::StringCharacter => 4,
-            BuiltinFunction::ToString => 5,
             BuiltinFunction::HeapAllocate => 6,
             BuiltinFunction::Unbox => 7,
             BuiltinFunction::VarargList => 8,
             BuiltinFunction::ListSize => 9,
-            BuiltinFunction::ListIndices => 10,
-            BuiltinFunction::ListIsEmpty => 11,
-            BuiltinFunction::ListIsNotEmpty => 12,
             BuiltinFunction::ListContains => 13,
             BuiltinFunction::ListIndexOf => 14,
             BuiltinFunction::ListAdd => 15,
@@ -829,14 +828,10 @@ impl Codec for BuiltinFunction {
             2 => BuiltinFunction::PrintLine,
             3 => BuiltinFunction::StringLength,
             4 => BuiltinFunction::StringCharacter,
-            5 => BuiltinFunction::ToString,
             6 => BuiltinFunction::HeapAllocate,
             7 => BuiltinFunction::Unbox,
             8 => BuiltinFunction::VarargList,
             9 => BuiltinFunction::ListSize,
-            10 => BuiltinFunction::ListIndices,
-            11 => BuiltinFunction::ListIsEmpty,
-            12 => BuiltinFunction::ListIsNotEmpty,
             13 => BuiltinFunction::ListContains,
             14 => BuiltinFunction::ListIndexOf,
             15 => BuiltinFunction::ListAdd,

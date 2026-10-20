@@ -1,4 +1,4 @@
-fun prism/collections::List<T>.map<Int, Int>(_1: &List<Int>, _2: (&Int) -> Int): List<Int> @63:1
+fun prism/collections::List<T>.map<Int, Int>(_1: &List<Int>, _2: (&Int) -> Int): List<Int> @28:1
   local _0: List<Int> (return)
   local _1 this: &List<Int> (argument)
   local _2 transform: (&Int) -> Int (argument)
@@ -15,68 +15,68 @@ fun prism/collections::List<T>.map<Int, Int>(_1: &List<Int>, _2: (&Int) -> Int):
   local _13: &mut List<Int> (temporary)
   local _14: Unit (temporary)
   bb0:
-    storage_live _3 @64:5
-    storage_live _4 @64:18
-    _4 = call builtin varargList<Int>() -> bb1 @64:18
+    storage_live _3 @29:5
+    storage_live _4 @29:18
+    _4 = call builtin varargList<Int>() -> bb1 @29:18
   bb1:
-    _3 = call prism/collections::listOf<Int>(move _4) -> bb2 @64:18
+    _3 = call prism/collections::listOf<Int>(move _4) -> bb2 @29:18
   bb2:
-    storage_dead _4 @64:5
-    storage_live _5 @65:5
-    _5 = &(*_1) (iteration) @65:21
-    storage_live _6 @65:5
-    storage_live _7 @65:5
-    storage_live _8 @65:5
-    storage_live _9 @65:5
-    _9 = &(*_5) (iteration) @65:5
-    _6 = call builtin size<Int>(move _9) -> bb3 @65:5
+    storage_dead _4 @29:5
+    storage_live _5 @30:5
+    _5 = &(*_1) (iteration) @30:21
+    storage_live _6 @30:5
+    storage_live _7 @30:5
+    storage_live _8 @30:5
+    storage_live _9 @30:5
+    _9 = &(*_5) (iteration) @30:5
+    _6 = call builtin size<Int>(move _9) -> bb3 @30:5
   bb3:
-    _7 = const 0 @65:5
-    _8 = copy _6 == const 0 @65:5
-    switch copy _8 [0 -> bb5, otherwise -> bb4] @65:5
+    _7 = const 0 @30:5
+    _8 = copy _6 == const 0 @30:5
+    switch copy _8 [0 -> bb5, otherwise -> bb4] @30:5
   bb4:
-    goto -> bb6 @65:5
+    goto -> bb6 @30:5
   bb5:
-    goto -> bb7 @65:5
+    goto -> bb7 @30:5
   bb6:
-    storage_dead _9 @65:5
-    storage_dead _8 @65:5
-    storage_dead _7 @65:5
-    storage_dead _6 @65:5
-    storage_dead _5 @65:5
-    _0 = move _3 @68:12
-    storage_dead _3 @68:5
-    drop _2 -> bb12 @63:1
+    storage_dead _9 @30:5
+    storage_dead _8 @30:5
+    storage_dead _7 @30:5
+    storage_dead _6 @30:5
+    storage_dead _5 @30:5
+    _0 = move _3 @33:12
+    storage_dead _3 @33:5
+    drop _2 -> bb12 @28:1
   bb7:
-    storage_live _10 @65:5
-    _10 = &(*_5)[_7] (iteration) @65:5
-    storage_live _11 @66:20
-    storage_live _12 @66:30
-    _12 = copy _10 @66:30
-    _11 = call _2(move _12) -> bb8 @66:20
+    storage_live _10 @30:5
+    _10 = &(*_5)[_7] (iteration) @30:5
+    storage_live _11 @31:20
+    storage_live _12 @31:30
+    _12 = copy _10 @31:30
+    _11 = call _2(move _12) -> bb8 @31:20
   bb8:
-    storage_live _13 @66:9
-    _13 = &mut _3 (receiver) @66:9
-    storage_live _14 @66:9
-    _14 = call builtin add<Int>(move _13, move _11) -> bb9 @66:9
+    storage_live _13 @31:9
+    _13 = &mut _3 (receiver) @31:9
+    storage_live _14 @31:9
+    _14 = call builtin add<Int>(move _13, move _11) -> bb9 @31:9
   bb9:
-    storage_dead _14 @66:9
-    storage_dead _13 @66:9
-    storage_dead _12 @66:9
-    storage_dead _11 @66:9
-    storage_dead _10 @67:5
-    _7 = copy _7 + const 1 @65:5
-    _8 = copy _7 == copy _6 @65:5
-    switch copy _8 [0 -> bb11, otherwise -> bb10] @65:5
+    storage_dead _14 @31:9
+    storage_dead _13 @31:9
+    storage_dead _12 @31:9
+    storage_dead _11 @31:9
+    storage_dead _10 @32:5
+    _7 = copy _7 + const 1 @30:5
+    _8 = copy _7 == copy _6 @30:5
+    switch copy _8 [0 -> bb11, otherwise -> bb10] @30:5
   bb10:
-    goto -> bb6 @65:5
+    goto -> bb6 @30:5
   bb11:
-    goto -> bb7 @65:5
+    goto -> bb7 @30:5
   bb12:
-    return @63:1
-fun prism/collections::listOf<Int>(_1: List<Int>): List<Int> @8:1
+    return @28:1
+fun prism/collections::listOf<Int>(_1: List<Int>): List<Int> @9:1
   local _0: List<Int> (return)
   local _1 elements: List<Int> (argument)
   bb0:
-    _0 = move _1 @8:54
-    return @8:1
+    _0 = move _1 @9:54
+    return @9:1

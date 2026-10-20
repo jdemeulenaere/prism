@@ -1,3 +1,4 @@
 // expect: E4010
 fun <T> List<T>.add(element: T) {}
 fun List<Int>.size(): Int = 0
+fun <T> List<T>.isEmpty(): Bool = false

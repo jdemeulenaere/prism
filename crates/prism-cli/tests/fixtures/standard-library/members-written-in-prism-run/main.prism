@@ -1,0 +1,15 @@
+// expect: ok
+// run: 0
+import /prism/collections
+import /prism/core
+
+fun main() {
+    val n: Int? = -3
+    println(n?.toString() ?: "")
+    println(1.5.toString() + true.toString() + 'c'.toString())
+    val xs = listOf(4, 5)
+    println(xs.isEmpty())
+    println(xs.isNotEmpty())
+    for (i in xs.indices) print(i)
+    println()
+}

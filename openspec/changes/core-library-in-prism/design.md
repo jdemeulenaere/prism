@@ -334,7 +334,7 @@ As before, an intrinsic is reached only through its declaration: a use resolves 
 
 - `BuiltinFunction::{ToString, ListIsEmpty, ListIsNotEmpty, ListIndices, DpOfInt, TextUnitOfInt}` are removed from `prism-typed-tree`, with their arms in the validator, the dump, MIR building (`build/call.rs`'s unit construction), the MIR validator and `codec.rs`, and code generation (`lower.rs`'s `ToString` arm).
 - Their codec tags (5, 10, 11, 12, 38 and 39) are retired and never reused. No cached record can hold one, since every cache entry is keyed by the compiler identity, so the cache's `FORMAT_VERSION` stays.
-- Calls of the Prism members are `Callee::Declaration` calls with a receiver. Dumps print `call prism/core::Int.toString` and `call prism/core::List.isEmpty<Int>`.
+- Calls of the Prism members are `Callee::Declaration` calls with a receiver. Dumps print `call prism/core::Int.toString` and `call prism/core::List<T>.isEmpty<Int>` (a generic extension's path names its receiver as declared).
 - Fixture snapshots that print the old built-ins are re-blessed, and each diff is checked to differ only by the callee and its receiver borrow (task 5.3).
 
 **Compile-time cost.** None; one node per use as before.

@@ -22,7 +22,7 @@ fun main::g(_1: &String): String @3:1
   local _1 s: &String (argument)
   local _2: Int (temporary)
   local _3: &String (temporary)
-  local _4: Int (temporary)
+  local _4: &Int (temporary)
   bb0:
     storage_live _2 @3:29
     storage_live _3 @3:29
@@ -30,8 +30,8 @@ fun main::g(_1: &String): String @3:1
     _2 = call builtin length(move _3) -> bb1 @3:29
   bb1:
     storage_live _4 @3:29
-    _4 = copy _2 @3:29
-    _0 = call builtin toString(move _4) -> bb2 @3:29
+    _4 = &_2 (receiver) @3:29
+    _0 = call prism/core::Int.toString(move _4) -> bb2 @3:29
   bb2:
     storage_dead _4 @3:29
     storage_dead _3 @3:29

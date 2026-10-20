@@ -18,13 +18,20 @@ fun main::f(xs: &List<Int>, i: Int): Int @4:1
             base: deref: List<Int> @6:12
               local %0 xs: &List<Int> @6:12
             index: local %1 i: Int @6:15
-    tail: coerce diverge: Int @7:5
-      return: Nothing @7:5
-        binary +: Int @7:12
-          call builtin size<Int>: Int @7:12
-            receiver: borrow (receiver): &List<Int> @7:12
-              local %2 ys: List<Int> @7:12
-          index: Int @7:22
-            base: deref: List<Int> @7:22
-              local %0 xs: &List<Int> @7:22
-            index: literal 0: Int @7:25
+    expression @7:5
+      if: Unit @7:5
+        condition: call prism/core::List<T>.isEmpty<Int>: Bool @7:9
+          receiver: borrow (receiver): &List<Int> @7:9
+            local %2 ys: List<Int> @7:9
+        then: return: Nothing @7:23
+          literal 0: Int @7:30
+    tail: coerce diverge: Int @8:5
+      return: Nothing @8:5
+        binary +: Int @8:12
+          call builtin size<Int>: Int @8:12
+            receiver: borrow (receiver): &List<Int> @8:12
+              local %2 ys: List<Int> @8:12
+          index: Int @8:22
+            base: deref: List<Int> @8:22
+              local %0 xs: &List<Int> @8:22
+            index: literal 0: Int @8:25

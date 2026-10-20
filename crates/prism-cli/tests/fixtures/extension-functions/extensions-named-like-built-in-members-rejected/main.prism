@@ -2,3 +2,4 @@
 fun Int.toString(): String = "x"
 fun Char.toString(): String = "c"
 fun String.length(): Int = 0
+fun <T> List<T>.isEmpty(): Bool = true

@@ -6,8 +6,8 @@ fun main::P.toString(this): String @6:1
   binary +: String @6:28
     binary +: String @6:28
       literal "P(": String @6:28
-      call builtin toString: String @6:35
-        receiver: copy: Int @6:35
+      call prism/core::Int.toString: String @6:35
+        receiver: borrow (receiver): &Int @6:35
           field 0 x: Int @6:35
             deref: P @6:35
               local %0 this: &P @6:35

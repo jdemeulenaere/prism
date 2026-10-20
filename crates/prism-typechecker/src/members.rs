@@ -1,9 +1,9 @@
-//! The member scope (D2 of `explicit-library`): the intrinsic extensions the member modules
-//! (`/prism/core` and `/prism/collections`) declare on the built-in types, which are members of
-//! those types in every workspace file without an import (`42.toString()`, `s.length`,
-//! `xs.size`, `xs.add(1)`), converted once per program into one shared scope. Nothing else of
-//! the member modules is in scope without an import: `println`, `listOf` and the helpers are
-//! imported like any module's names.
+//! The member scope (D2 of `explicit-library`, D3 of `core-library-in-prism`): the extensions
+//! the member module `/prism/core` declares on the built-in types, intrinsic or written in
+//! Prism, which are members of those types in every workspace file without an import
+//! (`42.toString()`, `s.length`, `xs.size`, `xs.add(1)`, `xs.isEmpty()`), converted once per
+//! program into one shared scope. Nothing else of the library is in scope without an import:
+//! `println`, `listOf` and the helpers are imported like any module's names.
 //!
 //! Building the scope is the conversion `ingest_file_abi` does, linear in the member modules'
 //! ABIs and done once. A file then pays a pointer copy to install it, plus one hash lookup on
@@ -15,11 +15,12 @@ use std::collections::HashMap;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 
-/// The members of the built-in types that the member modules declare, shared by every checker
+/// The members of the built-in types that the member module declares, shared by every checker
 /// of a program.
 #[derive(Debug)]
 pub struct MemberScope {
-    /// The intrinsic extensions and properties, by receiver type constructor and name.
+    /// The extensions and properties, intrinsic or written in Prism, by receiver type
+    /// constructor and name.
     members: HashMap<(ReceiverKey, String), Extension>,
 }
 
@@ -99,6 +100,8 @@ mod tests {
         let members = test_members();
         assert!(members.declares("size") && members.declares("toString"));
         assert!(members.declares("length") && members.declares("add"));
+        // Members written in Prism are members too (D3 of `core-library-in-prism`).
+        assert!(members.declares("isEmpty") && members.declares("indices"));
         // Functions and helpers are imported, not members.
         assert!(!members.declares("println") && !members.declares("listOf"));
         assert!(!members.declares("map") && !members.declares("forEach"));

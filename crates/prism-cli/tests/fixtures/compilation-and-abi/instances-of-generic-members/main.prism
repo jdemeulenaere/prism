@@ -1,0 +1,9 @@
+// expect: ok
+// run: 3
+import /prism/collections
+import /prism/system
+
+fun main() {
+    val xs = listOf("a")
+    exitProcess(if (xs.isNotEmpty()) 3 else 4)
+}

@@ -8,9 +8,9 @@
 //! (`prism/compose/runtime` for the file `compose/runtime.prism` of the package `prism.compose`)
 //! and which a root-anchored import `/prism/<name>` reaches.
 //! No module is imported implicitly (D1 of `explicit-library`): a file imports every library
-//! module it uses. The member modules ([`MEMBER_MODULES`]) only give every workspace file the
-//! members of the built-in types they declare (`toString()`, `length`, `size`, `add`, ...), and
-//! nothing else (D2 of `explicit-library`).
+//! module it uses. The member module ([`MEMBER_MODULES`]) only gives every workspace file the
+//! members of the built-in types it declares (`toString()`, `length`, `size`, `add`, ...), and
+//! nothing else (D2 of `explicit-library`, D3 of `core-library-in-prism`).
 //!
 //! The crate has no dependencies, and no build script: `library_tests.rs` checks that
 //! [`MODULES`] lists exactly the files of `library/prism/` and its subdirectories.
@@ -64,10 +64,10 @@ pub const MODULES: &[(&str, &str)] = &[
     ),
 ];
 
-/// The member modules: the modules declaring the members of the built-in types (the scalars'
-/// and `String`'s in `/prism/core`, `List`'s in `/prism/collections`), which every workspace
-/// file sees without an import, and only those members (D2 of `explicit-library`).
-pub const MEMBER_MODULES: &[&str] = &["prism/core", "prism/collections"];
+/// The member modules: `/prism/core` alone, which declares every member of the built-in types,
+/// intrinsic or written in Prism, and which every workspace file sees without an import, and
+/// only those members (D2 of `explicit-library`, D3 of `core-library-in-prism`).
+pub const MEMBER_MODULES: &[&str] = &["prism/core"];
 
 /// The root package that names the library, which no workspace file may declare (D2).
 pub const ROOT_PACKAGE: &str = "prism";

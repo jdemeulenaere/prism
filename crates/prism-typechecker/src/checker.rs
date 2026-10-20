@@ -830,8 +830,8 @@ impl TypeChecker {
             .is_some_and(|member| member.property)
     }
 
-    /// Whether `receiver` has an intrinsic member function named `name`.
-    fn has_intrinsic_function(&self, receiver: &Type, name: &str) -> bool {
+    /// Whether `receiver` has a member function named `name`, intrinsic or written in Prism.
+    fn has_member_function(&self, receiver: &Type, name: &str) -> bool {
         self.member(receiver, name)
             .is_some_and(|member| !member.property)
     }
@@ -1548,7 +1548,7 @@ impl TypeChecker {
             if self.has_field(&receiver, name) {
                 return Some((receiver, true));
             }
-            let extension = self.has_intrinsic_function(&receiver, name)
+            let extension = self.has_member_function(&receiver, name)
                 || !matches!(self.find_extension(&receiver, name), ExtensionLookup::None);
             extension.then_some((receiver, false))
         })
@@ -8183,16 +8183,10 @@ impl TypeChecker {
             }
         }
 
-        // 2. The built-in `clone()` of a `Clone` type, and `toString()` of a scalar.
+        // 2. The built-in `clone()` of a `Clone` type. A scalar's `toString()` is a member of
+        // `/prism/core`, called as any member (D4 of `core-library-in-prism`).
         if member == "clone" && self.is_clone(&clone_target(&receiver_ty, is_safe_nav).0) {
             return self.infer_clone_call(receiver, is_safe_nav, args, span);
-        }
-        let scalar = peel_indirection(&clone_target(&receiver_ty, is_safe_nav).0).clone();
-        if member == TO_STRING
-            && has_builtin_to_string(&scalar)
-            && self.has_intrinsic_function(&scalar, TO_STRING)
-        {
-            return self.infer_to_string_call(receiver, is_safe_nav, type_arguments, args, span);
         }
         // The built-in `unbox()` of a box behind references (D6 of `heap-boxes`).
         if member == UNBOX && matches!(clone_target(&receiver_ty, is_safe_nav).0, Type::Heap(_)) {
@@ -9414,7 +9408,7 @@ impl TypeChecker {
         let receiver = self.current_receiver()?;
         // An intrinsic member wins over declared extensions (D7 of `standard-library`), so a
         // bare call of one in an extension on its receiver type is a call on `this` too.
-        if self.has_intrinsic_function(&receiver, name) {
+        if self.has_member_function(&receiver, name) {
             return Some(this_member(name, callee.span));
         }
         match self.find_extension(&receiver, name) {
@@ -10537,59 +10531,6 @@ impl TypeChecker {
         self.add(ExpressionKind::Call(call), result, span)
     }
 
-    /// Types a call of the built-in `toString()` of an `Int`, `Double`, `Bool` or `Char`,
-    /// `receiver.toString()` or `receiver?.toString()` (D6 of `runtime-strings-and-drops`): the
-    /// receiver is copied out of its references, and the result is a new `String`. It takes no
-    /// arguments (`E4004`).
-    fn infer_to_string_call(
-        &mut self,
-        receiver: ExpressionId,
-        is_safe_nav: bool,
-        type_arguments: &[prism_ast::types::Type],
-        args: &[CallArg],
-        span: Span,
-    ) -> ExpressionId {
-        self.reject_type_arguments("'toString'", type_arguments);
-        if !args.is_empty() {
-            let mut children = vec![receiver];
-            for arg in args {
-                children.push(self.infer_expr(&arg.value));
-            }
-            self.errors.push(TypeError::CallSignatureMismatch {
-                message: format!("'toString()' takes no arguments, found {}", args.len()),
-                span,
-            });
-            return self.error_node(children, span);
-        }
-        let nullable = clone_target(&self.ty(receiver), is_safe_nav).1;
-        let (joined, base) = if nullable {
-            self.open_chain(receiver)
-        } else {
-            (None, receiver)
-        };
-        let place = self.peel_indirection_nodes(base);
-        let copy = self.copy(place);
-        let copy_ty = self.ty(copy);
-        let call = Call {
-            callee: Callee::Builtin(BuiltinFunction::ToString),
-            arguments: vec![Argument::Written(copy)],
-            parameters: vec![(Some(THIS.to_string()), copy_ty)],
-            parameter_kinds: vec![ParameterKind::Plain],
-            type_arguments: Vec::new(),
-            evaluation_order: vec![0],
-            has_receiver: true,
-            has_context: false,
-            is_compose: false,
-            operator: None,
-        };
-        let call = self.add(ExpressionKind::Call(call), Type::String, span);
-        if nullable {
-            self.close_chain(joined, call, SafeNavigationOrigin::Written, span)
-        } else {
-            call
-        }
-    }
-
     /// Whether the extensions named `member` on the type constructor of `reached` that the file
     /// sees, its own or else its imports', include a property: a read of the name then reads
     /// it, and a call calls the value read (D6 of `core-library-in-prism`).
@@ -11682,11 +11623,6 @@ fn template_part_operand(part: &Expr) -> String {
         | ExprKind::Unary { .. } => part.to_string(),
         _ => format!("({})", part),
     }
-}
-
-/// Whether values of `ty` have the built-in `toString()`: `Int`, `Double`, `Bool` and `Char`.
-fn has_builtin_to_string(ty: &Type) -> bool {
-    matches!(ty, Type::Int | Type::Float | Type::Bool | Type::Char)
 }
 
 /// The binding `expr` names: a variable for an identifier, the receiver for `this`.

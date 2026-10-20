@@ -1,0 +1,8 @@
+// expect: ok
+import /prism/core
+
+fun f(h: Heap<Int>): String = h.toString()
+
+fun g(s: Heap<String>) {
+    println(s.length)
+}

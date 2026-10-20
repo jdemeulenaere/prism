@@ -66,7 +66,7 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 5. Members of the built-in types in `/prism/core` (D3, D4, D9, D11)
 
-- [ ] 5.1 Library:
+- [x] 5.1 Library:
   - move the `List<T>` member declarations from `library/prism/collections.prism` to `library/prism/core.prism` (with `contains` as `intrinsic operator`);
   - write in Prism `public fun Int.toString(): String = prism_rt_int_to_string(this)`, and the same for `Double`, `Bool` and `Char`, over private externals of the runtime's existing signatures; `public fun <T> List<T>.isEmpty(): Bool = size == 0`; `isNotEmpty()`; and `public val <T> List<T>.indices: Range get() = 0..<size`, each with a comment;
   - give `collections.prism` `import core`;
@@ -75,13 +75,13 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
   - make `library_tests.rs`'s `the_member_modules_declare_members_of_built_in_types` check that every extension `/prism/core` declares, plain or intrinsic, has a built-in receiver.
 
   Verify with `cargo test -p prism-cli --test library_tests`.
-- [ ] 5.2 Type checker:
+- [x] 5.2 Type checker:
   - `MemberScope::from_abis` and `ingest_file_abi` make every extension function or property of `/prism/core` on a built-in receiver a member (`Extension` with no built-in and its declaration path), consulted as members are;
   - remove `infer_to_string_call`, `has_builtin_to_string` and the scalar `toString` branch, so `toString()` takes the member path;
   - make the uncallable-extension check (`E4010`) use the member table, so it covers Prism members and names `/prism/core`.
 
   Remove `BuiltinFunction::{ToString, ListIsEmpty, ListIsNotEmpty, ListIndices}` from `crates/prism-typed-tree` (tree, validator, dump), `crates/prism-mir` (build, validator, `codec.rs`, retiring tags 5, 10, 11 and 12 with a comment that they are never reused) and `crates/prism-codegen/src/lower.rs`. Verify with `cargo test -p prism-typechecker -p prism-typed-tree -p prism-mir -p prism-codegen`.
-- [ ] 5.3 Fixtures and snapshots:
+- [x] 5.3 Fixtures and snapshots:
   - add or update the cases of `standard-library` ("Members written in Prism run", "Members written in Prism are calls of their declarations", "Unreached modules are not parsed", "An imported module is parsed", "A workspace extension named like a member", "Declarations of the core module", "Members need no import", "A signature-typed intrinsic", "The list membership operator"), `type-system` ("toString takes no arguments" and the other scenarios of "Scalars Have a Built-In toString"), `extension-functions` ("A built-in toString wins over an extension", "Extensions named like built-in members rejected", "A property named like a member rejected"), `collections` (the three MODIFIED requirements' scenarios), `typed-tree` ("Built-in string members", "Built-in members through a box", "Built-in list calls and element places"), `mir` ("String members are built-in calls", "Built-in list calls"), `compilation-and-abi` ("The ABI of a library module", "Member modules give members only", "Instances of generic members") and `build-cache` (`cache_tests.rs`: "Library entries are shared between workspaces", "Explaining a warm check");
   - re-bless every snapshot that prints `builtin toString`, `builtin isEmpty`, `builtin isNotEmpty` or `builtin indices`, or lists `prism/collections.prism` for a program that does not import it, reading each diff to check that only the callee, its receiver borrow and the library lines changed;
   - check that the examples need no edit (`prism check` on every file under `examples/`).

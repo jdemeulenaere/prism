@@ -1,6 +1,8 @@
-// The core of the bundled library: the functions and members every file uses without an
-// import. It is a prelude module, so a file's own declaration or import of a name shadows it.
-// Every declaration here is an intrinsic: the compiler types and lowers its calls itself.
+// The core of the bundled library: printing, and every member of the built-in types. The
+// members belong to their types: every file sees them without an import, and they always take
+// precedence over extensions. `print` and `println` are used after `import /prism/core`. Every
+// extension declared here is on a built-in type, and is a member of it whether it is an
+// intrinsic, which the compiler types and lowers itself, or written in Prism.
 package prism
 
 // Writes the text form of `value` to the standard output: an `Int` in decimal, a `Double`, a
@@ -13,16 +15,64 @@ public intrinsic fun <T> print(value: &T): Unit
 public intrinsic fun <T> println(value: &T): Unit
 
 // The decimal text of this `Int`, with a leading `-` when it is negative.
-public intrinsic fun Int.toString(): String
+public fun Int.toString(): String = prism_rt_int_to_string(this)
 
 // The text of this `Double`, as `print` writes it.
-public intrinsic fun Double.toString(): String
+public fun Double.toString(): String = prism_rt_double_to_string(this)
 
 // `true` or `false`.
-public intrinsic fun Bool.toString(): String
+public fun Bool.toString(): String = prism_rt_bool_to_string(this)
 
 // The one-character text of this `Char`.
-public intrinsic fun Char.toString(): String
+public fun Char.toString(): String = prism_rt_char_to_string(this)
 
 // The number of characters of this `String`.
 public intrinsic var String.length: Int
+
+// The number of elements.
+public intrinsic val <T> List<T>.size: Int
+
+// The valid indices, `0..<size`.
+public val <T> List<T>.indices: Range get() = 0..<size
+
+// Whether the list has no element.
+public fun <T> List<T>.isEmpty(): Bool = size == 0
+
+// Whether the list has an element.
+public fun <T> List<T>.isNotEmpty(): Bool = size != 0
+
+// Whether an element equals `element`.
+public intrinsic operator fun <T> List<T>.contains(element: &T): Bool
+
+// The index of the first element equal to `element`, or `-1`.
+public intrinsic fun <T> List<T>.indexOf(element: &T): Int
+
+// Appends `element`.
+public intrinsic mut fun <T> List<T>.add(element: T): Unit
+
+// Places `element` at `index`, moving the later elements up by one.
+public intrinsic mut fun <T> List<T>.insert(index: Int, element: T): Unit
+
+// Removes the element at `index` and gives it by move, moving the later elements down by one.
+public intrinsic mut fun <T> List<T>.removeAt(index: Int): T
+
+// Removes the last element and gives it by move.
+public intrinsic mut fun <T> List<T>.removeLast(): T
+
+// Reverses the order of the elements in place.
+public intrinsic mut fun <T> List<T>.reverse(): Unit
+
+// Drops every element, keeping the list's buffer.
+public intrinsic mut fun <T> List<T>.clear(): Unit
+
+// The runtime's entry that writes the decimal text of `value` to the result.
+private external fun prism_rt_int_to_string(value: Int): String
+
+// The runtime's entry that writes the text of `value`, as `print` writes it, to the result.
+private external fun prism_rt_double_to_string(value: Double): String
+
+// The runtime's entry that writes `true` or `false` to the result.
+private external fun prism_rt_bool_to_string(value: Bool): String
+
+// The runtime's entry that writes the one-character text of `value` to the result.
+private external fun prism_rt_char_to_string(value: Char): String

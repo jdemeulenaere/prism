@@ -1,47 +1,12 @@
-// Lists: `listOf`, the members of `List<T>` and the higher-order helpers written over them. The
-// members belong to the list type: every file sees them without an import, and they always take
-// precedence over extensions. `listOf` and the helpers are used after `import /prism/collections`.
+// Lists: `listOf` and the higher-order helpers, written over the members of `List<T>` that
+// `/prism/core` declares. They are used after `import /prism/collections`.
 package prism
+
+import core
 
 // A list of the given elements, in order. It takes any number of elements, all of one type, and
 // gives back the list its call built, or the list spread into it (`listOf(*xs)`).
 public fun <T> listOf(vararg elements: T): List<T> = elements
-
-// The number of elements.
-public intrinsic val <T> List<T>.size: Int
-
-// The valid indices, `0..<size`.
-public intrinsic val <T> List<T>.indices: Range
-
-// Whether the list has no element.
-public intrinsic fun <T> List<T>.isEmpty(): Bool
-
-// Whether the list has an element.
-public intrinsic fun <T> List<T>.isNotEmpty(): Bool
-
-// Whether an element equals `element`.
-public intrinsic operator fun <T> List<T>.contains(element: &T): Bool
-
-// The index of the first element equal to `element`, or `-1`.
-public intrinsic fun <T> List<T>.indexOf(element: &T): Int
-
-// Appends `element`.
-public intrinsic mut fun <T> List<T>.add(element: T): Unit
-
-// Places `element` at `index`, moving the later elements up by one.
-public intrinsic mut fun <T> List<T>.insert(index: Int, element: T): Unit
-
-// Removes the element at `index` and gives it by move, moving the later elements down by one.
-public intrinsic mut fun <T> List<T>.removeAt(index: Int): T
-
-// Removes the last element and gives it by move.
-public intrinsic mut fun <T> List<T>.removeLast(): T
-
-// Reverses the order of the elements in place.
-public intrinsic mut fun <T> List<T>.reverse(): Unit
-
-// Drops every element, keeping the list's buffer.
-public intrinsic mut fun <T> List<T>.clear(): Unit
 
 // Calls `action` on each element, in order.
 public fun <T> List<T>.forEach(action: (&T) -> Unit): Unit {

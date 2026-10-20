@@ -1,0 +1,9 @@
+module main
+fun main::Int.toString(this): String @2:1
+  local %0 this: &Int (receiver)
+  literal "x": String @2:30
+fun main::f(n: Int): String @3:1
+  local %0 n: Int (parameter)
+  call prism/core::Int.toString: String @3:25
+    receiver: borrow (receiver): &Int @3:25
+      local %0 n: Int @3:25

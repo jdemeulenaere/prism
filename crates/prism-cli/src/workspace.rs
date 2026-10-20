@@ -1352,8 +1352,10 @@ mod tests {
     }
 
     /// build-cache: "Cache Keys Cover Exactly the Compilation Inputs": a workspace file's key
-    /// covers the member modules' ABI hashes after its imports', and a library module's key
-    /// its own inputs only (D3 of `standard-library`, D14 of `explicit-library`).
+    /// covers the member module's ABI hash after its imports', and a library module's key its
+    /// own inputs only (D3 of `standard-library`, D14 of `explicit-library`). `/prism/collections`
+    /// is no member module (D3 of `core-library-in-prism`), so it is no input of a file that
+    /// does not import it.
     #[test]
     fn keys_cover_the_member_modules() {
         let temp = create_temp_dir("member_keys");
@@ -1366,23 +1368,29 @@ mod tests {
             file_check_key(&keys, &graph, &abis, path)
         };
         let bundled = Library::bundled();
-        let collections = &bundled.module("prism/collections").unwrap().source;
-        // A new public helper changes the ABI hash of a member module.
-        let grown = Library::with_modules(vec![(
-            "prism/collections".to_string(),
-            format!(
-                "{}\n// Nothing.\npublic fun nothing(): Unit {{}}\n",
-                collections
-            ),
-        )]);
-        assert_ne!(key_of(bundled, &main), key_of(&grown, &main));
-        let core = Path::new("prism/core.prism");
-        assert_eq!(key_of(bundled, core), key_of(&grown, core));
-        let collections_key = Path::new("prism/collections.prism");
-        assert_ne!(
-            key_of(bundled, collections_key),
-            key_of(&grown, collections_key)
+        let grown = |module: &str, addition: &str| {
+            let source = &bundled.module(module).unwrap().source;
+            Library::with_modules(vec![(
+                module.to_string(),
+                format!("{}\n{}", source, addition),
+            )])
+        };
+        // A new public member changes the ABI hash of the member module, and so the key of
+        // every workspace file and of the module itself.
+        let grown_core = grown(
+            "prism/core",
+            "// Nothing.\npublic fun Int.nothing(): Unit {}\n",
         );
+        assert_ne!(key_of(bundled, &main), key_of(&grown_core, &main));
+        let core = Path::new("prism/core.prism");
+        assert_ne!(key_of(bundled, core), key_of(&grown_core, core));
+        // A new helper of `/prism/collections` changes nothing for a file that does not import
+        // it.
+        let grown_collections = grown(
+            "prism/collections",
+            "// Nothing.\npublic fun nothing(): Unit {}\n",
+        );
+        assert_eq!(key_of(bundled, &main), key_of(&grown_collections, &main));
         fs::remove_dir_all(&temp).ok();
     }
 

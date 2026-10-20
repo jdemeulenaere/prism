@@ -5,7 +5,9 @@ fun main::f(): Int @4:1
   local _2: List<Int> (temporary)
   local _3: &mut List<Int> (temporary)
   local _4: Unit (temporary)
-  local _5: &mut List<Int> (temporary)
+  local _5: Bool (temporary)
+  local _6: &List<Int> (temporary)
+  local _7: &mut List<Int> (temporary)
   bb0:
     storage_live _1 @5:5
     storage_live _2 @5:21
@@ -21,12 +23,30 @@ fun main::f(): Int @4:1
   bb3:
     storage_dead _4 @6:5
     storage_dead _3 @6:5
-    storage_live _5 @7:12
-    _5 = &mut _1 (receiver) @7:12
-    _0 = call builtin removeAt<Int>(move _5, const 0) -> bb4 @7:12
+    storage_live _5 @7:9
+    storage_live _6 @7:9
+    _6 = &_1 (receiver) @7:9
+    _5 = call prism/core::List<T>.isNotEmpty<Int>(move _6) -> bb4 @7:9
   bb4:
-    storage_dead _5 @7:5
-    drop _1 -> bb5 @7:5
+    storage_dead _6 @7:9
+    switch move _5 [0 -> bb6, otherwise -> bb5] @7:9
   bb5:
-    storage_dead _1 @7:5
+    storage_dead _5 @7:9
+    storage_live _7 @7:33
+    _7 = &mut _1 (receiver) @7:33
+    _0 = call builtin removeAt<Int>(move _7, const 0) -> bb7 @7:33
+  bb6:
+    storage_dead _5 @7:9
+    _0 = const 0 @8:12
+    drop _1 -> bb10 @8:5
+  bb7:
+    storage_dead _7 @7:26
+    drop _1 -> bb8 @7:26
+  bb8:
+    storage_dead _1 @7:26
+    goto -> bb9 @7:26
+  bb9:
     return @4:1
+  bb10:
+    storage_dead _1 @8:5
+    goto -> bb9 @8:5

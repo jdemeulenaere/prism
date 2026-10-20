@@ -35,7 +35,6 @@ const CORE: &str = "prism/core";
 /// The member module (D3 of `core-library-in-prism`): every extension it declares on a built-in
 /// type, intrinsic or written in Prism, is a member of that type.
 pub(crate) const MEMBER_MODULE: &str = CORE;
-const COLLECTIONS: &str = "prism/collections";
 const COMPOSE_RUNTIME: &str = prism_typed_tree::COMPOSE_RUNTIME_MODULE;
 const COMPOSE_UI: &str = prism_typed_tree::COMPOSE_UI_MODULE;
 
@@ -79,38 +78,6 @@ pub const CATALOG: &[Intrinsic] = &[
     ),
     entry(
         CORE,
-        Some("Int"),
-        "toString",
-        BuiltinFunction::ToString,
-        "public intrinsic fun Int.toString(): String",
-        false,
-    ),
-    entry(
-        CORE,
-        Some("Double"),
-        "toString",
-        BuiltinFunction::ToString,
-        "public intrinsic fun Double.toString(): String",
-        false,
-    ),
-    entry(
-        CORE,
-        Some("Bool"),
-        "toString",
-        BuiltinFunction::ToString,
-        "public intrinsic fun Bool.toString(): String",
-        false,
-    ),
-    entry(
-        CORE,
-        Some("Char"),
-        "toString",
-        BuiltinFunction::ToString,
-        "public intrinsic fun Char.toString(): String",
-        false,
-    ),
-    entry(
-        CORE,
         Some("String"),
         "length",
         BuiltinFunction::StringLength,
@@ -118,40 +85,16 @@ pub const CATALOG: &[Intrinsic] = &[
         false,
     ),
     entry(
-        COLLECTIONS,
+        CORE,
         Some("List"),
         "size",
         BuiltinFunction::ListSize,
         "public intrinsic val <T> List<T>.size: Int",
         false,
     ),
-    entry(
-        COLLECTIONS,
-        Some("List"),
-        "indices",
-        BuiltinFunction::ListIndices,
-        "public intrinsic val <T> List<T>.indices: Range",
-        false,
-    ),
-    entry(
-        COLLECTIONS,
-        Some("List"),
-        "isEmpty",
-        BuiltinFunction::ListIsEmpty,
-        "public intrinsic fun <T> List<T>.isEmpty(): Bool",
-        false,
-    ),
-    entry(
-        COLLECTIONS,
-        Some("List"),
-        "isNotEmpty",
-        BuiltinFunction::ListIsNotEmpty,
-        "public intrinsic fun <T> List<T>.isNotEmpty(): Bool",
-        false,
-    ),
     // `contains` and `indexOf` also need `==` on the element type at each call, until traits.
     entry(
-        COLLECTIONS,
+        CORE,
         Some("List"),
         "contains",
         BuiltinFunction::ListContains,
@@ -159,7 +102,7 @@ pub const CATALOG: &[Intrinsic] = &[
         true,
     ),
     entry(
-        COLLECTIONS,
+        CORE,
         Some("List"),
         "indexOf",
         BuiltinFunction::ListIndexOf,
@@ -167,7 +110,7 @@ pub const CATALOG: &[Intrinsic] = &[
         true,
     ),
     entry(
-        COLLECTIONS,
+        CORE,
         Some("List"),
         "add",
         BuiltinFunction::ListAdd,
@@ -175,7 +118,7 @@ pub const CATALOG: &[Intrinsic] = &[
         false,
     ),
     entry(
-        COLLECTIONS,
+        CORE,
         Some("List"),
         "insert",
         BuiltinFunction::ListInsert,
@@ -183,7 +126,7 @@ pub const CATALOG: &[Intrinsic] = &[
         false,
     ),
     entry(
-        COLLECTIONS,
+        CORE,
         Some("List"),
         "removeAt",
         BuiltinFunction::ListRemoveAt,
@@ -191,7 +134,7 @@ pub const CATALOG: &[Intrinsic] = &[
         false,
     ),
     entry(
-        COLLECTIONS,
+        CORE,
         Some("List"),
         "removeLast",
         BuiltinFunction::ListRemoveLast,
@@ -199,7 +142,7 @@ pub const CATALOG: &[Intrinsic] = &[
         false,
     ),
     entry(
-        COLLECTIONS,
+        CORE,
         Some("List"),
         "reverse",
         BuiltinFunction::ListReverse,
@@ -207,7 +150,7 @@ pub const CATALOG: &[Intrinsic] = &[
         false,
     ),
     entry(
-        COLLECTIONS,
+        CORE,
         Some("List"),
         "clear",
         BuiltinFunction::ListClear,
@@ -513,7 +456,7 @@ mod tests {
     #[test]
     fn list_member_entries_match_the_built_in_signatures() {
         for builtin in BuiltinFunction::LIST_MEMBERS {
-            let entry = lookup(COLLECTIONS, Some("List"), builtin.name()).expect("an entry");
+            let entry = lookup(CORE, Some("List"), builtin.name()).expect("an entry");
             assert_eq!(entry.builtin, builtin);
             let signature = builtin.list_member_signature().expect("a list member");
             let mode = match signature.mode.as_str() {
@@ -526,7 +469,7 @@ mod tests {
                 .map(|(name, ty)| format!("{}: {}", name, ty))
                 .collect();
             let expected = match builtin {
-                BuiltinFunction::ListSize | BuiltinFunction::ListIndices => format!(
+                BuiltinFunction::ListSize => format!(
                     "public intrinsic val <T> List<T>.{}: {}",
                     builtin.name(),
                     signature.result

@@ -12,7 +12,7 @@ The members of the built-in types that `/prism/core` writes in Prism MUST behave
 
 #### Scenario: Members written in Prism are calls of their declarations
 - **WHEN** `prism dump-typed-tree` runs on `fun f(n: Int, xs: &List<Int>): Bool = n.toString().length > 0 && xs.isEmpty() && xs.indices.start == 0`
-- **THEN** the body calls `prism/core::Int.toString` with a shared receiver borrow of the binding `n`, `prism/core::List.isEmpty` and `prism/core::List.indices`, each with the type argument `Int` and a shared receiver borrow of the dereferenced binding `xs`, and no `builtin toString`, `builtin isEmpty` or `builtin indices`
+- **THEN** the body calls `prism/core::Int.toString` with a shared receiver borrow of the binding `n`, `prism/core::List<T>.isEmpty` and `prism/core::List<T>.indices`, each with the type argument `Int` and a shared receiver borrow of the dereferenced binding `xs`, and no `builtin toString`, `builtin isEmpty` or `builtin indices`
 
 ### Requirement: Unit Properties Are Written in Prism
 `/prism/compose/ui` MUST declare `public val Int.dp: Dp get() = Dp(this)` and `public val Int.sp: TextUnit get() = TextUnit(this)`, ordinary extension properties written in Prism and used where that module is imported. A file's own extension property `dp` or `sp` on `Int` MUST shadow them, as for any imported extension.
