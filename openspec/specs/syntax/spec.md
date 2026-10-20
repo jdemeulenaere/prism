@@ -289,6 +289,20 @@ Struct fields and enum variant payloads MUST NOT store a borrowed reference (`&T
 - **WHEN** a struct declares `val onClick: (&User) -> Unit` or `val pick: (&Int) -> &Int`
 - **THEN** the declaration parses
 
+### Requirement: Field Visibility Modifiers
+A struct field MAY start with one visibility modifier, `private`, `package` or `public`, followed by `val` or `var`, in block structs and in shorthand structs (`struct Session(private val id: Int)`). A field without a modifier MUST parse as before, with no recorded visibility.
+
+#### Scenario: Field modifiers in both struct forms
+- **WHEN** parsing `struct Account { private var balance: Int, package val bank: String, public val owner: String, val note: String }` and `struct Session(private val id: Int, val name: String)`
+- **THEN** both declarations parse, with `balance` private and mutable, `bank` package, `owner` public, `id` private, and `note` and `name` without a modifier
+
+### Requirement: Misplaced Field Modifiers Are Rejected
+Two visibility modifiers on one field, a modifier written twice, a modifier not followed by `val` or `var`, and a modifier on an enum variant's payload MUST be rejected with `E2001`.
+
+#### Scenario: Misplaced field modifiers rejected
+- **WHEN** parsing `struct A { private private val x: Int }`, `struct B { private public val x: Int }`, `struct C(private x: Int)` and `enum E { X(private Int) }`
+- **THEN** the parser reports `E2001` for each, saying that a field takes one visibility modifier, followed by `val` or `var`, and that enum payloads take none
+
 ### Requirement: Contextual Keyword Identifier Permissibility
 `attached`, `capture`, `compose`, `consuming`, `context`, `escaping`, `external`, `intrinsic` and `vararg` MUST be contextual modifiers. `capture` and `consuming` are ones only directly before `fun`; `context`, `external` and `intrinsic` only at a top-level declaration's start, `context` directly before `(`; `attached` and `escaping` only at a parameter type's start; `vararg` only before a parameter's name. Elsewhere each is a name, `attached`, `escaping` and `vararg` also type names.
 
@@ -1044,3 +1058,7 @@ Decisions from `vararg` (part L4 of the review's agreed item A4, user direction 
 Decisions from `core-library-in-prism` (the core half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over the smallest intrinsic core with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Extension property getters** (D5). After an extension property's type, newlines are skipped and `get` `(` `)` then `=` with an expression or a block is read, `get` being matched as an identifier at that position only, so no program loses a name and the parser tests one token. Without `intrinsic`, a missing getter, an initializer (help `get() = ...`), `var`, `compose`, a receiver mode, a type parameter absent from the receiver type, and a `Heap<...>` or type-parameter receiver are `E2001`; an intrinsic property with a getter or initializer is too. Rejected: an initializer form, inferred property types (Phase 1 would need an inference key), and library-only properties.
+
+Decisions from `field-visibility` (item 10b of the review round, the language prerequisite of the compose half of the review's agreed item A4, user direction 2026-10-20 for library handles written as ordinary Prism structs; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Field modifiers before `val` or `var`** (D1). One optional token per field, in block and shorthand structs. After a modifier a shorthand field must say `val` or `var`, as Kotlin requires `private val` in a constructor; two modifiers, a repeated one and one on an enum payload are `E2001`, enum payloads having no visibility yet.

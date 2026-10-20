@@ -140,6 +140,17 @@ Appending a seventeenth element to a chain MUST end the program with `ui misuse:
 - **WHEN** `fun main() { var m = Modifier; for (i in 1..17) { m = m.padding(1.dp) }; println("never") }` runs
 - **THEN** stdout is empty, stderr is exactly `panic: ui misuse: a modifier chain holds more than 16 elements` and a newline, and the exit status is 101
 
+### Requirement: Modifier Chains Are Built Only Through Modifier Functions
+The fields of `Modifier` (`count`, `first` and `second`) and of `ModifierElements` (`e0` to `e7`) MUST be `private` to `/prism/compose/ui`. A program MUST build and combine chains only through `Modifier` and the modifier functions (`padding`, `size`, `clickable`, `then`, ...): constructing either struct or reading its fields outside that module MUST be `E4007`.
+
+#### Scenario: A chain cannot be built or read by hand
+- **WHEN** a file importing `/prism/compose/ui` declares `fun count(m: &Modifier): Int = m.count` and `fun empty(): Modifier = Modifier(0, Modifier.first, Modifier.second)`
+- **THEN** the type checker emits `E4007` at `count`, at the construction of `Modifier`, and at `first` and `second`, each naming a private field of `prism/compose/ui`
+
+#### Scenario: Chains built through modifier functions still compare
+- **WHEN** a file importing `/prism/compose/ui`, `/prism/compose/layout` and `/prism/core` runs `fun main() { println(Modifier.padding(4.dp).size(8.dp) == Modifier.padding(4.dp).then(Modifier.size(8.dp))) }` with `--check-allocations`
+- **THEN** stdout is `true`, and the exit status is 0
+
 ### Requirement: Modifiers Are Stable Parameters
 A composable parameter of type `Modifier` MUST be stable, so a skippable composable called with an equal chain MUST skip its body. A handler element MUST compare equal to one built on another pass from a closure with the same code and equal captures, all of them `Copy`, including when the chain it is compared with was kept by a composable that ran again because its chain changed, and when the captures hold chains naming handlers themselves.
 
@@ -156,8 +167,8 @@ A composable parameter of type `Modifier` MUST be stable, so a skippable composa
 - **THEN** stdout is `card` twice, for the first pass and after the toggle, followed by the dump, whose text reads `2`: the passes after the two clicks skip `Card` again
 
 #### Scenario: A handler that captures a clickable modifier
-- **WHEN** a headless app of 400 × 300 composes `compose fun Screen() { val c = remember { mutableStateOf(0) }; val inner = Modifier.clickable { c.value += 1 }; Column { Text("${c.value}"); Box(modifier = Modifier.size(20.dp).clickable { println(inner.count) }) { }; Box(modifier = inner.size(20.dp)) { } } }` and its script is `click 5 45`, `click 5 25` and `dump`
-- **THEN** stdout is `1` followed by the dump, whose text reads `1`, and the exit status is 0: the second pass compares the first box's handlers, and with them the handler of the modifier they capture
+- **WHEN** a headless app of 400 × 300 composes `compose fun Screen() { val c = remember { mutableStateOf(0) }; val inner = Modifier.clickable { c.value += 1 }; Column { Text("${c.value}"); Box(modifier = Modifier.size(20.dp).clickable { println(inner != Modifier) }) { }; Box(modifier = inner.size(20.dp)) { } } }` and its script is `click 5 45`, `click 5 25` and `dump`
+- **THEN** stdout is `true` followed by the dump, whose text reads `1`, and the exit status is 0: the second pass compares the first box's handlers, and with them the handler of the modifier they capture
 
 ### Requirement: Padding Accumulates
 `padding(all = 0.dp, horizontal = all, vertical = all, start = horizontal, top = vertical, end = horizontal, bottom = vertical)` MUST lay out the rest of the chain inside the padding, so that chained paddings add up.
@@ -680,3 +691,7 @@ Decisions from `strong-skipping` (review item A1 and option (b) of review findin
 
 - **`dump recompositions`** (D14). Proving that a toggle reruns one of 1,000 rows needs a count, not 1,000 lines of output: per composable function of the program's own files, how often its body ran and was skipped since the previous dump, as Compose's Layout Inspector counts them, sorted by declaration path. Counting is switched on only when the script holds the command, so other runs pay one predictable branch per body group; `FileSummary::composable_functions` names each body key, so hot reload's use of `composable_bodies` is unchanged. Library composables and lambdas are not counted, so snapshots stay stable while the toolkit is rewritten. Rejected: `println` in examples, counts in composition dumps, counts in `--frame-stats`.
 - **`pause <milliseconds>`** (D15). A person's inputs come about 100 ms apart, and a burst after an idle wait runs on a clocked-down, cache-cold core (F4); a pause sleeps the program thread outside every frame, so a paced script measures a frame as a person's input meets it. Rejected: sleeping in the benchmark harness (the app reads its whole script at start), a `--pace` option, keeping a core busy.
+
+Decisions from `field-visibility` (item 10b of the review round, the language prerequisite of the compose half of the review's agreed item A4, user direction 2026-10-20 for library handles written as ordinary Prism structs; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Chains are built only through the modifier functions** (D7). `Modifier`'s and `ModifierElements`' fields are `private` to `/prism/compose/ui`, which alone reads them (`append`, `element`, `then`); the UI runtime reads chains by layout, which visibility does not change. `ModifierElement`'s variants stay constructible until enum variants can be hidden, a follow-up in `ROADMAP.md`.

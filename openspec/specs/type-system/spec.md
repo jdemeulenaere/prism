@@ -274,6 +274,39 @@ Phase 2 body checking MUST typecheck expressions against symbols exported in Pha
 - **WHEN** a file accesses a `package`-visible declaration defined in another file within the identical package directory
 - **THEN** the declaration resolves and typechecks successfully
 
+### Requirement: A Field Is Visible Where Its Modifier Allows
+A field marked `private` MUST be visible only in its struct's file, a field marked `package` only in files of its struct's package directory, and a field marked `public` or unmarked wherever its struct is visible. A field MUST never be more visible than its struct.
+
+#### Scenario: Unmarked fields keep their meaning
+- **WHEN** `shop/models.prism` exports `public struct Order { val price: Int }` and a file importing `/shop/models` declares `fun f(o: &Order): Int = o.price` and `fun g(): Order = Order(3)`
+- **THEN** the file typechecks, as before field visibility
+
+#### Scenario: A package field is visible in its package
+- **WHEN** `shop/models.prism` declares `package shop` and `public struct Order { package val cost: Int, val price: Int }`, `shop/report.prism` in the same package declares `fun margin(o: &Order): Int = o.price - o.cost`, and `app/main.prism` declares `fun cost(o: &Order): Int = o.cost`, each importing `/shop/models`
+- **THEN** `shop/report.prism` typechecks, and `app/main.prism` is rejected with `E4007` at `cost`
+
+### Requirement: Hidden Fields Are Not Accessed
+Where a field is not visible, reading, writing or borrowing it, capturing its path, or reading, writing or borrowing it through a bare name in an extension body MUST be `E4007`, through any `&`, `&mut`, `Heap<T>` or `?.`, naming the field, its visibility and its struct's module. When nothing else resolves the name, a hidden field MUST be reported with `E4007`, not `E4006`. Copying, moving, cloning, dropping and comparing whole values MUST be unaffected.
+
+#### Scenario: Reading and writing a private field from another file
+- **WHEN** `bank/account.prism` exports `public struct Account { private var balance: Int, val owner: String }`, `public fun open(owner: String): Account = Account(0, owner)` and `public mut fun Account.deposit(n: Int): Unit { balance += n }`, and a file importing `/bank/account` declares `fun f(a: &mut Account): Int { a.balance = 5; return a.balance }` and `fun g(a: &Account): Int = a.owner.length`
+- **THEN** the type checker emits `E4007` at each `balance` in `f`, naming the private field `balance` of `bank/account`, and accepts `g`
+
+#### Scenario: A private field in its own file
+- **WHEN** a file declares `struct Account { private var balance: Int }`, `mut fun Account.deposit(n: Int) { balance += n }` and `fun main() { var a = Account(1); a.deposit(2); println(a.balance) }`, and runs with `--check-allocations`
+- **THEN** stdout is `3`, and the exit status is 0
+
+#### Scenario: Whole values with hidden fields are used freely
+- **WHEN** `lib/id.prism` exports `public struct Id : Copy { private val n: Int }` and `public fun id(n: Int): Id = Id(n)`, and a file importing `/lib/id` and `/prism/core` runs `fun main() { val a = id(1); val b = a; println(a == b); println(a == id(2)) }` with `--check-allocations`
+- **THEN** stdout is `true` then `false`, and the exit status is 0
+
+### Requirement: Constructing a Struct Needs Every Field Visible
+A construction of a struct, positional or named, MUST be rejected with `E4007` where any of its fields is not visible, naming the first such field. A struct with a `private` field MUST therefore be constructed only in its own file.
+
+#### Scenario: A handle cannot be forged
+- **WHEN** `lib/handle.prism` exports `public struct Handle : Copy { private val word: Int }` and `public fun make(): Handle = Handle(7)`, and a file importing `/lib/handle` declares `fun forge(): Handle = Handle(7)` and `fun named(): Handle = Handle(word = 7)`
+- **THEN** `lib/handle.prism` typechecks, and the type checker emits `E4007` for each construction in the importing file, naming the private field `word`
+
 ### Requirement: Parameterless Closures Are Checked as Closures
 A closure without parameters, including a trailing lambda or brace argument, MUST be typechecked as a function value, never as an eagerly evaluated block. When checked against an expected function type, its body MUST be checked in that type's composable context. When the expected type is not a function type, the closure MUST be rejected with the mismatch code of the site where it is checked: `E4004` for an argument, `E4005` for a returned value and `E4002` elsewhere.
 
@@ -1087,3 +1120,10 @@ Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed wit
 Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
 
 - **Indexing, ordering and compound assignment reach operator functions** (D3, D13). Built-in operators apply first, from the operand types after their layers; otherwise the receiver's operator function is called, and `t op= v` is `t = t op v` with the target written once, a consuming function needing a whole binding.
+
+Decisions from `field-visibility` (item 10b of the review round, the language prerequisite of the compose half of the review's agreed item A4, user direction 2026-10-20 for library handles written as ordinary Prism structs; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Kotlin's field modifiers with Prism's meanings** (D1). A field takes `private`, `package` or `public`; unmarked, it is as visible as its struct, as Kotlin's members are public by default, so no existing program changed meaning. `private` is the struct's file, Prism's `private` for top-level declarations: methods are extensions, so the file is the only boundary they can share (Kotlin's class-private `private` has no class body to mean here). A field's effective visibility is the narrower of its own and its struct's, with no diagnostic for a wider modifier, as in Kotlin. Rejected: private by default (breaks every struct used across files), rejecting an explicit `public`.
+- **Construction needs every field visible** (D2). A construction gives every field, so a struct with a `private` field is built only in its file: Rust's rule for struct literals, and what makes a handle unforgeable without a second visibility to declare. Rejected: Kotlin's `private constructor` (a follow-up for a struct with public fields), constructing with only the visible fields (fields have no defaults).
+- **A hidden field is a visibility error, not a missing one** (D3, D9). Reads, writes, borrows, path captures and bare names reaching a hidden field are `E4007`, through any `&`, `&mut`, `Heap<T>` or `?.`, and when nothing else resolves the name the error names the field rather than saying `E4006` or `E4001`; a misspelled name that matches no field is still `E4006`. Copies, moves, `clone()`, drops, structural `==` and kept-value equality are the type's own operations and work everywhere. `E4007` is widened rather than a new code taken. Each check is one table lookup per field use.
+- **Checked once, where the code is written** (D11). A field access is checked in the file whose source holds it, with that file's privileges: generic bodies (checked once at their declaration) and default values (generated in the declaring file) keep the declaring file's access in every instance and caller, and code generic over `T` cannot name a field of whatever `T` is. The visibilities are a table of the checker's own, so typed trees, MIR, instance records and type fingerprints are unchanged; `prism dump-typed-tree` and composition dumps, being tools, still show hidden fields. Rejected: re-checking instances with the caller's privileges (per-instance checks, and library generics could not use their own types' fields).

@@ -143,6 +143,13 @@ A struct or enum body written on one line, without comments, MUST stay on one li
 - **WHEN** formatting `enum Color{Red;Green,Blue}` and `enum Shape {\nCircle(Double), Square(Double)}`
 - **THEN** the results are `enum Color { Red, Green, Blue }` and `enum Shape {\n    Circle(Double)\n    Square(Double)\n}`
 
+### Requirement: Field Visibility Modifiers Are Printed
+The formatter MUST print a field's visibility modifier as written, an explicit `public` included, before `val` or `var`, in block and shorthand structs, with one space after it.
+
+#### Scenario: Field modifiers formatted
+- **WHEN** formatting `struct Account{private  var balance:Int,public val owner:String}` and `struct Session( private val id:Int )`
+- **THEN** the results are `struct Account { private var balance: Int, public val owner: String }` and `struct Session(private val id: Int)`
+
 ### Requirement: Spacing
 Spacing MUST follow the Kotlin conventions: one space around binary operators, `=`, `->` and compound assignment operators; none after a prefix operator except `&mut `; one space after each comma and none before; `name: Type` for parameters, fields, bindings and return types; `<T : Copy>` for bounds and `struct Point : Copy` for markers; one space before a `{` that follows a header or a call. Modifiers MUST be in grammar order: visibility, `compose`, then `mut` or `consuming`.
 
@@ -376,3 +383,7 @@ Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for pa
 Decisions from `core-library-in-prism` (the core half of the review's agreed item A4, user direction 2026-10-20 for writing the library in Prism over the smallest intrinsic core with no `unsafe`; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **Getters print as Kotlin writes them** (D13). An expression getter stays on the header's line when the whole declaration fits in 100 columns and otherwise moves to the next line, indented one level; a block getter opens `get() {` on the header's line. The verifier compares the getter, and no other layout rule changes.
+
+Decisions from `field-visibility` (item 10b of the review round, the language prerequisite of the compose half of the review's agreed item A4, user direction 2026-10-20 for library handles written as ordinary Prism structs; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Field modifiers kept as written** (D8). `prism fmt` prints a field's modifier before `val`/`var` in both struct forms, an explicit `public` included, and the meaning check compares it.

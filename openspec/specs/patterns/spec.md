@@ -286,6 +286,21 @@ A destructuring declaration MUST bind its entries as a pattern does over its val
 - **WHEN** with that `Account`, `fun f(a: Account): Int { val (id) = a; val (name) = a; return id }` is checked
 - **THEN** the file typechecks, since copying `id` leaves `a` whole
 
+### Requirement: Patterns Name Only Visible Fields
+A struct pattern or destructuring declaration MUST be rejected with `E4007` where it gives a field not visible in the file: a positional pattern gives every field, a positional sub-pattern before named ones the field it stands for, and a named sub-pattern or destructuring entry the field it names. Patterns and declarations that leave hidden fields out MUST stay valid, the left-out fields matched by wildcards, and taking a value apart through them MUST move only the parts they name.
+
+#### Scenario: Patterns over a struct with a private field
+- **WHEN** `bank/account.prism` exports `public struct Account { private val id: Int, val owner: String }` and `public fun open(owner: String): Account = Account(1, owner)`, and a file importing `/bank/account` declares `fun a(x: &Account): Int = when (x) { Account(_, _) -> 1 }`, `fun b(x: &Account): Int = when (x) { Account(id = 1) -> 1; else -> 2 }`, `fun c(x: &Account): Bool = when (x) { Account(owner = "ann") -> true; else -> false }` and `fun d(x: Account): String { val (owner) = x; return owner }`
+- **THEN** the type checker emits `E4007` in `a` (a positional pattern of a struct with a hidden field) and in `b` (the private field `id`), and accepts `c` and `d`
+
+#### Scenario: Destructuring a hidden field rejected
+- **WHEN** with that `Account`, a file importing `/bank/account` declares `fun e(x: &Account): Int { val (id) = x; return id }`
+- **THEN** the type checker emits `E4007` at `id` in the destructuring declaration
+
+#### Scenario: Positional sub-patterns before named ones
+- **WHEN** `bank/account.prism` exports `public struct Account { private val id: Int, val owner: String, val bank: String }`, and a file importing `/bank/account` declares `fun f(x: &Account): Int = when (x) { Account(val i, bank = _) -> i }` and `fun g(x: &Account): Int = when (x) { Account(_, owner = "ann") -> 1; else -> 2 }`
+- **THEN** the type checker emits `E4007` at the first sub-pattern of each, which stands for the private field `id`; a positional prefix that stands for visible fields only, as `Entry(val o, note = "paid")` of `public struct Entry { val owner: String, private val id: Int, val note: String }`, stays valid
+
 ### Requirement: Patterns Look Through Boxes
 A constructor, value or range pattern checked against a subject or part of type `Heap<T>`, behind any boxes and references, MUST be checked against `T` and match the box's contents. A wildcard or a binding at such a position MUST take the box itself, with the binding mode of its subject.
 
@@ -348,3 +363,7 @@ Decisions from `heap-boxes` (planned autonomously on 2026-10-17, refined while i
 
 - **Patterns look through boxes; bindings take the box** (D9). A constructor, value or range pattern at a `Heap<T>` part or subject matches the contents, the auto-deref of field access applied to patterns, so `Expr.Add(Expr.Lit(0), val r)` needs no `box` pattern syntax (Rust's, still unstable). A binding or wildcard takes the part as declared, with the subject's mode (`l: &Heap<Expr>` under `&`), so a binding never hides an unboxing, and `eval(l)` lends `l`'s contents. Taking apart through a box unboxes it, freeing the box, so no partial move ever crosses a box. Exhaustiveness treats a box as its one constructor and prints witnesses without box syntax. Rejected: an explicit deref pattern; bindings that take the contents (their type would differ from the payload's, and a consuming subject would free the box silently); no deref patterns (simplifiers would need nested `when`s).
 - **A nullable borrow matches its referent** (from the review). Over a `(&T)?` or `(&mut T)?` subject, which is how a `Heap<T>?` is passed borrowed, patterns of `T` match the referent with the borrow's mode, the same `Deref` pattern node as a box; before, only `?.` could read such a value.
+
+Decisions from `field-visibility` (item 10b of the review round, the language prerequisite of the compose half of the review's agreed item A4, user direction 2026-10-20 for library handles written as ordinary Prism structs; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Patterns name only visible fields** (D4). A positional struct pattern gives every field, so it is `E4007` where any field is hidden, and so is a positional sub-pattern before named ones that stands for a hidden field (found while reviewing the change: `Account(val i, owner = _)` read the private `id`). Named patterns and destructuring declarations that leave hidden fields out stay valid, the left-out fields matched by wildcards, so exhaustiveness is unchanged, and taking a value apart moves only the named parts, as Rust allows `let S { a, .. } = s` with private fields; a type that must not be taken apart declares a drop hook. One comparison per field a pattern names.

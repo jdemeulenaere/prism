@@ -55,6 +55,17 @@ The compiler MUST compute a deterministic 256-bit BLAKE3 hash of each file's exp
 - **WHEN** a developer runs `prism abi` on a source file, or `prism check` on a workspace
 - **THEN** each ABI hash is printed as `0x` followed by 64 lowercase hexadecimal digits, and `prism abi` prints no other hash
 
+### Requirement: Field Visibility in the ABI
+Every field of an exported struct, hidden or not, MUST be in its ABI entry with its visibility (`private`, `package` or unmarked, an explicit `public` recorded as unmarked), and the ABI hash MUST cover it. `prism abi` MUST print a marked field with its modifier (`private val id: Int`). Changing only a field's visibility MUST change the ABI hash, so importers are checked again, and MUST change no layout, slot contract or type fingerprint.
+
+#### Scenario: Hiding a field re-checks importers
+- **WHEN** `lib/id.prism` exports `public struct Id : Copy { val n: Int }` and `public fun id(n: Int): Id = Id(n)`, `app/main.prism` imports `/lib/id` and declares `fun f(x: Id): Int = x.n`, both have been checked, and `n` becomes `private val n: Int`
+- **THEN** the next `prism check` re-checks `app/main` and reports `E4007` at `n`, although `app/main` itself was not edited
+
+#### Scenario: The ABI shows field modifiers
+- **WHEN** `prism abi` prints the ABI of a file declaring `public struct Account { private var balance: Int, package val bank: String, public val owner: String }`
+- **THEN** it shows the fields `private var balance: Int`, `package val bank: String` and `val owner: String`
+
 ### Requirement: Structured ABI Types
 Phase 1 MUST record every type in an exported signature (parameter, return, struct field, enum payload, exported variable) as a structured type tree, never as source text that must be re-parsed. The ABI hash MUST cover that structure. An importer MUST obtain exactly the type the exporter declared, including nested function, nullable and reference types.
 
@@ -586,3 +597,7 @@ Decisions from `core-library-in-prism` (the core half of the review's agreed ite
 
 - **Extension properties in the ABI** (D12). Every `public` and `package` extension property is exported with its kind (plain or intrinsic) and type, covered by the ABI hash; a getter's body is not in the ABI, so editing it recompiles no importer, and changing its type re-checks them. `prism abi` prints `public val Int.dp: Dp`. Ingestion makes a plain property an imported extension, or a member when `/prism/core` declares it on a built-in type. Cost: one flag per exported property in Phase 1.
 - **One member module, and instances of generic members** (D3, D4). A workspace file's key appends `/prism/core`'s ABI hash alone, so a change of `/prism/collections` reaches only its importers. Generic members written in Prism (`isEmpty`, `isNotEmpty`, `indices`) are called by files that never import `/prism/core`; their instances are planned from file summaries and cached like an import's, one per element type and program, shared by every workspace with one compiler and cache, and invalidated with the rest of the cache by the compiler identity, which hashes the executable embedding the library.
+
+Decisions from `field-visibility` (item 10b of the review round, the language prerequisite of the compose half of the review's agreed item A4, user direction 2026-10-20 for library handles written as ordinary Prism structs; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Field visibility in the ABI** (D6). Hidden fields stay in an exported struct's ABI entry, as Rust's private fields stay in a crate's metadata, since importers lay values out, copy, drop and compare them. Each field's visibility is folded into its mutability byte in the hash, so an unmarked field hashes as before and a visibility change re-checks importers without changing any layout, slot contract or type fingerprint. Reachable definitions carry none: a file that does not import a type's module cannot touch its members (`E4014`). One byte per exported field in Phase 1.
