@@ -246,6 +246,16 @@ impl Node {
         (weight, fill, self.own_alignment())
     }
 
+    /// Where a text field is hit, relative to the node: at its frame, where Compose's text
+    /// field takes pointer input, after the caller's modifier, or at its content when it has
+    /// no frame (`BasicTextField`). Both follow the steps before them, an `offset` included.
+    pub fn text_field_hit_area(&self) -> Rect {
+        self.chain
+            .iter()
+            .find(|entry| matches!(entry.element, Element::TextFieldFrame { .. }))
+            .map_or(self.content, |entry| entry.bounds)
+    }
+
     /// The node's own alignment in its parent: the first `align` of its chain.
     pub fn own_alignment(&self) -> Option<Alignment> {
         self.chain.iter().find_map(|entry| match entry.element {

@@ -347,6 +347,19 @@ Rejected:
 - **Native built-in steps**: the user's direction for this item.
 - **Holding a borrow across program code**: the re-entrancy rule of `layout-primitive` D21.
 
+### D17. A text field is hit where it is drawn, and script targets act where nodes are placed (autonomous, review fix)
+
+The review found that a text field's hit area stayed at the node's own bounds under an `offset`, while its frame and text were drawn at the offset: a press beside the field focused it, and a press on it did not.
+
+- **A text field is hit at its frame**, the bounds its `textFieldFrame` element records, or at its content when it has no frame (`BasicTextField`). That is where Compose's text field takes pointer input: after the caller's modifier, with the decoration inside. Both follow the steps before them, an `offset` or a `Modifier.layout` included. `clickable` and `toggleable` already used the bounds at their position.
+- **Script targets act at the centre of the node's content**, where its steps placed it, or, for a role target, of that element's bounds, rather than at the centre of the node's own bounds. A text target names what is drawn, and the node's bounds no longer hold it after an `offset`. For every existing fixture and session the two points are the same: their paddings are symmetric.
+
+**Run-time cost.** None: one search of a text field's chain (at most 16 elements) per hit test of it.
+
+Rejected:
+- **The node's bounds moved by the sum of its steps' offsets**: a padding's offset would move the hit area without shrinking it.
+- **Keeping script targets at the node's bounds**: `click "go"` would miss an offset button's label.
+
 ## Risks / Trade-offs
 
 - **[Frame time]** Native arithmetic becomes calls. → Budgets in D9, measured by the resize session of `layout-primitive`.

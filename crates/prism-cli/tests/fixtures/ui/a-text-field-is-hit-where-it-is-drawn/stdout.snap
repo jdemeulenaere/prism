@@ -1,0 +1,4 @@
+window 400x300
+  textfield #1 0,0 200x36 offset(150,0) defaultMinSize(200x-) textFieldFrame(#FF79747E #FF6750A4) padding(8)
+window 400x300
+  textfield #1 0,0 200x36 "a" focused offset(150,0) defaultMinSize(200x-) textFieldFrame(#FF79747E #FF6750A4) padding(8)

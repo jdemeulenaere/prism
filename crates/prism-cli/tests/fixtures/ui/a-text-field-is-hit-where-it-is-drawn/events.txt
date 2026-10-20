@@ -1,0 +1,5 @@
+click 50 18
+dump
+click 250 18
+type "a"
+dump

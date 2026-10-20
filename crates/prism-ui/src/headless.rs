@@ -4,7 +4,7 @@
 //! A text target `"<text>" [<n>]` names the n-th node in tree order, from 1, whose text is
 //! exactly the string: a text's text or a text field's value. The frame loop resolves it
 //! against the tree at the time of the command ([`resolve_text_target`]), at the centre of the
-//! node's bounds, rounded down, and hit-tests normally from there, so `click "+"` clicks the
+//! node's content, where its steps placed it, rounded down, and hit-tests normally from there, so `click "+"` clicks the
 //! button around the `+`. A target no node shows and a `type` or `key` without a focused text
 //! field end the program with `event script line <n>: <detail>` ([`missing_target`],
 //! [`no_focus`]). Dumps are printed through the program's output, in order with what it
@@ -13,6 +13,7 @@
 use crate::draw::DisplayList;
 use crate::dump::write_quoted;
 use crate::error::UiError;
+use crate::geometry::Rect;
 use crate::host::{Host, HostEvent};
 use crate::layout::absolute_bounds;
 use crate::modifier::Element;
@@ -48,11 +49,12 @@ impl Host for HeadlessHost {
     fn present(&mut self, _list: &DisplayList) {}
 }
 
-/// The point a text target acts at: the centre, rounded down, of the `occurrence`-th node in
-/// tree order whose text or value is `text`.
+/// The point a text target acts at: the centre, rounded down, of the content of the
+/// `occurrence`-th node in tree order whose text or value is `text`, where it is drawn.
 pub fn resolve_text_target(tree: &UiTree, text: &str, occurrence: usize) -> Option<(i64, i64)> {
     resolve(tree, occurrence, |node| {
-        matches!(node.kind, NodeKind::Text | NodeKind::TextField) && node.text.as_str() == text
+        (matches!(node.kind, NodeKind::Text | NodeKind::TextField) && node.text.as_str() == text)
+            .then_some(node.content)
     })
 }
 
@@ -64,22 +66,26 @@ pub fn resolve_kind_target(
     occurrence: usize,
 ) -> Option<(i64, i64)> {
     resolve(tree, occurrence, |node| match kind {
-        TargetKind::Node(node_kind) => node.kind == node_kind,
-        TargetKind::Role(role) => node.chain.iter().any(|entry| {
+        TargetKind::Node(node_kind) => (node.kind == node_kind).then_some(node.content),
+        // Where the element with the role is hit.
+        TargetKind::Role(role) => node.chain.iter().find_map(|entry| {
             matches!(
                 entry.element,
                 Element::Clickable { role: Some(r), .. } | Element::Toggleable { role: Some(r), .. }
                     if r == role
             )
+            .then_some(entry.bounds)
         }),
     })
 }
 
-/// The centre, rounded down, of the `occurrence`-th node in tree order that `matches`.
+/// The centre, rounded down, of the bounds that `matches` gives, relative to its node, for the
+/// `occurrence`-th node in tree order it gives bounds for: where the node is drawn or hit,
+/// which its steps may have moved from the node's own bounds (an `offset`, for instance).
 fn resolve(
     tree: &UiTree,
     occurrence: usize,
-    matches: impl Fn(&Node) -> bool,
+    matches: impl Fn(&Node) -> Option<Rect>,
 ) -> Option<(i64, i64)> {
     let mut seen = 0;
     let mut stack = Vec::new();
@@ -94,10 +100,11 @@ fn resolve(
         if !node.placed {
             continue;
         }
-        if matches(node) {
+        if let Some(bounds) = matches(node) {
             seen += 1;
             if seen == occurrence {
-                return Some(absolute_bounds(tree, id).centre());
+                let node_bounds = absolute_bounds(tree, id);
+                return Some(bounds.offset(node_bounds.x, node_bounds.y).centre());
             }
         }
         let mut child = node.last_child;

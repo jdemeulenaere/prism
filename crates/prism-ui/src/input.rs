@@ -4,8 +4,8 @@
 //! - **Hit testing** walks the laid-out tree in reverse drawing order: the last child first,
 //!   children before their parent, and within a node its own text field content before its
 //!   input elements, last to first. The first target whose bounds hold the point wins: a
-//!   `clickable` or `toggleable` element in the bounds at its position, or a text field in
-//!   its bounds, enabled or not.
+//!   `clickable` or `toggleable` element in the bounds at its position, or a text field at its
+//!   frame (its content without one), where its steps placed it, enabled or not.
 //! - **Clicks.** A press records its target; a release over the same, enabled target clicks
 //!   it: a `clickable` calls `onClick()`, a `toggleable` `onValueChange(!value)`, and a text
 //!   field takes the focus. A disabled target absorbs both and calls nothing, so clicks never
@@ -18,7 +18,6 @@
 //! (D25). Dispatch returns an [`Action`] rather than calling the handler, so the caller can
 //! let go of every borrow first and copy the function value out of its entry (D2).
 
-use crate::geometry::Rect;
 use crate::handle::{HandlerId, NodeId};
 use crate::modifier::Element;
 use crate::node::{NodeKind, OwnedText};
@@ -103,8 +102,13 @@ fn visit(
         }
         child = tree.node(current).unwrap().previous;
     }
-    let bounds = Rect::new(origin_x, origin_y, node.size.width, node.size.height);
-    if node.kind == NodeKind::TextField && bounds.contains(x, y) {
+    // A text field is hit where it takes pointer input, which follows its steps.
+    if node.kind == NodeKind::TextField
+        && node
+            .text_field_hit_area()
+            .offset(origin_x, origin_y)
+            .contains(x, y)
+    {
         return Some(Target::TextField(id));
     }
     for (index, entry) in node.chain.iter().enumerate().rev() {

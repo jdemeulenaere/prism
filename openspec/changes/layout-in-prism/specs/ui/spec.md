@@ -29,6 +29,10 @@ Each layout element of a chain (`padding`, `width`, `height`, `size`, `defaultMi
 - **WHEN** a headless app composes `Box(modifier = Modifier.offset(x = 20.dp).clickable { println("hit") }.size(10.dp)) { }` and its script is `click 5 5` then `click 25 5`
 - **THEN** stdout is `hit` once
 
+#### Scenario: A text field is hit where it is drawn
+- **WHEN** a headless app of 400 × 300 composes `TextField(name.value, { name.value = it }, modifier = Modifier.offset(x = 150.dp))` and its script is `click 50 18`, `dump`, `click 250 18`, `type "a"` and `dump`
+- **THEN** the first dump holds `textfield #1 0,0 200x36 offset(150,0) defaultMinSize(200x-) textFieldFrame(#FF79747E #FF6750A4) padding(8)`, unfocused, and the second `textfield #1 0,0 200x36 "a" focused offset(150,0) defaultMinSize(200x-) textFieldFrame(#FF79747E #FF6750A4) padding(8)`
+
 ### Requirement: A Layout Modifier Places Its Content
 A layout modifier's step that returns without placing the rest of its chain MUST end the program with `ui misuse: a layout modifier did not place its content`.
 
@@ -59,3 +63,33 @@ After the pass that follows a reload, the frame loop MUST lay out again every no
 #### Scenario: Editing a function a layout modifier calls
 - **WHEN** a headless app under `--watch` composes, in `app/main.prism`, `Text("a", modifier = Modifier.layout { measurable, constraints -> val p = measurable.measure(constraints); layout(p.width + shift(), p.height) { p.place(shift(), 0) } })`, with `public fun shift(): Int = 0` declared in `lib/shifts.prism`, and its script is `dump`, `edit lib/shifts.prism lib/shifts.prism.v2`, whose `shift()` returns 10, and `dump`
 - **THEN** the first dump holds `text #1 0,0 8x20 "a" layout` and the second `text #1 0,0 18x20 "a" layout`
+
+### Requirement: Script Targets Are Found by Their Text
+A target `"<text>" [<n>]` MUST name the n-th node, 1 by default and in tree order, whose text, or text field value, is exactly the string. The command MUST act at the centre of that node's content, where its steps placed it, rounded down, hit-testing from there. A target that matches no node MUST end the program with `event script line <n>: no node shows the text "<text>"`.
+
+#### Scenario: A missing target
+- **WHEN** the counter program runs headless with the script `click "Minus"`
+- **THEN** stderr is exactly `panic: event script line 1: no node shows the text "Minus"` and a newline, and the exit status is 101
+
+#### Scenario: Typing without a focused field
+- **WHEN** the counter program runs headless with the script `type "x"`
+- **THEN** stderr is exactly `panic: event script line 1: no text field is focused` and a newline, and the exit status is 101
+
+#### Scenario: A text target follows an offset
+- **WHEN** a headless app of 400 × 300 composes `Text("go", modifier = Modifier.offset(x = 100.dp).clickable { println("go") })` and its script is `click "go"`
+- **THEN** stdout is `go` and a newline
+
+### Requirement: Script Targets by Kind
+Wherever an event script accepts a text target, it MUST also accept `<kind> [<n>]`: the n-th node, 1 by default and in tree order, of kind `column`, `row`, `box`, `text`, `spacer`, `textfield` or `layout`, or whose `clickable` or `toggleable` element has the role `button` or `checkbox`. The command MUST act, rounded down and hit-testing from there, at the centre of that node's content, where its steps placed it, or for a role, of that element's bounds.
+
+#### Scenario: Clicking the second checkbox
+- **WHEN** a headless app of 400 × 300 composes `compose fun Two() { val a = remember { mutableStateOf(false) }; val b = remember { mutableStateOf(false) }; Column { Checkbox(checked = a.value, onCheckedChange = { a.value = it }); Checkbox(checked = b.value, onCheckedChange = { b.value = it }) } }`, and its script is `click checkbox 2` then `dump`
+- **THEN** stdout is the lines `window 400x300`, `  column #1 0,0 20x40`, `    box #2 0,0 20x20 toggleable(Checkbox off) size(20x20) border(2 #FF49454F RoundedCorner(2))` and `    box #3 0,20 20x20 toggleable(Checkbox on) size(20x20) background(#FF6750A4 RoundedCorner(2)) border(2 #FF6750A4 RoundedCorner(2))`
+
+#### Scenario: Focusing a field by its kind
+- **WHEN** the typing app of `ui`'s "Typing into a text field" runs headless with the script `click textfield`, `type "ab"` and `dump`
+- **THEN** the dump holds `textfield #2 0,0 200x36 "ab" focused defaultMinSize(200x-) textFieldFrame(#FF79747E #FF6750A4) padding(8)`
+
+#### Scenario: Clicking inside a custom layout by its kind
+- **WHEN** a headless app of 400 × 300 composes `Diagonal { Button(onClick = { println("hit") }) { Text("go") } }`, with `Diagonal` as in "A custom layout places its children diagonally", and its script is `click layout`
+- **THEN** stdout is `hit` and a newline
