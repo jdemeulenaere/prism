@@ -1,5 +1,7 @@
 // expect: ok
 // run: 1
+import /prism/core
+
 struct P { val w: Widget }
 fun use(p: P): Int = 1
 fun main() { println(1) }

@@ -1,5 +1,7 @@
 // expect: E4027
 // run: 1
+import /prism/core
+
 struct Box<T>(val v: T)
 struct Nest<A, B>(val v: A, val next: Heap<Nest<B, Box<A>>>?)
 fun main() { println(1) }

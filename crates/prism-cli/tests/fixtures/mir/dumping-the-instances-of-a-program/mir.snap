@@ -1,26 +1,26 @@
 module app/main
-fun app/main::main(): Unit @6:1
+fun app/main::main(): Unit @7:1
   local _0: Unit (return)
   local _1: Int (temporary)
   local _2: Unit (temporary)
   local _3: Bool (temporary)
   local _4: Unit (temporary)
   bb0:
-    storage_live _1 @7:13
-    _1 = call lib/box::keep<Int>(const 1) -> bb1 @7:13
+    storage_live _1 @8:13
+    _1 = call lib/box::keep<Int>(const 1) -> bb1 @8:13
   bb1:
-    storage_live _2 @7:5
-    _2 = call builtin println(move _1) -> bb2 @7:5
+    storage_live _2 @8:5
+    _2 = call builtin println(move _1) -> bb2 @8:5
   bb2:
-    storage_dead _2 @7:5
-    storage_dead _1 @7:5
-    storage_live _3 @8:13
-    _3 = call lib/box::keep<Bool>(const true) -> bb3 @8:13
+    storage_dead _2 @8:5
+    storage_dead _1 @8:5
+    storage_live _3 @9:13
+    _3 = call lib/box::keep<Bool>(const true) -> bb3 @9:13
   bb3:
-    storage_live _4 @8:5
-    _4 = call builtin println(move _3) -> bb4 @8:5
+    storage_live _4 @9:5
+    _4 = call builtin println(move _3) -> bb4 @9:5
   bb4:
-    storage_dead _4 @8:5
-    storage_dead _3 @8:5
-    _0 = const () @6:12
-    return @6:1
+    storage_dead _4 @9:5
+    storage_dead _3 @9:5
+    _0 = const () @7:12
+    return @7:1

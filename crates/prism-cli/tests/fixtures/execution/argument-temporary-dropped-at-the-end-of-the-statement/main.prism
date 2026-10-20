@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun make(): String = 5.toString()
 fun greet(n: &String): Int = n.length
 fun main() { println(greet(make())); println(greet(make())) }

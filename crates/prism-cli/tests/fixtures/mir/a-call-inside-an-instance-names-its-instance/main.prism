@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/core
+
 fun <T> id(x: T): T = x
 fun <T> twice(x: T): T = id(id(x))
 fun main() { println(twice(1)) }

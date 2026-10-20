@@ -3,6 +3,7 @@
 // events: events
 import /prism/compose/ui
 import /prism/compose/material3
+import /prism/compose/runtime
 
 fun main() {
     runApp(width = 200, height = 100) {

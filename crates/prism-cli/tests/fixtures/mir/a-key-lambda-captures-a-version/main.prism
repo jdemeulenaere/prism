@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/compose/runtime
+
 compose fun Show(s: &String) {}
 compose fun Screen(items: &State<List<String>>) {
     for (s in items.value) {

@@ -1,2 +1,4 @@
+import /prism/core
+
 val NAME: String = "c" + "d"
 fun main() { println(NAME); println(NAME) }

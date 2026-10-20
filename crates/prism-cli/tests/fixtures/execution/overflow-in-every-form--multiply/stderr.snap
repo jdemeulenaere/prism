@@ -1,2 +1,2 @@
 panic: integer overflow in '*'
-  at main.prism:3:22
+  at main.prism:5:22

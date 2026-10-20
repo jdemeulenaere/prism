@@ -1,3 +1,5 @@
 // expect: ok
 // run: 101
+import /prism/core
+
 fun main() { val s = "abc"; println(s[0]); println(s[3]) }

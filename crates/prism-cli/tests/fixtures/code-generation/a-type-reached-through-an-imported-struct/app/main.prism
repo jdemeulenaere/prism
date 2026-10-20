@@ -3,4 +3,5 @@
 // entry: app/main.prism
 package app
 import /geo/shapes
+import /prism/core
 fun main() { val c = unit(); val d = c; println(d.r); println(norm(c.center)) }

@@ -1,30 +1,30 @@
-fun main::count<Int>(_1: Int, _2: (Int) -> Int): Int @4:1
+fun main::count<Int>(_1: Int, _2: (Int) -> Int): Int @6:1
   local _0: Int (return)
   local _1 x: Int (argument)
   local _2 f: (Int) -> Int (argument)
   local _3: () -> Int (temporary)
   bb0:
-    storage_live _3 @4:54
-    _3 = closure main::count<Int>#closure0 [&_2, &_1] @4:54
-    _0 = call main::run(move _3) -> bb1 @4:50
+    storage_live _3 @6:54
+    _3 = closure main::count<Int>#closure0 [&_2, &_1] @6:54
+    _0 = call main::run(move _3) -> bb1 @6:50
   bb1:
-    storage_dead _3 @4:50
-    drop _2 -> bb2 @4:1
+    storage_dead _3 @6:50
+    drop _2 -> bb2 @6:1
   bb2:
-    return @4:1
-closure main::count<Int>#closure0(): Int @4:54
+    return @6:1
+closure main::count<Int>#closure0(): Int @6:54
   local _0: Int (return)
   local _1 f: (Int) -> Int (capture)
   local _2 x: Int (capture)
   local _3: Int (temporary)
   local _4: Int (temporary)
   bb0:
-    storage_live _3 @4:56
-    storage_live _4 @4:58
-    _4 = copy _2 @4:58
-    _3 = call _1(move _4) -> bb1 @4:56
+    storage_live _3 @6:56
+    storage_live _4 @6:58
+    _4 = copy _2 @6:58
+    _3 = call _1(move _4) -> bb1 @6:56
   bb1:
-    _0 = move _3 + const 1 @4:56
-    storage_dead _4 @4:56
-    storage_dead _3 @4:56
-    return @4:54
+    _0 = move _3 + const 1 @6:56
+    storage_dead _4 @6:56
+    storage_dead _3 @6:56
+    return @6:54

@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 fun main() {
     val count = mutableStateOf(4)
     count.update { it * it }

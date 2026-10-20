@@ -1,5 +1,5 @@
 panic: division by zero
-  at app/main.prism:3:33
+  at app/main.prism:6:33
 watch: the program stopped with a runtime error; waiting for changes
 watch: running main again
 watch: main returned with status 0; waiting for changes

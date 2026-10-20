@@ -1,3 +1,5 @@
+import /prism/core
+
 fun old(): Int = 1
 fun main() { println(old()); println(old()) }
 // expect: ok

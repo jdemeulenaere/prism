@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Task { val run: () -> Int, val name: String }
 
 fun main() {

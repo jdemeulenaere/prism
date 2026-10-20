@@ -1,3 +1,5 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun main() { var s = "a"; val t = "b"; s += t; s += t; println(s); println(t) }

@@ -4,6 +4,7 @@
 package app
 import /lib/box
 import /lib/user
+import /prism/core
 fun main() {
     val u = keep(User("a"))
     println(Box(1).get())

@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/compose/runtime
+
 compose fun K(r: &Int) {
     val a = remember(r) { 1 }
 }

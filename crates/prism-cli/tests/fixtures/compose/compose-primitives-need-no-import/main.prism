@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+
 compose fun Counter() {
     val id = remember { 7 }
     val s = currentRecomposeScope()

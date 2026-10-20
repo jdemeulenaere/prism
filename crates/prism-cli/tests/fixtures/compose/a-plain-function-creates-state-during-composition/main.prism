@@ -1,5 +1,7 @@
 // expect: ok
 // run: 101
+import /prism/compose/runtime
+
 fun make(): MutableState<Int> = mutableStateOf(0)
 
 compose fun Bad() {

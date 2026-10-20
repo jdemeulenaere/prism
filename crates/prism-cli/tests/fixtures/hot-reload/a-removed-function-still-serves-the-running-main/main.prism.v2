@@ -1,1 +1,3 @@
+import /prism/core
+
 fun main() { println(2) }

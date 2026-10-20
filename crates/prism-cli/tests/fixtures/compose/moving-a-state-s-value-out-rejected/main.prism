@@ -1,4 +1,6 @@
 // expect: E4017
+import /prism/compose/runtime
+
 compose fun C(s: &State<String>) {
     val t = s.value
 }

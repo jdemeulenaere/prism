@@ -3,6 +3,7 @@
 // entry: app/main.prism
 package app
 import /lib/geo
+import /prism/core
 fun main() {
     println(ORIGIN.y)
     val p = ORIGIN

@@ -1,5 +1,9 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/compose/runtime
+import /prism/core
+
 struct Item { val id: Int, val title: String }
 compose fun Show(s: &String) { println("show $s") }
 compose fun ItemView(item: &Item, tick: &State<Int>) {

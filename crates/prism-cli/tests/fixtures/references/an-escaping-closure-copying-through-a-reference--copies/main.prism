@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 // Each closure owns a copy of an `Int` read through the reference, so it holds no borrow.
 struct Todo { val id: Int, val title: String }
 struct Button { val onClick: () -> Int }

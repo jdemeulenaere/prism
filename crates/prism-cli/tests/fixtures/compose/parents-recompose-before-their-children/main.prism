@@ -1,6 +1,7 @@
 // expect: ok
 // run: 0
 import /prism/composer
+import /prism/core
 
 fun Child(k: Int, parent: Int) {
     startRestartGroup(k, 2)

@@ -1,5 +1,8 @@
 package run.compose
 
+import /prism/compose/runtime
+import /prism/core
+
 // A counter for the reference program of `prism run` (examples/run/main.prism). Its label
 // reads a state that a click handler writes, so a click recomposes the label alone: running
 // the composition, clicking twice and recomposing prints `counter 1`, `count 0`, `count 2` and

@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct P(val x: Int, val y: Int)
 
 fun P.toString(): String = "(" + x.toString() + ", " + y.toString() + ")"

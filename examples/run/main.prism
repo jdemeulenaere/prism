@@ -11,6 +11,9 @@
 // counter reads a state that its click handler writes twice: recomposing runs its label alone.
 package run
 
+import /prism/collections
+import /prism/compose/runtime
+import /prism/core
 import /run/compose/counter
 import /run/compose/screen
 import /run/generic/labels

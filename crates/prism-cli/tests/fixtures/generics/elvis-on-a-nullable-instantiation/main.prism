@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun <T> orElse(a: T, c: T): T = a ?: c
 fun main() {
     println(orElse<Int?>(null, 3) ?: 0)

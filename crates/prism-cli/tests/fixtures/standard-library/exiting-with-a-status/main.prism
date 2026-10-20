@@ -1,5 +1,6 @@
 // expect: ok
 // run: 7
+import /prism/core
 import /prism/system
 
 fun main() {

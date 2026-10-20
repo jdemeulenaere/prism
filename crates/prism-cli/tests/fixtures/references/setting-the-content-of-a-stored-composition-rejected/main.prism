@@ -1,5 +1,8 @@
 // expect: E5010
 // run: 1
+import /prism/compose/runtime
+import /prism/core
+
 struct App { val c: Composition }
 fun main() {
     val s = mutableStateOf(0)

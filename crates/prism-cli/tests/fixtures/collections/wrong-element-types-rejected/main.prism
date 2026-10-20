@@ -1,4 +1,6 @@
 // expect: E4004
+import /prism/collections
+
 fun f() {
     var xs = listOf(1)
     xs.add("a")

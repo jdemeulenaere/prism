@@ -2,6 +2,8 @@ import /prism/compose/ui
 import /prism/compose/foundation
 import /prism/compose/layout
 import /prism/compose/material3
+import /prism/compose/runtime
+
 struct Item { val title: String, val extra: Int }
 compose fun Label(item: &Item, count: &State<Int>) { Text("${item.title} ${item.extra} ${count.value}") }
 compose fun Counter() {

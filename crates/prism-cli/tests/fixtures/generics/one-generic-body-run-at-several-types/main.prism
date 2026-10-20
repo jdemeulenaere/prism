@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Point : Copy { val x: Int }
 fun <T> pick(a: T, b: T, first: Bool): T = if (first) a else b
 fun main() {

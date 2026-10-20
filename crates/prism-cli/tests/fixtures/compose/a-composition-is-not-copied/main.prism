@@ -1,4 +1,6 @@
 // expect: E5001
+import /prism/compose/runtime
+
 fun main() {
     val c = composition { }
     val d = c

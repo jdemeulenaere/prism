@@ -1,5 +1,9 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/compose/runtime
+import /prism/core
+
 struct Item { val title: String }
 val Items: List<String> = listOf("a", "b")
 val Things: List<Item> = listOf(Item("x"), Item("y"))

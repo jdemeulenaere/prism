@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 fun wrap(content: attached compose () -> Unit): Composition = composition(content)
 fun main() {
     val s = mutableStateOf(1)

@@ -1,3 +1,5 @@
+import /prism/core
+
 fun noisy(): Int { println(0); return 5 }
 val V: Int = noisy()
 fun helper(): Int = 1

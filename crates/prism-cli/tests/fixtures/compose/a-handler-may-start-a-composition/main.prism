@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/compose/runtime
+
 fun later(f: () -> Unit) {
     f()
 }

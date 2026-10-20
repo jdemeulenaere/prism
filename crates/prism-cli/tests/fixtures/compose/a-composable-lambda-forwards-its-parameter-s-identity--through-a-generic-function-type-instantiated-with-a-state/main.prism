@@ -1,5 +1,9 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/compose/runtime
+import /prism/core
+
 // `Each2` is composed once with `&T`, and its call of `item` passes a version word for each
 // borrowed argument; the lambda, written with `T` a state object, must take the same words, or
 // its `s` would be given `x`'s version and `Show` would keep a borrow of `Each2`'s local.

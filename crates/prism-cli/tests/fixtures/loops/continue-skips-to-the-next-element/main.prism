@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun main() {
     var sum = 0
     for (i in 0..<5) { if (i == 2) continue; sum = sum + i }

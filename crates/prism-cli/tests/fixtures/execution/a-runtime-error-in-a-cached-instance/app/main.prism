@@ -3,6 +3,7 @@
 package app
 
 import /lib/math
+import /prism/core
 
 fun main() {
     println(divide("a", 0))

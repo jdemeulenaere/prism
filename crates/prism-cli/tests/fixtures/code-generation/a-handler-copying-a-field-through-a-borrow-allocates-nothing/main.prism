@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Todo { val id: Int, val count: Int }
 struct Button { val onClick: () -> Int }
 fun button(t: &Todo): Button = Button({ t.id * 2 })

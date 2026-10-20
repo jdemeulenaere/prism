@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun set(r: &mut Heap<String>, v: String) {
     **r = v
 }

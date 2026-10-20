@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun repeat(n: Int, f: () -> Unit) {
     var i = 0
     while (i < n) {

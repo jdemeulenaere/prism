@@ -1,2 +1,4 @@
 // expect: E4004
+import /prism/compose/runtime
+
 fun f() { val c = Composition() }

@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Handler(name: String, run: () -> Unit)
 
 fun main() {

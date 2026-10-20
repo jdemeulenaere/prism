@@ -1,2 +1,4 @@
 // expect: E5007
+import /prism/core
+
 fun f(xs: &mut List<() -> Unit>, r: &String) { xs.add { println(r) } }

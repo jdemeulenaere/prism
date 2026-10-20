@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun greet(name: &String, format: (&String) -> String = { n -> "Hi " + n }): String = format(name)
 
 fun main() {

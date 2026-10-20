@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun run(f: () -> Int): Int = f()
 fun k(h: escaping () -> Int): Int {
     val a = run { h() }

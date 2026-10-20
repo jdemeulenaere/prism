@@ -1,2 +1,2 @@
 panic: list index 2 out of range for size 1
-  at main.prism:5:5
+  at main.prism:7:5

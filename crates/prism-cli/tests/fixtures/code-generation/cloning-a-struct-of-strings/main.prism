@@ -1,4 +1,6 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct User : Clone { val name: String, val id: Int }
 fun main() { val a = User(7.toString(), 7); val b = a.clone(); println(b.name); println(a.name) }

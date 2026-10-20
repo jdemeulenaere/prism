@@ -1,2 +1,4 @@
+import /prism/core
+
 fun step(i: Int): Int = true
 fun main() { println(step(1)); println(step(2)) }

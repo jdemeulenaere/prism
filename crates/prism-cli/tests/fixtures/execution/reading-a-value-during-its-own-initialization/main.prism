@@ -1,5 +1,7 @@
 // expect: ok
 // run: 101
+import /prism/core
+
 val A: Int = B + 1
 val B: Int = A + 1
 fun main() { println(A) }

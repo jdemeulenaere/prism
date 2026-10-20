@@ -3,6 +3,7 @@
 // run: 1
 package app
 import /lib/run
+import /prism/core
 fun main() {
     println(later(1))
     println(later(true))

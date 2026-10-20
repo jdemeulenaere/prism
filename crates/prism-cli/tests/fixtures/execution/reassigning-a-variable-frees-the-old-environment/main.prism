@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun make(s: String): () -> Int = { s.length }
 fun main() {
     var h = make("a" + "b")

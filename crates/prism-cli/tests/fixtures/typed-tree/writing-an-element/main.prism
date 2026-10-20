@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/collections
+
 fun f(i: Int) {
     var xs = listOf(1)
     xs[i] = 2

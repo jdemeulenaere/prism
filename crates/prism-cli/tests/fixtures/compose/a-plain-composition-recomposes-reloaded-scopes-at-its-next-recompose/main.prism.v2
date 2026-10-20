@@ -1,3 +1,6 @@
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Show() { println("show 2") }
 fun main() {
     val c = composition { Show() }

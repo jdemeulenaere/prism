@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun main() {
     val count = 2
     println("\$count costs $5, $ 6 or ${count}$")

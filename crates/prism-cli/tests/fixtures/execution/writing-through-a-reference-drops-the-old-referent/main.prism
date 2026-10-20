@@ -1,4 +1,6 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun set(r: &mut String, v: String) { *r = v }
 fun main() { var s = 1.toString(); set(&mut s, 2.toString()); s = 3.toString(); println(s) }

@@ -1,5 +1,7 @@
 // expect: E4017
 // run: 1
+import /prism/compose/runtime
+
 struct U { val name: String, val n: Int }
 
 compose fun C(u: &State<U>) {

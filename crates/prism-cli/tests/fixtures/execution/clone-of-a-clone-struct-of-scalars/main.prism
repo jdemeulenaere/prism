@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Tally : Clone { var n: Int }
 fun main() {
     val a = Tally(3)

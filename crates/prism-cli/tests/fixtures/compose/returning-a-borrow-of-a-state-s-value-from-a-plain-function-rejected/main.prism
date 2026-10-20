@@ -1,5 +1,9 @@
 // expect: E5008
 // run: 1
+import /prism/collections
+import /prism/compose/runtime
+import /prism/core
+
 fun first(s: &MutableState<List<String>>): &String = &s.value[0]
 fun main() {
     val s = mutableStateOf(listOf("a" + "b"))

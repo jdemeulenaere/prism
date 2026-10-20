@@ -1,4 +1,6 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun bump(r: &mut Int) { *r = r + 1 }
 fun main() { var n = 1; bump(&mut n); bump(&mut n); println(n) }

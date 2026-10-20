@@ -1,3 +1,5 @@
 // expect: E4004 E4013
+import /prism/collections
+
 fun f() { val a = listOf(1, "a") }
 fun g() { val b = listOf() }

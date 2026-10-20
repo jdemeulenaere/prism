@@ -1,5 +1,9 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/compose/runtime
+import /prism/core
+
 struct Item { val title: String, val n: MutableState<Int> }
 compose fun Row(item: &Item) { println("row ${item.title} ${item.n.value}") }
 compose fun Rows(items: &State<List<Item>>) {

@@ -3,4 +3,5 @@
 // run: 1
 package a
 import /a/x
+import /prism/core
 fun main() { println(ping(1, 3)) }

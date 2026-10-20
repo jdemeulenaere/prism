@@ -1,4 +1,7 @@
 // expect: E5006
+import /prism/collections
+import /prism/core
+
 fun h(other: &String) {
     var first = other
     if (other.length > 0) {

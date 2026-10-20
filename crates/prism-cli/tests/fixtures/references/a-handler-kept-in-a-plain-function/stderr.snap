@@ -1,9 +1,9 @@
 error[E5007]: a closure that captures the reference 'count' cannot escape
-  --> main.prism:4:42
-    4 | fun f(count: &MutableState<Int>) { later { count.value += 1 } }
+  --> main.prism:6:42
+    6 | fun f(count: &MutableState<Int>) { later { count.value += 1 } }
       |                                          ^^^^^^^^^^^^^^^^^^^^ passed to an escaping parameter here
-  --> main.prism:4:44
-    4 | fun f(count: &MutableState<Int>) { later { count.value += 1 } }
+  --> main.prism:6:44
+    6 | fun f(count: &MutableState<Int>) { later { count.value += 1 } }
       |                                            ^^^^^ 'count' is captured here
    = note: a closure that escapes owns what it captures, and a reference cannot be owned
    = help: make a weak reference before the closure, 'val countRef = count.weak()', and use 'countRef.get()' inside it

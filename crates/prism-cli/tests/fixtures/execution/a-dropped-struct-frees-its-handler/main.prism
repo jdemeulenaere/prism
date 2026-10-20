@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Item { val name: String, val onSelect: () -> Int }
 fun item(name: String): Item {
     val n = name.clone()

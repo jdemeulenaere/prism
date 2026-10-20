@@ -5,6 +5,9 @@
 import /prism/compose/ui
 import /prism/compose/layout
 import /prism/compose/material3
+import /prism/compose/runtime
+import /prism/collections
+
 struct Task { val id: Int, val done: MutableState<Bool> }
 fun remove(tasks: &MutableState<List<Task>>, id: Int) {
     var index = 0

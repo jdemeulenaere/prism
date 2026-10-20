@@ -1,3 +1,5 @@
+import /prism/core
+
 fun main() { val f: (Int) -> Int = { n -> n + 1 }; println(f(1)); println(f(1)) }
 // expect: ok
 // run: 0

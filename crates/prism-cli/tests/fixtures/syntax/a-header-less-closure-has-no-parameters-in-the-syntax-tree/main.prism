@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/core
+
 fun <T> List<T>.forEach(f: (&T) -> Unit) {
     for (x in this) f(x)
 }

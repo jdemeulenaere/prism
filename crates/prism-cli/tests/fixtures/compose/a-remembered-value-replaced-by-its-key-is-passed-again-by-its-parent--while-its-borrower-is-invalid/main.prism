@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 struct Pick { val id: Int, val name: String }
 compose fun Show(p: &Pick, n: &State<Int>) { println("show ${p.id} ${p.name} ${n.value}") }
 compose fun Screen(k: &State<Int>, n: &State<Int>) {

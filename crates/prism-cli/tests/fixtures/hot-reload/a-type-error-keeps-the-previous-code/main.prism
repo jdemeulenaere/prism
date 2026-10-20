@@ -1,3 +1,5 @@
+import /prism/core
+
 fun step(i: Int): Int = i
 fun main() { println(step(1)); println(step(2)) }
 // expect: ok

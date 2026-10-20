@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct User { val id: Int, val name: String }
 struct Button { val onClick: () -> Int }
 fun main() {

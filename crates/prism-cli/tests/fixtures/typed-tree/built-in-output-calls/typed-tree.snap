@@ -1,14 +1,14 @@
 module main
-fun main::f(r: &Int, s: String): Unit @2:1
+fun main::f(r: &Int, s: String): Unit @4:1
   local %0 r: &Int (parameter)
   local %1 s: String (parameter)
-  block: Unit @2:27
-    expression @2:29
-      call builtin println: Unit @2:29
-        argument 0: copy: Int @2:37
-          deref: Int @2:37
-            local %0 r: &Int @2:37
-    expression @2:41
-      call builtin print: Unit @2:41
-        argument 0: borrow (argument): &String @2:47
-          local %1 s: String @2:47
+  block: Unit @4:27
+    expression @4:29
+      call builtin println: Unit @4:29
+        argument 0: copy: Int @4:37
+          deref: Int @4:37
+            local %0 r: &Int @4:37
+    expression @4:41
+      call builtin print: Unit @4:41
+        argument 0: borrow (argument): &String @4:47
+          local %1 s: String @4:47

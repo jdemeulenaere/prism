@@ -1,5 +1,7 @@
 // expect: ok
 // run: 101
+import /prism/compose/runtime
+
 fun main() {
     val s = mutableStateOf(1)
     s.update { n -> n + s.value }

@@ -1,4 +1,6 @@
 // expect: E4031
+import /prism/compose/runtime
+
 compose fun C(s: &MutableState<Int>, l: &MutableState<List<Int>>) {
     s.value = 1
     s.value += 1

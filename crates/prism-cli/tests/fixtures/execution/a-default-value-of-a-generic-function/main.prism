@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun <T : Copy> pad(x: T, y: T = x): T = y
 fun main() {
     println(pad(1))

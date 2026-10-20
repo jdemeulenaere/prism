@@ -1,4 +1,6 @@
 // expect: E4030
+import /prism/compose/runtime
+
 compose fun Screen(c: &Composition) {
     val d = composition { }
     c.recompose()

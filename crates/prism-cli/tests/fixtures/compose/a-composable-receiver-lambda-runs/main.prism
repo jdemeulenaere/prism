@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 struct ColumnScope : Copy { val depth: Int }
 compose fun ColumnScope.Item(n: Int) { println("item $n at depth $depth") }
 compose fun Column(content: compose ColumnScope.() -> Unit) { val scope = ColumnScope(1); scope.content() }

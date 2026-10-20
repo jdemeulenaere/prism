@@ -1,6 +1,6 @@
 error[E4027]: polymorphic recursion: 'Nest' contains 'Nest<B, Box<A>>'
-  --> main.prism:4:29
-    4 | struct Nest<A, B>(val v: A, val next: Heap<Nest<B, Box<A>>>?)
+  --> main.prism:6:29
+    6 | struct Nest<A, B>(val v: A, val next: Heap<Nest<B, Box<A>>>?)
       |                             ^
    = note: the cycle 'Nest' -> 'Nest' would need infinitely many types for its layout and glue
    = help: pass the same type parameters on, unnested, wherever the type reaches itself

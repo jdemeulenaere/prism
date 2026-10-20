@@ -1,6 +1,7 @@
 // expect: ok
 // run: 0
 import /prism/composer
+import /prism/core
 
 fun Greeting(k: Int, name: String) {
     startRestartGroup(k, 3)

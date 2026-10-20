@@ -1,3 +1,5 @@
 // expect: E4002
 // run: 1
+import /prism/core
+
 fun main() { println(1); val x: Int = true }

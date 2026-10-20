@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/core
+
 fun makeHandler(label: String): () -> Unit = { println(label) }
 fun main() {
     var handlers = listOf<() -> Unit>()

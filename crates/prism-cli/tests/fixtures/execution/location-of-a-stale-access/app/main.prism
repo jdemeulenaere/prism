@@ -1,5 +1,8 @@
 package app
 
+import /prism/compose/runtime
+import /prism/core
+
 // A borrow a weak reference lent, whose state was dropped, then freed by a pass.
 fun consume(s: MutableState<Int>) {}
 

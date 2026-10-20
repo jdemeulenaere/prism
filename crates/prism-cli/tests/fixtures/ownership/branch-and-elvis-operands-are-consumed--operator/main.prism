@@ -1,4 +1,6 @@
 // expect: E4017
+import /prism/core
+
 struct User {
     val name: String
     val nick: String?

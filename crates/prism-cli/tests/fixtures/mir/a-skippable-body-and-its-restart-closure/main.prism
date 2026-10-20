@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/core
+
 compose fun Badge(n: Int) {
     println(n)
 }

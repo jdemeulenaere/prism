@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Tree { val value: Int, val left: Heap<Tree>?, val right: Heap<Tree>? }
 
 fun leaf(v: Int): Heap<Tree> = Heap(Tree(v, null, null))

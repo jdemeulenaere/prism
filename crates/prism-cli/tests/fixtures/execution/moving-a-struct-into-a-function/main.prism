@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Counter { var n: Int }
 fun take(c: Counter): Int = c.n
 fun main() {

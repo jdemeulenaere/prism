@@ -1,4 +1,6 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun square(x: Int): Int = x * x
 fun main() { println(square(7)) }

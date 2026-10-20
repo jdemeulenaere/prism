@@ -1,15 +1,15 @@
 error[E5005]: cannot move out of 's' because it is borrowed
-  --> main.prism:7:13
-    7 |     consume(s)
+  --> main.prism:10:13
+   10 |     consume(s)
       |             ^ 's' is moved here while borrowed
-  --> main.prism:6:25
-    6 |     val c = composition { println(s.value) }
+  --> main.prism:9:25
+    9 |     val c = composition { println(s.value) }
       |                         ^^^^^^^^^^^^^^^^^^^^ the closure captures 's' weakly here
-  --> main.prism:6:35
-    6 |     val c = composition { println(s.value) }
+  --> main.prism:9:35
+    9 |     val c = composition { println(s.value) }
       |                                   ^ borrow occurs due to this use of 's' in the closure
-  --> main.prism:8:13
-    8 |     println(c.recompose())
+  --> main.prism:11:13
+   11 |     println(c.recompose())
       |             ^ borrow later used here
    = note: a closure given to an attached parameter captures 's' weakly, so what keeps it, such as a composition, keeps 's' borrowed while it is used
    = help: declare 's' before the composition, so that it outlives the composition's last use, or remember it in the composition's content

@@ -1,12 +1,12 @@
 module main
-fun main::g(s: &MutableState<List<Int>>): Unit @2:1
+fun main::g(s: &MutableState<List<Int>>): Unit @4:1
   local %0 s: &MutableState<List<Int>> (parameter)
-  block: Unit @2:36
-    expression @2:38
-      call builtin add<Int>: Unit @2:38
-        receiver: borrow mut (receiver): &mut List<Int> @2:38
-          state place: List<Int> @2:38
-            handle: borrow (receiver): &MutableState<List<Int>> @2:38
-              deref: MutableState<List<Int>> @2:38
-                local %0 s: &MutableState<List<Int>> @2:38
-        argument element: literal 1: Int @2:50
+  block: Unit @4:36
+    expression @4:38
+      call builtin add<Int>: Unit @4:38
+        receiver: borrow mut (receiver): &mut List<Int> @4:38
+          state place: List<Int> @4:38
+            handle: borrow (receiver): &MutableState<List<Int>> @4:38
+              deref: MutableState<List<Int>> @4:38
+                local %0 s: &MutableState<List<Int>> @4:38
+        argument element: literal 1: Int @4:50

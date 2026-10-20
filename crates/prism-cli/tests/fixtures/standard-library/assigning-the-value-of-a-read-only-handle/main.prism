@@ -1,4 +1,6 @@
 // expect: E4003
+import /prism/compose/runtime
+
 fun f(s: &State<Int>) {
     s.value = 1
 }

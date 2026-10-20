@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/collections
+
 fun f(): String {
     var names = listOf("a", "b")
     val first = names.removeAt(0)

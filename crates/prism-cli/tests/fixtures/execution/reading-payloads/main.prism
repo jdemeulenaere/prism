@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 enum Shape { Circle(Int), Rect(Int, Int), Empty }
 fun area(s: Shape): Int = when (s) { Shape.Circle(val r) -> 3 * r * r; Shape.Rect(val w, val h) -> w * h; Shape.Empty -> 0 }
 fun main() {

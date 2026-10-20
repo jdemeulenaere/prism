@@ -1,4 +1,6 @@
 // expect: E4032
+import /prism/compose/runtime
+
 compose fun C() {
     val s = mutableStateOf(0)
 }

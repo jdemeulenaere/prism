@@ -1,3 +1,6 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 fun main() { val c = composition { println(1) }; c.setContent { println(2) }; println(c.recompose()) }

@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Gap : Copy { val size: Int }
 struct Gaps : Copy { val None: Gap }
 val Gap: Gaps = Gaps(Gap(0))

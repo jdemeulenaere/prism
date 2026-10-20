@@ -1,6 +1,8 @@
 // expect: ok
 import /prism/compose/ui
 import /prism/compose/material3
+import /prism/compose/runtime
+
 fun consume(s: MutableState<Int>) {}
 fun main() {
     val s = mutableStateOf(0)

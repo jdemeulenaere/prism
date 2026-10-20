@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Tree { var value: Int, var left: Heap<Tree>? }
 enum Color { Red, Blue(Int) }
 

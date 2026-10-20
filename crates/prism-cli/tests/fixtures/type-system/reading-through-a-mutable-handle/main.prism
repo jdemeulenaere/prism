@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 fun <T> State<T>.describe(): String = "state"
 
 fun main() {

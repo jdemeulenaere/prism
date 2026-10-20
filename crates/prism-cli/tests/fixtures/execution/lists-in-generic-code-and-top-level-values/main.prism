@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/core
+
 val primes = listOf(2, 3, 5)
 fun <T> lastOf(xs: &List<T>): &T = &xs[xs.size - 1]
 fun <T> pushAll(into: &mut List<T>, from: List<T>) {

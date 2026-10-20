@@ -3,6 +3,7 @@
 package app
 
 import /lib/ui
+import /prism/core
 
 fun main() {
     val name = "Ada"

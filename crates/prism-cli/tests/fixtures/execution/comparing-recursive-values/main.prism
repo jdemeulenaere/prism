@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>) }
 
 fun sum(a: Int, b: Int): Expr = Expr.Add(Heap(Expr.Lit(a)), Heap(Expr.Lit(b)))

@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Node { val value: Int, val next: Heap<Node>? }
 
 fun total(list: Heap<Node>?): Int = when (list) {

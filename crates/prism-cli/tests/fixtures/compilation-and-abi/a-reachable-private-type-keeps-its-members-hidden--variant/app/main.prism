@@ -3,6 +3,7 @@
 package app
 
 import /lib/a
+import /prism/core
 
 fun main() {
     println(when (make().m) { On -> 1; else -> 2 })

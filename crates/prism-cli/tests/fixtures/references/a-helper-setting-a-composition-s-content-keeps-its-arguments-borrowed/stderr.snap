@@ -1,10 +1,10 @@
 error[E5005]: cannot move out of 's' because it is borrowed
-  --> main.prism:9:13
-    9 |     consume(s)
+  --> main.prism:12:13
+   12 |     consume(s)
       |             ^ 's' is moved here while borrowed
-  --> main.prism:8:13
-    8 |     show(c, s)
+  --> main.prism:11:13
+   11 |     show(c, s)
       |             ^ 's' is borrowed here
-  --> main.prism:10:13
-   10 |     println(c.recompose())
+  --> main.prism:13:13
+   13 |     println(c.recompose())
       |             ^ borrow later used here

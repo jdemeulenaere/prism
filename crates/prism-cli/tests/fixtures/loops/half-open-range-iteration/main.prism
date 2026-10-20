@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun main() {
     for (i in 0..<3) println(i)
     for (i in 3..<3) println(100)

@@ -3,6 +3,7 @@
 // run: 3
 package app
 
+import /prism/core
 import /prism/system
 
 fun main() {

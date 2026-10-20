@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun main() {
     var h: () -> Int = { 0 }
     var i = 0

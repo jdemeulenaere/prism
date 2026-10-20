@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/collections
+
 struct Todo { val title: String, var done: Bool }
 fun show(t: &Todo) {}
 fun f(n: Int) {

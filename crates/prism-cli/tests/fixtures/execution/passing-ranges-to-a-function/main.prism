@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun count(r: Range): Int {
     var n = 0
     for (i in r) n += 1

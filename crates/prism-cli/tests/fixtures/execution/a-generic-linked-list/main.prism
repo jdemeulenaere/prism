@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 enum Chain<T> { Cons(T, Heap<Chain<T>>), Nil }
 fun <T> Chain<T>.size(): Int = when (this) {
     Chain.Cons(_, val rest) -> 1 + rest.size()

@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 enum Counter { Running(Int), Stopped }
 fun tick(c: &mut Counter) { when (c) { Counter.Running(val n) -> *n += 1; Counter.Stopped -> {} } }
 fun value(c: &Counter): Int = when (c) { Counter.Running(val n) -> n; Counter.Stopped -> -1 }

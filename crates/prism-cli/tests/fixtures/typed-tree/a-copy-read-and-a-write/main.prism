@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/compose/runtime
+
 fun f(s: &MutableState<Int>) {
     val n = s.value
     s.value = n + 1

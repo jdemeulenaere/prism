@@ -1,3 +1,5 @@
 // expect: ok
 // run: 101
+import /prism/core
+
 fun main() { println(-9223372036854775807 - 2) }

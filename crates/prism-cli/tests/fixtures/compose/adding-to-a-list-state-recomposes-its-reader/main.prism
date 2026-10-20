@@ -1,5 +1,9 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Count(s: &State<List<Int>>) { println("count ${s.value.size}") }
 fun main() {
     val s = mutableStateOf(listOf(1))

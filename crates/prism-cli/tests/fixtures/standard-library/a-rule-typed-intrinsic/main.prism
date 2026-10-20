@@ -1,4 +1,7 @@
 // expect: ok
+import /prism/collections
+import /prism/core
+
 fun f() {
     println()
     println(1)

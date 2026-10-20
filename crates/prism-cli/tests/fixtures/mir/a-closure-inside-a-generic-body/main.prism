@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/core
+
 fun run(g: () -> Int): Int = g()
 
 fun <T : Copy> count(x: T, f: (T) -> Int): Int = run { f(x) + 1 }

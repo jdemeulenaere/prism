@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun show(n: &Int?): Int {
     val m: Int? = n
     return m ?: 0

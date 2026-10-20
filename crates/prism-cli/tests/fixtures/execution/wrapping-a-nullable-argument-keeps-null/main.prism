@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun <T> wrap(a: T): T? = a
 fun <T> isNull(a: T?): Bool = a == null
 fun main() {

@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/collections
+
 struct Todo { val title: String, var done: Bool }
 
 fun f(todos: &List<Todo>): String = todos.joinToString { t -> t.title.clone() }

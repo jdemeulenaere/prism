@@ -1,5 +1,9 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Row(s: &String) { println("row $s") }
 compose fun Rows(items: &State<List<String>>) {
     println("rows")

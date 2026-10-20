@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/collections
+
 fun f(xs: &List<Int>, i: Int): Int {
     var ys = listOf(1, 2)
     ys.add(xs[i])

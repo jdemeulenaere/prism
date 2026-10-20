@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun store(f: escaping () -> Int): Int = f()
 fun greet(s: &String): Int = s.length
 fun f(s: String): Int = store { greet(s) }

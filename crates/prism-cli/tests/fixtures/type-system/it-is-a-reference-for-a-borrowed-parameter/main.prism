@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/collections
+
 fun each(xs: &List<String>, f: (&String) -> Unit) {
     for (x in xs) f(x)
 }

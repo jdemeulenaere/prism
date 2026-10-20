@@ -1,4 +1,6 @@
 // expect: E4004
+import /prism/compose/runtime
+
 compose fun R(name: String) {
     key(name) { }
 }

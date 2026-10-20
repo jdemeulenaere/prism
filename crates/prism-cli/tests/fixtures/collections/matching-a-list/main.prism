@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/collections
+
 fun f(xs: List<Int>): Int = when (xs) {
     listOf(1) -> 1
     val other -> other.size

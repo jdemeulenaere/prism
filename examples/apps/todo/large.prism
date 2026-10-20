@@ -3,6 +3,7 @@
 // `crates/prism-cli/tests/app_frame_timing.rs` headless.
 package apps.todo
 
+import /prism/compose/runtime
 import /prism/compose/ui
 import model
 import screen

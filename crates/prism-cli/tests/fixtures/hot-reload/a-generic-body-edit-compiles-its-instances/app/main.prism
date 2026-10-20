@@ -1,5 +1,6 @@
 package app
 import /lib/pick
+import /prism/core
 fun main() { println(pick(1, 2)); println(pick(1, 2)) }
 // expect: ok
 // run: 0

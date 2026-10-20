@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/core
+
 struct P { val x: Int }
 
 fun P.toString(): String = "P(" + x.toString() + ")"

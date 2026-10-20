@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Color : Copy { val argb: Int }
 struct Colors : Copy { val Red: Color }
 val Color: Colors = Colors(Red = Color(0xFFFF0000))

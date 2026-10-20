@@ -2,6 +2,7 @@
 // run: 1
 // events: events.txt
 import /prism/compose/ui
+import /prism/core
 fun main() {
     println("before")
     runApp { }

@@ -3,6 +3,7 @@
 package app
 
 import /lib/a
+import /prism/core
 
 fun main() {
     println(make().s.k)

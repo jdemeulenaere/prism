@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Inner(n: Int) { println("inner $n") }
 compose fun Outer(skip: Int) {
     for (i in 0..1) {

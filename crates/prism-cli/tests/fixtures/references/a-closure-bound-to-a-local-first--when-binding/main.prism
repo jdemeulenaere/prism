@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 // A 'when' that binds the whole subject, or a nullable subject's payload, passes on what the
 // subject holds, so a closure reaching an escape through the binding owns its captures.
 fun greet(s: &String): Int = s.length

@@ -1,25 +1,25 @@
 module main
-compose fun main::C(): Unit @2:1
+compose fun main::C(): Unit @4:1
   local _0: Unit (return)
   local _1 s: &MutableState<Int> (user)
   local _2: () -> MutableState<Int> (temporary)
   bb0:
-    storage_live _1 @3:5
-    storage_live _2 @3:22
-    _2 = closure main::C#closure0 [] @3:22
-    _1 = call compose builtin remember<prism/compose/runtime::MutableState<Int>>(move _2) -> bb1 @3:13
+    storage_live _1 @5:5
+    storage_live _2 @5:22
+    _2 = closure main::C#closure0 [] @5:22
+    _1 = call compose builtin remember<prism/compose/runtime::MutableState<Int>>(move _2) -> bb1 @5:13
   bb1:
-    storage_dead _2 @3:5
-    _0 = const () @2:17
-    storage_dead _1 @4:1
-    return @2:1
-closure main::C#closure0(): MutableState<Int> @3:22
+    storage_dead _2 @5:5
+    _0 = const () @4:17
+    storage_dead _1 @6:1
+    return @4:1
+closure main::C#closure0(): MutableState<Int> @5:22
   local _0: MutableState<Int> (return)
   local _1: Int (temporary)
   bb0:
-    storage_live _1 @3:39
-    _1 = const 0 @3:39
-    _0 = call state create<Int>(move _1) -> bb1 @3:24
+    storage_live _1 @5:39
+    _1 = const 0 @5:39
+    _0 = call state create<Int>(move _1) -> bb1 @5:24
   bb1:
-    storage_dead _1 @3:24
-    return @3:22
+    storage_dead _1 @5:24
+    return @5:22

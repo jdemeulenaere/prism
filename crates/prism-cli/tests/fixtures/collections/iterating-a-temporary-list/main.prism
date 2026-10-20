@@ -1,3 +1,6 @@
 // expect: ok
+import /prism/collections
+import /prism/core
+
 fun make(): List<String> = listOf("a")
 fun f() { for (s in make()) println(s) }

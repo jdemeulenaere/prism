@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/core
+
 fun main() {
     var a = listOf(listOf(1.toString()))
     val b = a.clone()

@@ -1,2 +1,4 @@
 // expect: ok
+import /prism/core
+
 fun f(n: Int) { println(n); println() }

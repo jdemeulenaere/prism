@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Pair<A, B>(val a: A, val b: B)
 struct Box<T>(val v: T)
 fun <A, B> swap(p: Pair<A, B>): Pair<B, A> {

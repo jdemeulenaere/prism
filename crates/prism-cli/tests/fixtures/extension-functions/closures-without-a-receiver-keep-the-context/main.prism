@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/collections
+
 struct Modifier : Copy { val fraction: Double }
 struct RowScope : Copy {}
 fun row(f: RowScope.() -> Unit) { f(RowScope()) }

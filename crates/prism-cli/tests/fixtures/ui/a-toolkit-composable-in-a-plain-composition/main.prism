@@ -4,4 +4,6 @@ import /prism/compose/ui
 import /prism/compose/foundation
 import /prism/compose/layout
 import /prism/compose/material3
+import /prism/compose/runtime
+
 fun main() { val c = composition { Text("a") } }

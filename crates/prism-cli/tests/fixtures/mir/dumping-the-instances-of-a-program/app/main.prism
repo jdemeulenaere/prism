@@ -3,6 +3,7 @@
 // run: 0
 package app
 import /lib/box
+import /prism/core
 fun main() {
     println(keep(1))
     println(keep(true))

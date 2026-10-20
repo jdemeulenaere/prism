@@ -1,6 +1,8 @@
 package lib
 import /prism/compose/ui
 import /prism/compose/material3
+import /prism/core
+
 public compose fun Badge(n: Int): Unit {
     println("badge")
     Text("badge $n")

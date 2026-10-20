@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Show(s: &String, n: &State<Int>) { println("show $s ${n.value}") }
 compose fun Screen(n: &State<Int>) {
     val s = "a" + "b"

@@ -1,3 +1,5 @@
 // expect: ok
 // run: 101
+import /prism/core
+
 fun main() { var n = 9223372036854775807; n += 1; println(n) }

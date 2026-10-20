@@ -2,5 +2,6 @@
 // entry: app/main.prism
 package app
 import /lib/user
+import /prism/core
 val User: Int = 1
 fun main() { println(User) }

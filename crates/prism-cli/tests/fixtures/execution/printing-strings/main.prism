@@ -1,3 +1,5 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun main() { val s = "Grüße, \u{1F680}"; print(s); println("!"); println(s) }

@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/core
+
 fun f(h: Heap<Int>, s: Heap<String>) {
     println(h)
     println(s)

@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Inner(n: Int) { println("inner $n") }
 compose fun Check(n: Int, limit: Int): Bool { Inner(n); return n > limit }
 compose fun Pick(limit: Int) {

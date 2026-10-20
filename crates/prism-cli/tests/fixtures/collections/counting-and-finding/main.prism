@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/core
+
 fun main() {
     val xs = listOf(3, 1, 4, 1, 5)
     println(xs.count { x -> x == 1 })

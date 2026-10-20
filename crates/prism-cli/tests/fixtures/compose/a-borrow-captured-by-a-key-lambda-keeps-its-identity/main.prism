@@ -1,5 +1,9 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Show(s: &String) { println("show $s") }
 compose fun Screen(items: &State<List<String>>, tick: &State<Int>) {
     println("screen ${tick.value}")

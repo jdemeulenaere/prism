@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Button { val onClick: () -> Int }
 fun greet(s: &String): Int = s.length
 fun g(s: String): Button = Button({ greet(s) })

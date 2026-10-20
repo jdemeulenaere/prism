@@ -1,5 +1,8 @@
 // expect: ok
 // run: 101
+import /prism/collections
+import /prism/core
+
 fun main() {
     val xs = listOf(9223372036854775807, 1)
     println(xs.sumOf { x -> x })

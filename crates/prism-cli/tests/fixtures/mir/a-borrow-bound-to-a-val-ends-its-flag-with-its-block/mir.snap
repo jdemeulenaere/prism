@@ -1,5 +1,5 @@
 module main
-fun main::g(_1: &MutableState<List<Int>>): Int @2:1
+fun main::g(_1: &MutableState<List<Int>>): Int @5:1
   local _0: Int (return)
   local _1 s: &MutableState<List<Int>> (argument)
   local _2 items: &List<Int> (user)
@@ -11,33 +11,33 @@ fun main::g(_1: &MutableState<List<Int>>): Int @2:1
   local _8: Unit (temporary)
   local _9: Unit (temporary)
   bb0:
-    storage_live _2 @3:5
-    storage_live _3 @3:18
-    _3 = &(*_1) (receiver) @3:18
-    storage_live _4 @3:18
-    storage_live _5 @3:18
-    _5 = &_3 (state guard) @3:18
-    _4 = call state begin shared<List<Int>>(copy _3, move _5) -> bb1 @3:18
+    storage_live _2 @6:5
+    storage_live _3 @6:18
+    _3 = &(*_1) (receiver) @6:18
+    storage_live _4 @6:18
+    storage_live _5 @6:18
+    _5 = &_3 (state guard) @6:18
+    _4 = call state begin shared<List<Int>>(copy _3, move _5) -> bb1 @6:18
   bb1:
-    _2 = &(*_4) (written) @3:17
-    storage_dead _5 @3:5
-    storage_dead _4 @3:5
-    storage_live _6 @4:13
-    storage_live _7 @4:13
-    _7 = &(*_2) (receiver) @4:13
-    _6 = call builtin size<Int>(move _7) -> bb2 @4:13
+    _2 = &(*_4) (written) @6:17
+    storage_dead _5 @6:5
+    storage_dead _4 @6:5
+    storage_live _6 @7:13
+    storage_live _7 @7:13
+    _7 = &(*_2) (receiver) @7:13
+    _6 = call builtin size<Int>(move _7) -> bb2 @7:13
   bb2:
-    storage_live _8 @4:5
-    _8 = call builtin println(move _6) -> bb3 @4:5
+    storage_live _8 @7:5
+    _8 = call builtin println(move _6) -> bb3 @7:5
   bb3:
-    storage_dead _8 @4:5
-    storage_dead _7 @4:5
-    storage_dead _6 @4:5
-    _0 = const 1 @5:12
-    storage_live _9 @5:5
-    _9 = call state end shared<List<Int>>(copy _3) -> bb4 @5:5
+    storage_dead _8 @7:5
+    storage_dead _7 @7:5
+    storage_dead _6 @7:5
+    _0 = const 1 @8:12
+    storage_live _9 @8:5
+    _9 = call state end shared<List<Int>>(copy _3) -> bb4 @8:5
   bb4:
-    storage_dead _9 @5:5
-    storage_dead _3 @5:5
-    storage_dead _2 @5:5
-    return @2:1
+    storage_dead _9 @8:5
+    storage_dead _3 @8:5
+    storage_dead _2 @8:5
+    return @5:1

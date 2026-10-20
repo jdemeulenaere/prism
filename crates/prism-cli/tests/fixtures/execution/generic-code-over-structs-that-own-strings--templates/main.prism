@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct User : Clone { val name: String, val age: Int }
 struct Tagged<T>(val tag: String, val value: T)
 fun <T> tagged(tag: &String, value: T): Tagged<T> = Tagged("<$tag>", value)

@@ -1,12 +1,12 @@
 module main
-compose fun main::C(s: &State<List<Int>>): Unit @2:1
+compose fun main::C(s: &State<List<Int>>): Unit @4:1
   local %0 s: &State<List<Int>> (parameter)
   local %1 x: &Int (for)
-  block: Unit @2:37
-    for #0 %1 x @3:5
-      list: borrow (iteration): &List<Int> @3:15
-        state place: List<Int> @3:15
-          handle: borrow (receiver): &State<List<Int>> @3:15
-            deref: State<List<Int>> @3:15
-              local %0 s: &State<List<Int>> @3:15
-      body: block: Unit @3:24
+  block: Unit @4:37
+    for #0 %1 x @5:5
+      list: borrow (iteration): &List<Int> @5:15
+        state place: List<Int> @5:15
+          handle: borrow (receiver): &State<List<Int>> @5:15
+            deref: State<List<Int>> @5:15
+              local %0 s: &State<List<Int>> @5:15
+      body: block: Unit @5:24

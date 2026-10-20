@@ -1,6 +1,6 @@
 error[E4004]: argument type mismatch: expected '&String', found 'Int'
-  --> main.prism:8:14
-    8 |         Text(c.value)
+  --> main.prism:10:14
+   10 |         Text(c.value)
       |              ^
    = help: verify parameter counts, argument types, or named parameters
 reload: not applied; the program keeps running its previous code

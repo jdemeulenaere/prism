@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 enum Action { Run((Int) -> Int), Stop }
 
 fun act(a: &Action): Int = when (a) {

@@ -4,6 +4,8 @@ import /prism/compose/ui
 import /prism/compose/foundation
 import /prism/compose/layout
 import /prism/compose/material3
+import /prism/core
+
 fun main() {
     println(Modifier.background(Color.Red).padding(8.dp) == Modifier.padding(8.dp).background(Color.Red))
     println(Modifier.padding(8.dp).background(Color.Red) == Modifier.padding(8.dp).background(Color.Red))

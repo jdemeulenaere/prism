@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct User : Clone { val name: String }
 fun <T> discard(x: T) {}
 fun <T : Clone> copy(x: &T): T = x.clone()

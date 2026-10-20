@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/collections
+
 fun f(): Int {
     var grid = listOf(listOf(1, 2), listOf(3))
     grid[1].add(4)

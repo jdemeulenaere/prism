@@ -3,6 +3,8 @@ import /prism/compose/ui
 import /prism/compose/layout
 import /prism/compose/material3
 import /lib/inner
+import /prism/compose/runtime
+
 compose fun Outer(a: Int, b: Int) {
     Inner(b, a)
 }

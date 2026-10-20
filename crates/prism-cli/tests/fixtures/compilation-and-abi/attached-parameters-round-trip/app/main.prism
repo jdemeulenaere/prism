@@ -2,5 +2,6 @@
 package app
 
 import /lib/ui
+import /prism/compose/runtime
 
 fun f(count: &MutableState<Int>): Int = button { count.value += 1 }

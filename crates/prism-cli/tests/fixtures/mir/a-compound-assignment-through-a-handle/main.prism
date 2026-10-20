@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/compose/runtime
+
 fun f(s: &MutableState<Int>) {
     s.value += 1
 }

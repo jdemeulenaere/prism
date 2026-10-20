@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct User : Clone { val name: String }
 struct Box<T>(val v: T)
 fun <T> unwrap(b: Box<T>): T {

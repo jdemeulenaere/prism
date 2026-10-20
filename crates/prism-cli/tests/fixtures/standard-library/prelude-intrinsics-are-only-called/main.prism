@@ -1,2 +1,4 @@
 // expect: E4013
+import /prism/core
+
 fun f() { val p = println }

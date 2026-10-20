@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun main() {
     val n = -42
     val d = 1.0E7

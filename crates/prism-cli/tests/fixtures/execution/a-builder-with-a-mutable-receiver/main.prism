@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/core
+
 struct Builder { var lines: List<String> }
 
 mut fun Builder.line(s: String) {

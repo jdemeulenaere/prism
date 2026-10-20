@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct User { val name: String }
 
 consuming fun User.take(): String {

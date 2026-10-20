@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Box<T>(val v: T)
 fun greet(s: &String): Int = s.length
 fun k(s: String): Box<() -> Int> = Box({ greet(s) })

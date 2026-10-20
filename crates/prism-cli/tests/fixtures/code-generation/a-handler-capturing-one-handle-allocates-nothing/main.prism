@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Handle : Copy { val id: Int }
 struct Button { val onClick: () -> Int }
 fun button(h: Handle): Button = Button({ h.id * 2 })

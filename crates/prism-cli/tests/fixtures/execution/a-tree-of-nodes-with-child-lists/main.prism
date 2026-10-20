@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/core
+
 struct Node { val name: String, var children: List<Node> }
 fun Node.count(): Int {
     var n = 1

@@ -1,4 +1,6 @@
 // expect: E5007
+import /prism/compose/runtime
+
 fun f(s: &MutableState<() -> Int>, r: &String) {
     s.value = { r.length + 1 }
 }

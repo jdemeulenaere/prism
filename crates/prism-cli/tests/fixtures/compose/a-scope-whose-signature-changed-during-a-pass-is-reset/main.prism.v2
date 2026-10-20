@@ -1,3 +1,6 @@
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Label(n: Int, times: Int) {
     val a = remember { 10 }
     val b = remember { 20 }

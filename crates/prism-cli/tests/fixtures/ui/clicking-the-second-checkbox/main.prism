@@ -5,6 +5,8 @@
 import /prism/compose/ui
 import /prism/compose/layout
 import /prism/compose/material3
+import /prism/compose/runtime
+
 compose fun Two() {
     val a = remember { mutableStateOf(false) }
     val b = remember { mutableStateOf(false) }

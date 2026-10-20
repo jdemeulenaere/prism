@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 struct D : Copy { val v: Double }
 
 compose fun Show(d: D) {

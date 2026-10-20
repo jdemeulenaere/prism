@@ -1,4 +1,6 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun loud(b: Bool): Bool { println(b); return b }
 fun main() { println(loud(false) && loud(true)); println(loud(true) || loud(false)) }

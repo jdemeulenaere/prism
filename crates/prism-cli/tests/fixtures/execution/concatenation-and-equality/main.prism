@@ -1,3 +1,5 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun main() { val a = "pri"; val b = a + "sm"; println(b); println(a); println(b == "prism"); println(a != "pri") }

@@ -1,10 +1,10 @@
 error[E5005]: cannot move out of 's' because it is borrowed
-  --> main.prism:7:10
-    7 |     take(s)
+  --> main.prism:11:10
+   11 |     take(s)
       |          ^ 's' is moved here while borrowed
-  --> main.prism:6:18
-    6 |     val items = &s.value
+  --> main.prism:10:18
+   10 |     val items = &s.value
       |                  ^ 's' is borrowed here
-  --> main.prism:8:13
-    8 |     println(items.size)
+  --> main.prism:12:13
+   12 |     println(items.size)
       |             ^^^^^ borrow later used here

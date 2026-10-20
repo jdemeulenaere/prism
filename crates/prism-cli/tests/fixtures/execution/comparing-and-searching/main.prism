@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/core
+
 struct P : Copy { val x: Int }
 fun main() {
     val a = listOf("a".clone(), "b".clone())

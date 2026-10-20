@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct P { var x: Int, var y: Int }
 fun main() {
     var p = P(1, 2)

@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/compose/runtime
+
 compose fun Hello() {}
 
 fun main() {

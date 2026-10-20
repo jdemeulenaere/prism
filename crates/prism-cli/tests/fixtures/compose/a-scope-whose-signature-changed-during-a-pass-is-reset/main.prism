@@ -1,6 +1,9 @@
 // expect: ok
 // run: 0
 // watch: edits
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Label(n: Int) {
     val a = remember { 1 }
     val b = remember { 2 }

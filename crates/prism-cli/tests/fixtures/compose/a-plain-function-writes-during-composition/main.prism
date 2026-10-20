@@ -1,5 +1,7 @@
 // expect: ok
 // run: 101
+import /prism/compose/runtime
+
 fun reset(s: &MutableState<Int>) {
     s.value = 0
 }

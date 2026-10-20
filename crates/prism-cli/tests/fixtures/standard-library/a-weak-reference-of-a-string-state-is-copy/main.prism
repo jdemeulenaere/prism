@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/compose/runtime
+
 fun f(s: &MutableState<String>): Int {
     val r = s.weak()
     val a = r

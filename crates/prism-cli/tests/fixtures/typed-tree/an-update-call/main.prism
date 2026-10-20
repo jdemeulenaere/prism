@@ -1,2 +1,4 @@
 // expect: ok
+import /prism/compose/runtime
+
 fun f(s: &MutableState<List<Int>>) { s.update { v -> v } }

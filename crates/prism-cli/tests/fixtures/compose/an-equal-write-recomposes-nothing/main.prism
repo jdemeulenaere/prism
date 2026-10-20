@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Show(n: &State<Int>, s: &State<String>) {
     println("show ${n.value} ${s.value}")
 }

@@ -1,5 +1,8 @@
 // expect: E5006
 // run: 1
+import /prism/compose/runtime
+import /prism/core
+
 fun main() {
     val c = composition { }
     if (true) {

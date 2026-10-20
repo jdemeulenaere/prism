@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct User : Copy { val nick: Int? }
 fun show(n: (&Int)?): Int {
     val r = n ?: &0

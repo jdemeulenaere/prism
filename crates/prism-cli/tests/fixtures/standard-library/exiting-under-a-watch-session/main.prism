@@ -1,6 +1,7 @@
 // expect: ok
 // run: 4
 // watch: edits
+import /prism/core
 import /prism/system
 
 fun main() {

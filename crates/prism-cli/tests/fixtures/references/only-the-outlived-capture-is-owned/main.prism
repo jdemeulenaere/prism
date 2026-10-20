@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun greet(s: &String): Int = s.length
 fun f(): Int {
     var count = 0

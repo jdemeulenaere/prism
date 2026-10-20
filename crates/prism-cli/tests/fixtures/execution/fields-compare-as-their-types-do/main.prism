@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct D : Copy { val v: Double }
 fun main() {
     println(D(0.0 / 0.0) == D(0.0 / 0.0))

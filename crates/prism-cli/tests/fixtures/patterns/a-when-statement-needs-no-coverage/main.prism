@@ -1,3 +1,5 @@
 // expect: ok
+import /prism/core
+
 enum Box { Of(Int), Empty }
 fun f(b: Box) { when (b) { Box.Of(0) -> println(0) } }

@@ -1,6 +1,9 @@
 // expect: ok
 // run: 0
 // watch: edits
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Show() { println("show 1") }
 fun main() {
     val c = composition { Show() }

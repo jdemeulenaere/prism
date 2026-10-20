@@ -1,5 +1,6 @@
 package app
 import /lib/math
+import /prism/core
 fun main() { println(twice(1)); println(twice(1)) }
 // expect: ok
 // run: 0

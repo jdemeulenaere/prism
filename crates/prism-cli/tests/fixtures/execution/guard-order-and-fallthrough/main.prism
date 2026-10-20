@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 enum Box { Of(Int), Empty }
 fun big(n: Int): Bool { println(n); return n > 9 }
 fun f(b: Box): Int = when (b) { Box.Empty -> 0; Box.Of(val n) if big(n) -> 1; Box.Of(_) -> 2 }

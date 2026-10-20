@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Scope : Copy { val depth: Int }
 struct Section { val title: String, val content: Scope.() -> String }
 

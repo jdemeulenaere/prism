@@ -1,3 +1,4 @@
 package app
 import /lib/math
+import /prism/core
 fun main() { println(twice(10)); println(twice(10)) }

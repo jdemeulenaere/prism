@@ -1,6 +1,6 @@
 error[E4017]: cannot use '+=' on the value of the state 's': its type 'String' is not 'Copy', so it cannot be read out of the state
-  --> main.prism:5:5
-    5 |     s.value += "x"
+  --> main.prism:7:5
+    7 |     s.value += "x"
       |     ^
    = help: assign the result, which reads the value in place: 's.value = s.value + "x"'
    = help: or transform the value: 's.update { it + "x" }'

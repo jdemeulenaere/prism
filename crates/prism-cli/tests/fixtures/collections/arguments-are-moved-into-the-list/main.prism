@@ -1,4 +1,7 @@
 // expect: E5001
+import /prism/collections
+import /prism/core
+
 fun f(s: String): List<String> {
     val xs = listOf(s, "b")
     println(s)

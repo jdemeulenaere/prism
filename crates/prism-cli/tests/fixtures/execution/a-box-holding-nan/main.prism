@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun main() {
     val h = Heap(0.0 / 0.0)
     println(h == h)

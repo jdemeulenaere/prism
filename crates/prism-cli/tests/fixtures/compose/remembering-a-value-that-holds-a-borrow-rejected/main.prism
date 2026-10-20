@@ -1,2 +1,4 @@
 // expect: E4022
+import /prism/compose/runtime
+
 compose fun C(r: &Int) { val s = remember<&Int> { r } }

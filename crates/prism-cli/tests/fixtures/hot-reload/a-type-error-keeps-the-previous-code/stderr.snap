@@ -1,6 +1,6 @@
 error[E4005]: return type mismatch: expected 'Int', found 'Bool'
-  --> main.prism:1:25
-    1 | fun step(i: Int): Int = true
+  --> main.prism:3:25
+    3 | fun step(i: Int): Int = true
       |                         ^
    = help: return a value of the declared return type, or change the declared return type
 reload: not applied; the program keeps running its previous code

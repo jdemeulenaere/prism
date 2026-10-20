@@ -3,6 +3,7 @@
 // run: 0
 package app
 import /lib/box
+import /prism/core
 fun main() {
     val b = boxed("hi")
     println(b.get())

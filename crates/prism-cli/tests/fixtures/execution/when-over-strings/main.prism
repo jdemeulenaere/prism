@@ -1,4 +1,6 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun f(s: String): Int = when (s) { "one" -> 1; "two" -> 2; else -> 0 }
 fun main() { println(f("two")); println(f("one")); println(f("three")) }

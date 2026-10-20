@@ -1,5 +1,7 @@
 // expect: E5007
 // run: 1
+import /prism/compose/runtime
+
 fun later(f: escaping () -> Unit) {}
 fun f(count: &MutableState<Int>) { later { count.value += 1 } }
 fun main() {}

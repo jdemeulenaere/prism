@@ -1,5 +1,5 @@
 module main
-fun main::f(_1: &MutableState<List<Int>>): Unit @2:1
+fun main::f(_1: &MutableState<List<Int>>): Unit @5:1
   local _0: Unit (return)
   local _1 s: &MutableState<List<Int>> (argument)
   local _2: Unit (temporary)
@@ -10,30 +10,30 @@ fun main::f(_1: &MutableState<List<Int>>): Unit @2:1
   local _7: Unit (temporary)
   local _8: Unit (temporary)
   bb0:
-    storage_live _2 @3:5
-    storage_live _3 @3:5
-    _3 = &(*_1) (receiver) @3:5
-    storage_live _4 @3:5
-    storage_live _5 @3:5
-    _5 = &_3 (state guard) @3:5
-    _4 = call state begin exclusive<List<Int>>(copy _3, move _5) -> bb1 @3:5
+    storage_live _2 @6:5
+    storage_live _3 @6:5
+    _3 = &(*_1) (receiver) @6:5
+    storage_live _4 @6:5
+    storage_live _5 @6:5
+    _5 = &_3 (state guard) @6:5
+    _4 = call state begin exclusive<List<Int>>(copy _3, move _5) -> bb1 @6:5
   bb1:
-    storage_live _6 @3:5
-    _6 = &mut (*_4) (receiver) @3:5
-    _2 = call builtin add<Int>(move _6, const 1) -> bb2 @3:5
+    storage_live _6 @6:5
+    _6 = &mut (*_4) (receiver) @6:5
+    _2 = call builtin add<Int>(move _6, const 1) -> bb2 @6:5
   bb2:
-    storage_dead _6 @3:5
-    storage_dead _5 @3:5
-    storage_dead _4 @3:5
-    storage_live _7 @3:5
-    _7 = call state end exclusive<List<Int>>(copy _3) -> bb3 @3:5
+    storage_dead _6 @6:5
+    storage_dead _5 @6:5
+    storage_dead _4 @6:5
+    storage_live _7 @6:5
+    _7 = call state end exclusive<List<Int>>(copy _3) -> bb3 @6:5
   bb3:
-    storage_dead _7 @3:5
-    storage_dead _3 @3:5
-    storage_dead _2 @3:5
-    storage_live _8 @4:5
-    _8 = call builtin println(const 1) -> bb4 @4:5
+    storage_dead _7 @6:5
+    storage_dead _3 @6:5
+    storage_dead _2 @6:5
+    storage_live _8 @7:5
+    _8 = call builtin println(const 1) -> bb4 @7:5
   bb4:
-    storage_dead _8 @4:5
-    _0 = const () @2:36
-    return @2:1
+    storage_dead _8 @7:5
+    _0 = const () @5:36
+    return @5:1

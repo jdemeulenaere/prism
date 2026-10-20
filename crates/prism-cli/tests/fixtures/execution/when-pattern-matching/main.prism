@@ -1,4 +1,6 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun f(x: Int): Int = when (x) { 0 -> 10; in 1..10 -> 20; else -> 30 }
 fun main() { println(f(0)); println(f(5)); println(f(11)) }

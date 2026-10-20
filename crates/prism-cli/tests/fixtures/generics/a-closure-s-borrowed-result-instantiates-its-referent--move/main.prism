@@ -1,2 +1,4 @@
 // expect: E4017
+import /prism/collections
+
 fun g(): List<String> = listOf("a").map { it }

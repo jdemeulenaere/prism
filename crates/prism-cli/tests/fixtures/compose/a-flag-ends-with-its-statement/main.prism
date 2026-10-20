@@ -1,5 +1,9 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/compose/runtime
+import /prism/core
+
 fun g(a: &MutableState<List<Int>>, b: &MutableState<List<Int>>) {
     println(a.value.size)
     b.value.add(2)

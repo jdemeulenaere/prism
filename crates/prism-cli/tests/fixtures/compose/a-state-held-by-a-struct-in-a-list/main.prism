@@ -1,5 +1,9 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/compose/runtime
+import /prism/core
+
 struct Todo { val title: String, val done: MutableState<Bool> }
 fun main() {
     val todos = listOf(Todo("a" + "b", mutableStateOf(false)), Todo("c" + "d", mutableStateOf(false)))

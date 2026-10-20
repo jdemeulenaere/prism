@@ -1,5 +1,5 @@
 module main
-fun main::f(_1: &MutableState<Int>): Unit @2:1
+fun main::f(_1: &MutableState<Int>): Unit @4:1
   local _0: Unit (return)
   local _1 s: &MutableState<Int> (argument)
   local _2: &MutableState<Int> (temporary)
@@ -8,31 +8,31 @@ fun main::f(_1: &MutableState<Int>): Unit @2:1
   local _5: Int (temporary)
   local _6: Unit (temporary)
   bb0:
-    storage_live _2 @3:5
-    _2 = &(*_1) (receiver) @3:5
-    storage_live _3 @3:14
-    _3 = closure main::f#closure0 [] @3:14
-    storage_live _4 @3:5
-    _4 = call state take<Int>(copy _2) -> bb1 @3:5
+    storage_live _2 @5:5
+    _2 = &(*_1) (receiver) @5:5
+    storage_live _3 @5:14
+    _3 = closure main::f#closure0 [] @5:14
+    storage_live _4 @5:5
+    _4 = call state take<Int>(copy _2) -> bb1 @5:5
   bb1:
-    storage_live _5 @3:5
-    _5 = call _3(move _4) -> bb2 @3:5
+    storage_live _5 @5:5
+    _5 = call _3(move _4) -> bb2 @5:5
   bb2:
-    storage_live _6 @3:5
-    _6 = call state put<Int>(copy _2, move _5) -> bb3 @3:5
+    storage_live _6 @5:5
+    _6 = call state put<Int>(copy _2, move _5) -> bb3 @5:5
   bb3:
-    storage_dead _6 @3:5
-    storage_dead _5 @3:5
-    storage_dead _4 @3:5
-    drop _3 -> bb4 @3:5
+    storage_dead _6 @5:5
+    storage_dead _5 @5:5
+    storage_dead _4 @5:5
+    drop _3 -> bb4 @5:5
   bb4:
-    storage_dead _3 @3:5
-    storage_dead _2 @3:5
-    _0 = const () @2:30
-    return @2:1
-closure main::f#closure0(_1: Int): Int @3:14
+    storage_dead _3 @5:5
+    storage_dead _2 @5:5
+    _0 = const () @4:30
+    return @4:1
+closure main::f#closure0(_1: Int): Int @5:14
   local _0: Int (return)
   local _1 n: Int (argument)
   bb0:
-    _0 = copy _1 * const 2 @3:21
-    return @3:14
+    _0 = copy _1 * const 2 @5:21
+    return @5:14

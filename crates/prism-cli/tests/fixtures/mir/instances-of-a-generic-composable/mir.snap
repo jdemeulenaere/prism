@@ -1,38 +1,38 @@
 module main
-compose fun <T : Copy> main::Show(_1: T): Unit @2:1
+compose fun <T : Copy> main::Show(_1: T): Unit @4:1
   local _0: Unit (return)
   local _1 x: T (argument)
   bb0:
-    _0 = const () @2:35
-    return @2:1
-fun main::main(): Unit @4:1
+    _0 = const () @4:35
+    return @4:1
+fun main::main(): Unit @6:1
   local _0: Unit (return)
   local _1 c: Composition (user)
   local _2: compose () -> Unit (temporary)
   bb0:
-    storage_live _1 @5:5
-    storage_live _2 @5:25
-    _2 = closure main::main#closure0 [] @5:25
-    _1 = call builtin composition(move _2) -> bb1 @5:13
+    storage_live _1 @7:5
+    storage_live _2 @7:25
+    _2 = closure main::main#closure0 [] @7:25
+    _1 = call builtin composition(move _2) -> bb1 @7:13
   bb1:
-    storage_dead _2 @5:5
-    _0 = const () @4:12
-    drop _1 -> bb2 @9:1
+    storage_dead _2 @7:5
+    _0 = const () @6:12
+    drop _1 -> bb2 @11:1
   bb2:
-    storage_dead _1 @9:1
-    return @4:1
-compose closure main::main#closure0(): Unit @5:25 /* argument 0 of composition call 0 */
+    storage_dead _1 @11:1
+    return @6:1
+compose closure main::main#closure0(): Unit @7:25 /* argument 0 of composition call 0 */
   local _0: Unit (return)
   local _1: Unit (temporary)
   local _2: Unit (temporary)
   bb0:
-    storage_live _1 @6:9
-    _1 = call compose main::Show<Int>(const 1) -> bb1 @6:9
+    storage_live _1 @8:9
+    _1 = call compose main::Show<Int>(const 1) -> bb1 @8:9
   bb1:
-    storage_dead _1 @6:9
-    storage_live _2 @7:9
-    _2 = call compose main::Show<Bool>(const true) -> bb2 @7:9
+    storage_dead _1 @8:9
+    storage_live _2 @9:9
+    _2 = call compose main::Show<Bool>(const true) -> bb2 @9:9
   bb2:
-    storage_dead _2 @7:9
-    _0 = const () @6:9
-    return @5:25
+    storage_dead _2 @9:9
+    _0 = const () @8:9
+    return @7:25

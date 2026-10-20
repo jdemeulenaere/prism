@@ -1,5 +1,5 @@
 error[E4017]: cannot take apart the value of the state 'u': a pattern that moves a part takes the whole value, which must be an owned local or a temporary
-  --> main.prism:6:21
-    6 |     val (name, n) = u.value
+  --> main.prism:8:21
+    8 |     val (name, n) = u.value
       |                     ^
    = help: destructure its borrow instead: '&u.value'

@@ -1,4 +1,6 @@
 // expect: E4004
+import /prism/compose/runtime
+
 compose fun f(a: Int, b: Bool) {
     val x = remember(a, b) { 1 }
     val y = remember(a, b, 'c', 1.5) { 2 }

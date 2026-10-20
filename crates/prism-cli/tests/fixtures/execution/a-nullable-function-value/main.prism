@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun call(f: (() -> Int)?): Int {
     val g = f ?: { 0 }
     return g()

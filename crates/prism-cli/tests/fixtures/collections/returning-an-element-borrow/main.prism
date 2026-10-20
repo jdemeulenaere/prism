@@ -1,4 +1,6 @@
 // expect: E5008
+import /prism/collections
+
 fun first(xs: &List<String>): &String = &xs[0]
 fun bad(): &Int {
     val xs = listOf(1)

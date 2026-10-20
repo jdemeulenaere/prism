@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 struct Todo { val id: Int, val done: MutableState<Bool> }
 fun deliver(v: Bool, f: attached (Bool) -> Unit) { f(v) }
 fun toggle(todo: &Todo) { deliver(true, { todo.done.value = it }) }

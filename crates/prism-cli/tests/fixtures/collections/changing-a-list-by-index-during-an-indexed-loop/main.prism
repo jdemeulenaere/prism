@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/collections
+
 fun f() {
     var xs = listOf(1, 2)
     for (i in xs.indices) {

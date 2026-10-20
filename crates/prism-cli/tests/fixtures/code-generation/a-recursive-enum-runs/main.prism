@@ -1,4 +1,6 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 enum Expr { Literal(Int), Add(Heap<Expr>, Heap<Expr>) }
 fun main() { val e = Expr.Add(Heap(Expr.Literal(1)), Heap(Expr.Literal(2))); println(1) }

@@ -1,4 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Each(n: Int, item: compose (Int) -> Unit) { for (i in 1..n) { item(i) } }
 fun main() { val c = composition { Each(2) { i -> println("item $i") } } }

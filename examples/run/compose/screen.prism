@@ -1,5 +1,8 @@
 package run.compose
 
+import /prism/compose/runtime
+import /prism/core
+
 // A composable screen for the reference program of `prism run` (examples/run/main.prism).
 
 // One row of the screen. Its parameters are `Copy`, so it is skippable: a pass runs it again

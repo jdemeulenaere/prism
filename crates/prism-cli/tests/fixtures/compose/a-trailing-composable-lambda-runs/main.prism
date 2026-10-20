@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Column(content: compose () -> Unit) { println("column"); content() }
 compose fun Text(n: Int) { println("text $n") }
 fun main() { val c = composition { Column { Text(1); Text(2) } } }

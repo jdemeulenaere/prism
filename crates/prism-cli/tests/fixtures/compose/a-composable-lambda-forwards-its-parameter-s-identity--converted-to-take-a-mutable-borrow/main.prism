@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 // A lambda taking `&String` given for `compose (&mut String) -> Unit` keeps its representation,
 // so both take a version word; `Host` passes 0 for its mutable borrow, and `Show` never keeps
 // a borrow of `Host`'s local.

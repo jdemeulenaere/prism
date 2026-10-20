@@ -3,4 +3,5 @@
 // entry: app/main.prism
 package app
 import /lib/config
+import /prism/core
 fun main() { println(LIMIT + 1) }

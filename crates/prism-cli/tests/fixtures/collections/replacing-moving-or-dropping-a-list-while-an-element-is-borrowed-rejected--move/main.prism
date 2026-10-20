@@ -1,4 +1,7 @@
 // expect: E5005
+import /prism/collections
+import /prism/core
+
 fun g() {
     val xs = listOf("a")
     val first = &xs[0]

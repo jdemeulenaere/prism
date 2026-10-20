@@ -3,4 +3,5 @@
 // run: 101
 package app
 import /lib/math
+import /prism/core
 fun main() { println(ratio("x", 1, 0)) }

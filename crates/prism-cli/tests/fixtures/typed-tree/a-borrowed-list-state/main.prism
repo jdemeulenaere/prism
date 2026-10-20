@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/compose/runtime
+
 compose fun C(s: &State<List<Int>>) {
     for (x in s.value) { }
 }

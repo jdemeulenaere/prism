@@ -1,3 +1,6 @@
+import /prism/compose/runtime
+import /prism/core
+
 val Count: MutableState<Int> = mutableStateOf(1)
 fun main() { var i = 0; while (i < 3) { Count.value += 1; println(Count.value); i += 1 } }
 // expect: ok

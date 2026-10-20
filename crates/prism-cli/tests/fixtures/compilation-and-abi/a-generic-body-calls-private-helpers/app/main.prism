@@ -3,4 +3,5 @@
 // run: 0
 package app
 import /lib/box
+import /prism/core
 fun main() { println(outer("a", 1)) }

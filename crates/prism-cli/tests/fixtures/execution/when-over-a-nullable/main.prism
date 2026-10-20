@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun f(n: Int?): Int = when (n) {
     null -> 0
     1 -> 10

@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/collections
+import /prism/core
+
 fun main() {
     val xs = listOf(5, 6, 7)
     println(xs.size)

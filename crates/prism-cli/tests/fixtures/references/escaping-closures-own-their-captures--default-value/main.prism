@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun m(a: Int, p: () -> Int = { a }): Int = p()
 fun main() {
     println(m(7))

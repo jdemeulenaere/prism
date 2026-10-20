@@ -1,4 +1,6 @@
 // expect: E4003
+import /prism/collections
+
 fun f(xs: &List<Int>) { xs[0] = 1 }
 fun g() {
     val ys = listOf(1)

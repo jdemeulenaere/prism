@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 // A registry of the last two handlers registered, held in a struct without a list: each
 // registration takes the registry apart, drops the oldest handler and owns the new one.
 struct Registry {

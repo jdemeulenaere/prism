@@ -1,4 +1,7 @@
 // expect: ok
+import /prism/compose/runtime
+import /prism/core
+
 fun g(s: &MutableState<List<Int>>): Int {
     val items = &s.value
     println(items.size)

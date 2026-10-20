@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun <T> keep(x: T): T = x
 fun greet(s: &String): Int = s.length
 fun f(s: String): Int {

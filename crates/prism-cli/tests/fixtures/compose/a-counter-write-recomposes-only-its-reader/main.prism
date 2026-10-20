@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Label(count: &State<Int>) {
     println("label ${count.value}")
 }

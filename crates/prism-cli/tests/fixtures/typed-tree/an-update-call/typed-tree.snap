@@ -1,14 +1,14 @@
 module main
-fun main::f(s: &MutableState<List<Int>>): Unit @2:1
+fun main::f(s: &MutableState<List<Int>>): Unit @4:1
   local %0 s: &MutableState<List<Int>> (parameter)
   local %1 v: List<Int> (closure parameter)
-  block: Unit @2:36
-    expression @2:38
-      call builtin update<List<Int>>: Unit @2:38
-        receiver: borrow (receiver): &MutableState<List<Int>> @2:38
-          deref: MutableState<List<Int>> @2:38
-            local %0 s: &MutableState<List<Int>> @2:38
-        argument transform: closure (%1 v): (List<Int>) -> List<Int> @2:47
-          block: List<Int> @2:51
-            tail: move: List<Int> @2:54
-              local %1 v: List<Int> @2:54
+  block: Unit @4:36
+    expression @4:38
+      call builtin update<List<Int>>: Unit @4:38
+        receiver: borrow (receiver): &MutableState<List<Int>> @4:38
+          deref: MutableState<List<Int>> @4:38
+            local %0 s: &MutableState<List<Int>> @4:38
+        argument transform: closure (%1 v): (List<Int>) -> List<Int> @4:47
+          block: List<Int> @4:51
+            tail: move: List<Int> @4:54
+              local %1 v: List<Int> @4:54

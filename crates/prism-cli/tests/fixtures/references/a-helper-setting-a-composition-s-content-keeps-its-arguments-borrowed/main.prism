@@ -1,5 +1,8 @@
 // expect: E5005
 // run: 1
+import /prism/compose/runtime
+import /prism/core
+
 fun show(c: &Composition, s: &MutableState<Int>) { c.setContent { println(s.value) } }
 fun consume(s: MutableState<Int>) {}
 fun main() {

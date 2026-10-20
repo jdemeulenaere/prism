@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Button { val label: String, val onClick: () -> Unit }
 fun button(label: String, onClick: escaping () -> Unit): Button = Button(label, onClick)
 fun later(f: escaping () -> Int): () -> Int = f

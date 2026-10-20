@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 fun show(s: &MutableState<Int>): Composition = composition { println(s.value) }
 fun main() {
     val s = mutableStateOf(1)

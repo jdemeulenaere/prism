@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 // A closure built in a generic body owns a value of a type parameter; each instance lays out
 // its own environment.
 fun <T> later(x: T, f: escaping (&T) -> Int): () -> Int = { f(x) }

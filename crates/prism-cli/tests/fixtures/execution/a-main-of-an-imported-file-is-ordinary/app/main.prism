@@ -3,4 +3,5 @@
 // entry: app/main.prism
 package app
 import /lib/tool
+import /prism/core
 fun main() { println(2) }

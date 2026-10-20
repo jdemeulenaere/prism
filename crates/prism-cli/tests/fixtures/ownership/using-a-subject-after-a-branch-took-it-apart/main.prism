@@ -1,4 +1,6 @@
 // expect: E5001
+import /prism/core
+
 enum Msg { Text(String), Empty }
 fun show(m: &Msg) {}
 fun f(m: Msg) { when (m) { Msg.Text(val s) -> println(s); Msg.Empty -> {} }; show(m) }

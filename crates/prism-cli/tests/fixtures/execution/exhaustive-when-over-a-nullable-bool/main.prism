@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun f(b: Bool?): Int = when (b) {
     true -> 1
     false -> 2

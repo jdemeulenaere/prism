@@ -1,2 +1,2 @@
 panic: string index 3 out of range for length 3
-  at main.prism:3:52
+  at main.prism:5:52

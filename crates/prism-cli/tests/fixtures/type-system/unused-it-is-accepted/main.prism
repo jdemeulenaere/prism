@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/core
+
 fun each(f: (Int) -> Unit) { f(1) }
 fun f() {
     each { println("x") }

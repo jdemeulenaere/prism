@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun describe(n: Int): String = when (n) {
     0 -> "none"
     1 -> "one {item}"

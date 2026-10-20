@@ -1,3 +1,5 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun main() { var a = 1.toString(); val b = a.clone(); a = 2.toString(); println(a); println(b) }

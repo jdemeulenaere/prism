@@ -3,4 +3,5 @@
 // entry: app/main.prism
 package app
 import /lib/a
+import /prism/core
 fun main() { val o = make(); println(o.n) }

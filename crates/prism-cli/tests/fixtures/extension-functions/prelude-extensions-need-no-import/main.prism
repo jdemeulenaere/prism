@@ -1,2 +1,4 @@
 // expect: ok
+import /prism/collections
+
 fun f(xs: &List<Int>): Bool = xs.any { x -> x > 2 }

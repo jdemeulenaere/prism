@@ -1,2 +1,4 @@
+import /prism/core
+
 fun step(i: Int): Int = i * 10
 fun main() { var i = 0; while (i < 4) { println(step(i)); i += 1 } }

@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/core
+
 struct Todo { val title: String, var done: Bool }
 fun f(todos: &List<Todo>) {
     for (t in todos) {

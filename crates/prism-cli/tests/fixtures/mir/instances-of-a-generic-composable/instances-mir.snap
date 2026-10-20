@@ -1,4 +1,4 @@
-compose composed skippable fun main::Show<Bool>(_1: Bool, _2: Int, _3: Int): Unit @2:1
+compose composed skippable fun main::Show<Bool>(_1: Bool, _2: Int, _3: Int): Unit @4:1
   local _0: Unit (return)
   local _1 x: Bool (argument)
   local _2 $composer: Int (argument)
@@ -12,65 +12,65 @@ compose composed skippable fun main::Show<Bool>(_1: Bool, _2: Int, _3: Int): Uni
   local _10: Bool (temporary)
   local _11: (Int) -> Unit (temporary)
   bb0:
-    storage_live _4 @2:1
-    storage_live _5 @2:1
-    storage_live _6 @2:1
-    storage_live _7 @2:1
-    storage_live _8 @2:1
-    storage_live _9 @2:1
-    storage_live _10 @2:1
-    storage_live _11 @2:1
-    _5 = call composer start_restart_group key 0xfc865c0f29a67d20 /* body main::Show */(copy _2) -> bb2 @2:1
+    storage_live _4 @4:1
+    storage_live _5 @4:1
+    storage_live _6 @4:1
+    storage_live _7 @4:1
+    storage_live _8 @4:1
+    storage_live _9 @4:1
+    storage_live _10 @4:1
+    storage_live _11 @4:1
+    _5 = call composer start_restart_group key 0xfc865c0f29a67d20 /* body main::Show */(copy _2) -> bb2 @4:1
   bb1:
-    _11 = closure main::Show<Bool>#restart [] @2:1
-    _5 = call composer end_restart_group(copy _2, move _11) -> bb10 @2:1
+    _11 = closure main::Show<Bool>#restart [] @4:1
+    _5 = call composer end_restart_group(copy _2, move _11) -> bb10 @4:1
   bb2:
-    _6 = const 0 @2:1
-    _7 = bits copy _3 >>> const 1 @2:1
-    _7 = bits copy _7 & const 3 @2:1
-    _8 = call composer keep<Bool>(copy _2, copy _1, copy _7) -> bb3 @2:1
+    _6 = const 0 @4:1
+    _7 = bits copy _3 >>> const 1 @4:1
+    _7 = bits copy _7 & const 3 @4:1
+    _8 = call composer keep<Bool>(copy _2, copy _1, copy _7) -> bb3 @4:1
   bb3:
-    _4 = bits copy _8 & const 3 @2:1
-    _6 = bits copy _6 | copy _8 @2:1
-    _6 = bits copy _6 & const 4 @2:1
-    _9 = bits copy _3 & const 1 @2:1
-    switch copy _9 [0 -> bb5, otherwise -> bb4] @2:1
+    _4 = bits copy _8 & const 3 @4:1
+    _6 = bits copy _6 | copy _8 @4:1
+    _6 = bits copy _6 & const 4 @4:1
+    _9 = bits copy _3 & const 1 @4:1
+    switch copy _9 [0 -> bb5, otherwise -> bb4] @4:1
   bb4:
-    _0 = const () @2:35
-    goto -> bb1 @2:1
+    _0 = const () @4:35
+    goto -> bb1 @4:1
   bb5:
-    switch copy _6 [0 -> bb6, otherwise -> bb4] @2:1
+    switch copy _6 [0 -> bb6, otherwise -> bb4] @4:1
   bb6:
-    _10 = call composer skipping(copy _2) -> bb8 @2:1
+    _10 = call composer skipping(copy _2) -> bb8 @4:1
   bb7:
-    _5 = call composer skip_to_group_end(copy _2) -> bb9 @2:1
+    _5 = call composer skip_to_group_end(copy _2) -> bb9 @4:1
   bb8:
-    switch copy _10 [0 -> bb4, otherwise -> bb7] @2:1
+    switch copy _10 [0 -> bb4, otherwise -> bb7] @4:1
   bb9:
-    goto -> bb1 @2:1
+    goto -> bb1 @4:1
   bb10:
-    storage_dead _11 @2:1
-    storage_dead _10 @2:1
-    storage_dead _9 @2:1
-    storage_dead _8 @2:1
-    storage_dead _7 @2:1
-    storage_dead _6 @2:1
-    storage_dead _5 @2:1
-    storage_dead _4 @2:1
-    return @2:1
-closure main::Show<Bool>#restart(_1: Int): Unit @2:1
+    storage_dead _11 @4:1
+    storage_dead _10 @4:1
+    storage_dead _9 @4:1
+    storage_dead _8 @4:1
+    storage_dead _7 @4:1
+    storage_dead _6 @4:1
+    storage_dead _5 @4:1
+    storage_dead _4 @4:1
+    return @4:1
+closure main::Show<Bool>#restart(_1: Int): Unit @4:1
   local _0: Unit (return)
   local _1 $composer: Int (argument)
   local _2 x: Bool (temporary)
   bb0:
-    storage_live _2 @2:1
-    _2 = call composer kept_parameter 0<Bool>(copy _1) -> bb1 @2:1
+    storage_live _2 @4:1
+    _2 = call composer kept_parameter 0<Bool>(copy _1) -> bb1 @4:1
   bb1:
-    _0 = call compose main::Show<Bool>(copy _2, copy _1, const 3) -> bb2 @2:1
+    _0 = call compose main::Show<Bool>(copy _2, copy _1, const 3) -> bb2 @4:1
   bb2:
-    storage_dead _2 @2:1
-    return @2:1
-compose composed skippable fun main::Show<Int>(_1: Int, _2: Int, _3: Int): Unit @2:1
+    storage_dead _2 @4:1
+    return @4:1
+compose composed skippable fun main::Show<Int>(_1: Int, _2: Int, _3: Int): Unit @4:1
   local _0: Unit (return)
   local _1 x: Int (argument)
   local _2 $composer: Int (argument)
@@ -84,61 +84,61 @@ compose composed skippable fun main::Show<Int>(_1: Int, _2: Int, _3: Int): Unit 
   local _10: Bool (temporary)
   local _11: (Int) -> Unit (temporary)
   bb0:
-    storage_live _4 @2:1
-    storage_live _5 @2:1
-    storage_live _6 @2:1
-    storage_live _7 @2:1
-    storage_live _8 @2:1
-    storage_live _9 @2:1
-    storage_live _10 @2:1
-    storage_live _11 @2:1
-    _5 = call composer start_restart_group key 0xfc865c0f29a67d20 /* body main::Show */(copy _2) -> bb2 @2:1
+    storage_live _4 @4:1
+    storage_live _5 @4:1
+    storage_live _6 @4:1
+    storage_live _7 @4:1
+    storage_live _8 @4:1
+    storage_live _9 @4:1
+    storage_live _10 @4:1
+    storage_live _11 @4:1
+    _5 = call composer start_restart_group key 0xfc865c0f29a67d20 /* body main::Show */(copy _2) -> bb2 @4:1
   bb1:
-    _11 = closure main::Show<Int>#restart [] @2:1
-    _5 = call composer end_restart_group(copy _2, move _11) -> bb10 @2:1
+    _11 = closure main::Show<Int>#restart [] @4:1
+    _5 = call composer end_restart_group(copy _2, move _11) -> bb10 @4:1
   bb2:
-    _6 = const 0 @2:1
-    _7 = bits copy _3 >>> const 1 @2:1
-    _7 = bits copy _7 & const 3 @2:1
-    _8 = call composer keep<Int>(copy _2, copy _1, copy _7) -> bb3 @2:1
+    _6 = const 0 @4:1
+    _7 = bits copy _3 >>> const 1 @4:1
+    _7 = bits copy _7 & const 3 @4:1
+    _8 = call composer keep<Int>(copy _2, copy _1, copy _7) -> bb3 @4:1
   bb3:
-    _4 = bits copy _8 & const 3 @2:1
-    _6 = bits copy _6 | copy _8 @2:1
-    _6 = bits copy _6 & const 4 @2:1
-    _9 = bits copy _3 & const 1 @2:1
-    switch copy _9 [0 -> bb5, otherwise -> bb4] @2:1
+    _4 = bits copy _8 & const 3 @4:1
+    _6 = bits copy _6 | copy _8 @4:1
+    _6 = bits copy _6 & const 4 @4:1
+    _9 = bits copy _3 & const 1 @4:1
+    switch copy _9 [0 -> bb5, otherwise -> bb4] @4:1
   bb4:
-    _0 = const () @2:35
-    goto -> bb1 @2:1
+    _0 = const () @4:35
+    goto -> bb1 @4:1
   bb5:
-    switch copy _6 [0 -> bb6, otherwise -> bb4] @2:1
+    switch copy _6 [0 -> bb6, otherwise -> bb4] @4:1
   bb6:
-    _10 = call composer skipping(copy _2) -> bb8 @2:1
+    _10 = call composer skipping(copy _2) -> bb8 @4:1
   bb7:
-    _5 = call composer skip_to_group_end(copy _2) -> bb9 @2:1
+    _5 = call composer skip_to_group_end(copy _2) -> bb9 @4:1
   bb8:
-    switch copy _10 [0 -> bb4, otherwise -> bb7] @2:1
+    switch copy _10 [0 -> bb4, otherwise -> bb7] @4:1
   bb9:
-    goto -> bb1 @2:1
+    goto -> bb1 @4:1
   bb10:
-    storage_dead _11 @2:1
-    storage_dead _10 @2:1
-    storage_dead _9 @2:1
-    storage_dead _8 @2:1
-    storage_dead _7 @2:1
-    storage_dead _6 @2:1
-    storage_dead _5 @2:1
-    storage_dead _4 @2:1
-    return @2:1
-closure main::Show<Int>#restart(_1: Int): Unit @2:1
+    storage_dead _11 @4:1
+    storage_dead _10 @4:1
+    storage_dead _9 @4:1
+    storage_dead _8 @4:1
+    storage_dead _7 @4:1
+    storage_dead _6 @4:1
+    storage_dead _5 @4:1
+    storage_dead _4 @4:1
+    return @4:1
+closure main::Show<Int>#restart(_1: Int): Unit @4:1
   local _0: Unit (return)
   local _1 $composer: Int (argument)
   local _2 x: Int (temporary)
   bb0:
-    storage_live _2 @2:1
-    _2 = call composer kept_parameter 0<Int>(copy _1) -> bb1 @2:1
+    storage_live _2 @4:1
+    _2 = call composer kept_parameter 0<Int>(copy _1) -> bb1 @4:1
   bb1:
-    _0 = call compose main::Show<Int>(copy _2, copy _1, const 3) -> bb2 @2:1
+    _0 = call compose main::Show<Int>(copy _2, copy _1, const 3) -> bb2 @4:1
   bb2:
-    storage_dead _2 @2:1
-    return @2:1
+    storage_dead _2 @4:1
+    return @4:1

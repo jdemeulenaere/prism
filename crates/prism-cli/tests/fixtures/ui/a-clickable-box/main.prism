@@ -5,6 +5,8 @@ import /prism/compose/ui
 import /prism/compose/foundation
 import /prism/compose/layout
 import /prism/compose/material3
+import /prism/core
+
 compose fun Screen() {
     Box(modifier = Modifier.size(40.dp).clickable { println("box") }) { }
 }

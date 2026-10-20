@@ -1,3 +1,5 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun main() { print(1); print(true); println('x'); println(-5); println() }

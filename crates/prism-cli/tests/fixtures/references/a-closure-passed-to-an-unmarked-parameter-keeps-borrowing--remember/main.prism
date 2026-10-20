@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun <T> remember(calc: () -> T): T = calc()
 fun run(f: () -> Int): Int = f()
 fun take(s: String) {}

@@ -1,11 +1,11 @@
 module main
-compose fun main::Show(_1: &String): Unit @2:1
+compose fun main::Show(_1: &String): Unit @4:1
   local _0: Unit (return)
   local _1 s: &String (argument)
   bb0:
-    _0 = const () @2:30
-    return @2:1
-compose fun main::Screen(_1: &State<List<String>>): Unit @3:1
+    _0 = const () @4:30
+    return @4:1
+compose fun main::Screen(_1: &State<List<String>>): Unit @5:1
   local _0: Unit (return)
   local _1 items: &State<List<String>> (argument)
   local _2: &List<String> (temporary)
@@ -21,76 +21,76 @@ compose fun main::Screen(_1: &State<List<String>>): Unit @3:1
   local _12: compose () -> Unit (temporary)
   local _13: Unit (temporary)
   bb0:
-    group_start g0 /* loop 0 */ @4:5
-    storage_live _2 @4:5
-    storage_live _3 @4:15
-    _3 = &(*_1) (receiver) @4:15
-    storage_live _4 @4:15
-    _4 = call state read<List<String>>(copy _3) -> bb1 @4:15
+    group_start g0 /* loop 0 */ @6:5
+    storage_live _2 @6:5
+    storage_live _3 @6:15
+    _3 = &(*_1) (receiver) @6:15
+    storage_live _4 @6:15
+    _4 = call state read<List<String>>(copy _3) -> bb1 @6:15
   bb1:
-    _2 = &(*_4) (iteration) @4:15
-    storage_live _5 @4:5
-    storage_live _6 @4:5
-    storage_live _7 @4:5
-    storage_live _8 @4:5
-    _8 = &(*_2) (iteration) @4:5
-    _5 = call builtin size<String>(move _8) -> bb2 @4:5
+    _2 = &(*_4) (iteration) @6:15
+    storage_live _5 @6:5
+    storage_live _6 @6:5
+    storage_live _7 @6:5
+    storage_live _8 @6:5
+    _8 = &(*_2) (iteration) @6:5
+    _5 = call builtin size<String>(move _8) -> bb2 @6:5
   bb2:
-    _6 = const 0 @4:5
-    _7 = copy _5 == const 0 @4:5
-    switch copy _7 [0 -> bb4, otherwise -> bb3] @4:5
+    _6 = const 0 @6:5
+    _7 = copy _5 == const 0 @6:5
+    switch copy _7 [0 -> bb4, otherwise -> bb3] @6:5
   bb3:
-    goto -> bb5 @4:5
+    goto -> bb5 @6:5
   bb4:
-    goto -> bb6 @4:5
+    goto -> bb6 @6:5
   bb5:
-    storage_dead _8 @4:5
-    storage_dead _7 @4:5
-    storage_dead _6 @4:5
-    storage_dead _5 @4:5
-    storage_dead _4 @4:5
-    storage_dead _3 @4:5
-    storage_dead _2 @4:5
-    group_end g0 @4:5
-    _0 = const () @3:49
-    return @3:1
+    storage_dead _8 @6:5
+    storage_dead _7 @6:5
+    storage_dead _6 @6:5
+    storage_dead _5 @6:5
+    storage_dead _4 @6:5
+    storage_dead _3 @6:5
+    storage_dead _2 @6:5
+    group_end g0 @6:5
+    _0 = const () @5:49
+    return @5:1
   bb6:
-    storage_live _9 @4:5
-    _9 = &(*_2)[_6] (iteration) @4:5
-    storage_live _10 @5:13
-    storage_live _11 @5:13
-    _11 = &(*_9) (receiver) @5:13
-    _10 = call builtin length(move _11) -> bb7 @5:13
+    storage_live _9 @6:5
+    _9 = &(*_2)[_6] (iteration) @6:5
+    storage_live _10 @7:13
+    storage_live _11 @7:13
+    _11 = &(*_9) (receiver) @7:13
+    _10 = call builtin length(move _11) -> bb7 @7:13
   bb7:
-    storage_live _12 @5:23
-    _12 = closure main::Screen#closure0 [_9] @5:23
-    storage_live _13 @5:9
-    _13 = call compose builtin key(move _10, move _12) -> bb8 @5:9
+    storage_live _12 @7:23
+    _12 = closure main::Screen#closure0 [_9] @7:23
+    storage_live _13 @7:9
+    _13 = call compose builtin key(move _10, move _12) -> bb8 @7:9
   bb8:
-    storage_dead _13 @5:9
-    storage_dead _12 @5:9
-    storage_dead _11 @5:9
-    storage_dead _10 @5:9
-    storage_dead _9 @6:5
-    _6 = copy _6 + const 1 @4:5
-    _7 = copy _6 == copy _5 @4:5
-    switch copy _7 [0 -> bb10, otherwise -> bb9] @4:5
+    storage_dead _13 @7:9
+    storage_dead _12 @7:9
+    storage_dead _11 @7:9
+    storage_dead _10 @7:9
+    storage_dead _9 @8:5
+    _6 = copy _6 + const 1 @6:5
+    _7 = copy _6 == copy _5 @6:5
+    switch copy _7 [0 -> bb10, otherwise -> bb9] @6:5
   bb9:
-    goto -> bb5 @4:5
+    goto -> bb5 @6:5
   bb10:
-    goto -> bb6 @4:5
-compose closure main::Screen#closure0(): Unit @5:23 /* in g0, argument 1 of key call 0 */
+    goto -> bb6 @6:5
+compose closure main::Screen#closure0(): Unit @7:23 /* in g0, argument 1 of key call 0 */
   local _0: Unit (return)
   local _1 s: &String (capture)
   local _2: &String (temporary)
   local _3: Unit (temporary)
   bb0:
-    storage_live _2 @5:30
-    _2 = copy _1 @5:30
-    storage_live _3 @5:25
-    _3 = call compose main::Show(move _2) -> bb1 @5:25
+    storage_live _2 @7:30
+    _2 = copy _1 @7:30
+    storage_live _3 @7:25
+    _3 = call compose main::Show(move _2) -> bb1 @7:25
   bb1:
-    storage_dead _3 @5:25
-    storage_dead _2 @5:25
-    _0 = const () @5:25
-    return @5:23
+    storage_dead _3 @7:25
+    storage_dead _2 @7:25
+    _0 = const () @7:25
+    return @7:23

@@ -1,5 +1,9 @@
 // expect: E5005
 // run: 1
+import /prism/collections
+import /prism/compose/runtime
+import /prism/core
+
 fun take(s: MutableState<List<Int>>) {}
 fun f() {
     val s = mutableStateOf(listOf(1))

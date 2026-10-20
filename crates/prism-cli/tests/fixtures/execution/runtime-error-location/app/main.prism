@@ -1,4 +1,7 @@
 package app
+
+import /prism/core
+
 fun zero(): Int = 0
 fun main() { val a = 1; println(a / zero()) }
 // expect: ok

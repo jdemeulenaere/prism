@@ -1,3 +1,5 @@
 // expect: E4026
+import /prism/core
+
 struct P { val x: Int }
 fun f(n: Int?) { println(P(1)); println(n); println({ 1 }) }

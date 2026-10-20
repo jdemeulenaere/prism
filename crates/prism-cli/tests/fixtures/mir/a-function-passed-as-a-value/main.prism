@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/core
+
 fun double(n: Int): Int = n * 2
 
 fun apply(f: (Int) -> Int): Int = f(1)

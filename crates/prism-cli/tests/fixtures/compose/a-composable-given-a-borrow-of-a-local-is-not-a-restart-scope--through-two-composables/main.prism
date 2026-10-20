@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 compose fun C(s: &String, n: &State<Int>) { println("c $s ${n.value}") }
 compose fun B(s: &String, n: &State<Int>) { println("b"); C(s, n) }
 compose fun A(s: &String, n: &State<Int>) { println("a"); B(s, n) }

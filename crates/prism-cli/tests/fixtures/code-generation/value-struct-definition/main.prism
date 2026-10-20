@@ -1,4 +1,6 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Point { val x: Double, val y: Double }
 fun main() { val p = Point(1.0, 2.0); println(p.y) }

@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Pair : Copy { val a: Int, val b: Int }
 
 enum Mark : Copy { Plain, Weight(Double), Point(Pair) }

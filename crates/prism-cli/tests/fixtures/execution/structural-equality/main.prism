@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 struct Point : Copy { val x: Int, val y: Int }
 enum Shape : Copy { Circle(Double), Square(Double), Empty }
 fun main() {

@@ -1,5 +1,7 @@
 // expect: ok
 // run: 101
+import /prism/collections
+
 fun main() {
     var xs = listOf(1)
     xs.removeAt(-1)

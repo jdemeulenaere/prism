@@ -1,4 +1,6 @@
 // expect: ok
 // run: 101
+import /prism/core
+
 fun zero(): Int = 0
 fun main() { println(7 / zero()) }

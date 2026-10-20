@@ -1,5 +1,8 @@
 // expect: ok
 // run: 0
+import /prism/compose/runtime
+import /prism/core
+
 compose fun Leaf() { }
 compose fun C(label: String) {
     val s = remember { println("computed"); "a" + "b" }

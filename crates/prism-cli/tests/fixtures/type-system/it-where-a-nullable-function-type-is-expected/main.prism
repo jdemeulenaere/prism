@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun apply(f: ((Int) -> Int)?, x: Int): Int {
     val fallback: (Int) -> Int = { -it }
     val g = f ?: fallback

@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/collections
+
 struct Builder { var items: List<String> }
 mut fun Builder.add(s: String) { items.add(s) }
 fun build(f: mut Builder.() -> Unit): Int {

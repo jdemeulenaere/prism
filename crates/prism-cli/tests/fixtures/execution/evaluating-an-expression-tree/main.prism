@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 enum Expr { Lit(Int), Add(Heap<Expr>, Heap<Expr>), Mul(Heap<Expr>, Heap<Expr>) }
 
 fun eval(e: &Expr): Int = when (e) {

@@ -1,4 +1,7 @@
 // expect: ok
+import /prism/collections
+import /prism/core
+
 fun f() {
     var handlers = listOf<() -> Unit>()
     handlers.add { println("hi") }

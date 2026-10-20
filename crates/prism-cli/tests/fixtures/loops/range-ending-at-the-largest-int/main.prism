@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun main() {
     var times = 0
     for (i in 9223372036854775806..9223372036854775807) {

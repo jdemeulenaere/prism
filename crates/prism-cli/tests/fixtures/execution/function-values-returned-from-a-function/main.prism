@@ -1,5 +1,7 @@
 // expect: ok
 // run: 0
+import /prism/core
+
 fun pick(big: Bool): (Int) -> Int {
     if (big) return { n -> n * 100 }
     return { n -> n + 1 }
