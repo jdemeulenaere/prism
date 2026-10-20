@@ -26,6 +26,15 @@ Several of this packet's blocks are written on another packet's version and must
 
 No other open packet modifies a block this one modifies.
 
+**Baseline update (task 1.1, 2026-10-20).** Re-based on `6600fa53` ("Archive vararg"): `operator-conventions`, `drop-and-clone-hooks` and `vararg` are archived. Every MODIFIED block was compared with the current main text:
+
+- The blocks written on other packets' versions match main now, apart from this change's own edits: `standard-library` "Intrinsic Operators" (now in main, so MODIFIED is right and the INFO line is gone), "The Collections Module Declares Lists and Their Helpers" and "Intrinsic Calls Are Typed by Their Signatures", `mir` "List Operations Are Built-In Calls", and `typed-tree` "List Operations Are Identified" (whose main text still calls `listOf` a built-in construction; this block corrects it to `prism/collections::listOf`).
+- No MODIFIED block drops a scenario of its main requirement, and no ADDED requirement exists in main.
+- Two main requirements would have gone stale and are added as MODIFIED blocks: `collections` "Lists Answer Membership Tests" (`contains` is declared by `/prism/core`), and `standard-library` "Intrinsic Declarations", whose scenario "An intrinsic with another signature is rejected" used `Int.toString(radix: Int)`, an intrinsic this change removes; it now uses `List<T>.removeLast(count: Int)`, and its fixture follows.
+- Every function and file the tasks name exists under that name, and the retired codec tags (5, 10, 11, 12, 38 and 39) are those of `crates/prism-mir/src/codec.rs`.
+
+`openspec validate core-library-in-prism --strict` is clean with no INFO line.
+
 ### The inventory
 
 Every `intrinsic` and `external` declaration under `library/prism/`, and every compiler special case for a library name, classified as one of:
@@ -365,6 +374,13 @@ The verifier compares the new AST field. No other layout rule changes.
   - Cold code generation adds `/prism/core`'s few Prism bodies, once per cache and shared by every workspace, plus one tiny instance per element type that uses `isEmpty` or `indices`.
   - Warm runs load cached units and instances, so no change is expected.
   - A regression of more than 5 % in a cold or warm median is investigated before archiving.
+- **Baseline (task 1.2)**, measured on `6600fa53` before any code change, release build, idle machine (load average 1.0 to 1.5, no other build running), 2026-10-20 13:22:
+  - `run_timing`, `examples/run/main.prism`, 20 runs: cold total to `main` median 10.55 ms (p90 12.09), front end 4.85 (p90 5.70), code generation 5.31 (p90 5.93), wall 13.60 (p90 15.49); warm total to `main` median 2.06 ms (p90 2.10), front end 1.18, code generation 0.48, wall 4.79 (p90 5.03). Target 15 ms met.
+  - `warm_run_timing` (front end / code generation, ms): `many_files` 1024 cold 216.6 / 202.1, warm 78.0 / 20.6, body edit 76.0 / 19.9; `many_instances` 1024 cold 19.5 / 174.0, warm 2.4 / 22.2, generic edit 2.7 / 160.4; `instance_chains` 1024 cold 332.6 / 461.5, warm 79.8 / 59.8.
+  - `ui_run_timing`: a click in an app of 1,000 texts, median 0.220 ms (target 1 ms met).
+  - `app_frame_timing` (medians, p99): counter click frame 0.003 ms (0.004); todo toggle recomposition 0.153 ms, frame 1.892 ms (p99 3.588); todo typing recomposition 1.499 ms, frame 2.408 ms (p99 4.424, so the "typing frame p99 under 4 ms" target is reported MISSED before this change, a target the test prints but does not assert); todo first frame 29.9 ms cold, 3.0 ms warm.
+  - `list_timing`: a million adds, median 7.07 ms (p90 9.45), target 20 ms met.
+  - `compile_timing` under `PRISM_ASSERT_TIMING=1`: all three tests pass (253 s); `member scope built once in 0.343 ms`; `library_imports_cost_per_file` at 4,096 files 184.9 ms of imports, 45.1 µs per file, 5.4 µs for members only.
 - **Check-cache reuse.** Library entries are keyed as before, and a workspace file's key now carries one member hash. `cache_tests.rs` checks that a second workspace reuses `prism/core.prism` and that a program without imports never mentions `prism/collections.prism`.
 
 ### D15. No new error code (autonomous)

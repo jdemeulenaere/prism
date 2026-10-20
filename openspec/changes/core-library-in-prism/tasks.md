@@ -10,14 +10,14 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 1. Reconcile and baseline
 
-- [ ] 1.1 Check that `operator-conventions`, `drop-and-clone-hooks` and `vararg` are archived, and stop if one is not.
+- [x] 1.1 Check that `operator-conventions`, `drop-and-clone-hooks` and `vararg` are archived, and stop if one is not.
   - Re-read the main `extension-functions`, `syntax`, `standard-library`, `type-system`, `collections`, `typed-tree`, `mir`, `compilation-and-abi`, `build-cache`, `formatting` and `diagnostics` specs.
   - Rebase every MODIFIED block on the current main text, keeping every scenario of the main requirement. This matters most for the blocks written on other packets' versions (design, "Baseline"): `standard-library` "Intrinsic Operators", "The Collections Module Declares Lists and Their Helpers" and "Intrinsic Calls Are Typed by Their Signatures", `mir` "List Operations Are Built-In Calls" and `typed-tree` "List Operations Are Identified".
   - Turn ADDED blocks whose requirement exists by then into MODIFIED.
   - Check the names the tasks use. In `crates/prism-parser/src/parser.rs`: `parse_extension_property`. In `crates/prism-ast/src/decl.rs`: `ExtensionPropertyDecl`. In `crates/prism-typechecker/src/checker.rs`: `ingest_file_abi`, `register_intrinsic_property`, `register_extension_decl`, `infer_member_access`, `int_property_read`, `builtin_member_call`, `infer_to_string_call`, `has_builtin_to_string`, `has_intrinsic_property`, `has_intrinsic_function`, `member`, `STRING_LENGTH`, `LIST_SIZE` and `LIST_INDICES`. Elsewhere: `MemberScope::from_abis` (`members.rs`), `MEMBER_MODULES` (`crates/prism-library/src/lib.rs`), `member_imports` (`crates/prism-resolver/src/graph.rs`), the unit construction in `crates/prism-mir/src/build/call.rs`, `BuiltinFunction`'s tags in `crates/prism-mir/src/codec.rs`, and the `ToString` arm of `crates/prism-codegen/src/lower.rs`.
   - Get `openspec validate core-library-in-prism --strict` clean with no INFO lines.
   - Record the reconciliation as a "Baseline update" paragraph in `design.md`.
-- [ ] 1.2 On an idle machine and a release build, before any code change, record in `design.md` (D14) the medians and 90th percentiles of:
+- [x] 1.2 On an idle machine and a release build, before any code change, record in `design.md` (D14) the medians and 90th percentiles of:
   - `cargo test --release -p prism-cli --test run_timing -- --ignored --nocapture` (cold and warm);
   - `--test warm_run_timing`, `--test ui_run_timing`, `--test app_frame_timing` and `--test list_timing`, each with `-- --ignored --nocapture`;
   - `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture`.

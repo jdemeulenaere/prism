@@ -87,6 +87,17 @@ The built-in types `Int`, `Double`, `Bool`, `Char`, `String`, `Unit`, `Nothing`,
 - **WHEN** `cargo test -p prism-cli --test library_tests` checks the library, and `prism dump-typed-tree` runs on a file declaring `import /prism/collections` and `fun f(): List<Int> = listOf(1, 2)`
 - **THEN** `library/prism/collections.prism` declares `public fun <T> listOf(vararg elements: T): List<T> = elements` and passes its checks, the intrinsic catalog has no `listOf`, and the body of `f` is a call of `prism/collections::listOf<Int>` whose argument is a call of `builtin varargList<Int>` with the literals `1` and `2`
 
+### Requirement: Intrinsic Declarations
+An `intrinsic fun` or `intrinsic val` MUST declare, without a body, a function or extension property whose calls the compiler lowers itself. The compiler MUST hold a catalog of its intrinsics. A library declaration naming no intrinsic of the catalog, or whose signature differs from the catalog's (visibility, receiver and mode, type parameters and bounds, parameter names and types, result), MUST be rejected with `E4029`.
+
+#### Scenario: An unknown intrinsic is rejected
+- **WHEN** a library test module declares `public intrinsic fun Int.squared(): Int`
+- **THEN** the type checker emits `E4029`, saying that the compiler provides no intrinsic `squared` on `Int`
+
+#### Scenario: An intrinsic with another signature is rejected
+- **WHEN** a library test module declares `public intrinsic mut fun <T> List<T>.removeLast(count: Int): T`
+- **THEN** the type checker emits `E4029`, showing the signature the compiler provides, `public intrinsic mut fun <T> List<T>.removeLast(): T`
+
 ### Requirement: Intrinsic Calls Are Typed by Their Signatures
 A call of an intrinsic MUST be checked as a call of its declared signature, except for those the catalog types by a rule:
 - `print` and `println` (`fun <T> print(value: &T)`) take an argument with a text form (type-system, "Output Built-In Arguments"), and `println` also none;

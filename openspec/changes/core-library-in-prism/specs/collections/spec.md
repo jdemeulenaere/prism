@@ -28,3 +28,14 @@ A call `xs.name(...)` or read `xs.name` on a `List<T>` MUST use its member of th
 #### Scenario: Extensions named like built-in members rejected
 - **WHEN** a file declares `fun <T> List<T>.add(element: T) {}`, `fun List<Int>.size(): Int = 0` and `fun <T> List<T>.isEmpty(): Bool = false`
 - **THEN** the type checker emits `E4010` for each, saying that the member of `/prism/core` always takes precedence
+
+### Requirement: Lists Answer Membership Tests
+`x in xs` and `x !in xs` on a `List<T>`, read through any `&`, `&mut` and `Heap<T>` layers, MUST call its `contains` member, declared `intrinsic operator` by `/prism/core`, borrowing `x`; they MUST be accepted exactly when `contains` is (`==` on `T`).
+
+#### Scenario: Membership in a list
+- **WHEN** `fun f(names: &List<String>, n: String): Bool = n in names && "x" !in names` is checked
+- **THEN** the file typechecks, each test calling the `contains` member with `n` and `"x"` borrowed, and `n` is not moved
+
+#### Scenario: Membership in a list of a type parameter rejected
+- **WHEN** `fun <T> has(xs: &List<T>, x: &T): Bool = x in xs` is checked
+- **THEN** the type checker emits `E4002`, as for `xs.contains(x)`
