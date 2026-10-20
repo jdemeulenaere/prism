@@ -1,0 +1,11 @@
+# entry: ../large.prism
+# example-apps: "Adding an item to a thousand recomposes every row once". The list's new
+# version reruns each row once, and typing afterwards skips them all again.
+click textfield
+type "x"
+dump recompositions
+click "Add"
+dump recompositions
+click textfield
+type "y"
+dump recompositions

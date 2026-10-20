@@ -12,7 +12,7 @@ Over the 1,000 items of `large.prism`, toggling an item MUST rerun only that ite
 - **THEN** the second section lists `ran 1 skipped 0` for `TodoScreen` and `ran 0 skipped 1000` for `TodoRow`, and no other composable that ran
 
 #### Scenario: Adding an item to a thousand recomposes every row once
-- **WHEN** the session `adding-an-item-to-a-thousand-recomposes-every-row-once` runs `large.prism` with `click textfield`, `type "x"`, `dump recompositions`, `click "Add"`, `dump recompositions`, `type "y"` and `dump recompositions`
+- **WHEN** the session `adding-an-item-to-a-thousand-recomposes-every-row-once` runs `large.prism` with `click textfield`, `type "x"`, `dump recompositions`, `click "Add"`, `dump recompositions`, `click textfield`, `type "y"` and `dump recompositions`
 - **THEN** the second section lists `ran 1001 skipped 0` for `TodoRow`, and the third `ran 0 skipped 1001`
 
 ## MODIFIED Requirements

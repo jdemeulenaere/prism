@@ -83,16 +83,10 @@ package compose fun TodoRow(todo: &Todo, todos: &MutableState<List<Todo>>): Unit
             modifier = Modifier.weight(1.0),
             color = if (todo.done.value) Color.Gray else Color.Unspecified,
         )
-        DoneBox(todo.done)
+        Checkbox(checked = todo.done.value, onCheckedChange = { todo.done.value = it })
         Spacer(Modifier.width(8.dp))
         Button(onClick = { removeTodo(todos, todo.id) }) {
             Text("Remove")
         }
     }
-}
-
-// An item's checkbox: it alone reads the item's done state, a restart scope that a toggle
-// recomposes without the list.
-package compose fun DoneBox(done: &MutableState<Bool>): Unit {
-    Checkbox(checked = done.value, onCheckedChange = { done.value = it })
 }

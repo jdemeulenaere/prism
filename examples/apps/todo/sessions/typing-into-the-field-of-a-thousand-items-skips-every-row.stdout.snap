@@ -1,0 +1,11 @@
+recompositions
+  apps/todo/large::LargeTodoApp ran 1 skipped 0
+  apps/todo/screen::FilterRow ran 1 skipped 0
+  apps/todo/screen::LeftCount ran 1 skipped 0
+  apps/todo/screen::TodoRow ran 1000 skipped 0
+  apps/todo/screen::TodoScreen ran 1 skipped 0
+recompositions
+  apps/todo/screen::FilterRow ran 0 skipped 1
+  apps/todo/screen::LeftCount ran 0 skipped 1
+  apps/todo/screen::TodoRow ran 0 skipped 1000
+  apps/todo/screen::TodoScreen ran 1 skipped 0

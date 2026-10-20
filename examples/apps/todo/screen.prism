@@ -72,20 +72,15 @@ package compose fun FilterRow(filter: &MutableState<Filter>): Unit {
 }
 
 // One item of `todos`: a checkbox showing whether it is done, its title and a button removing
-// it.
+// it. A restart scope of its own, kept by its item's identity: a toggle recomposes this row
+// alone, and typing into the field skips it.
 package compose fun TodoRow(todo: &Todo, todos: &MutableState<List<Todo>>): Unit {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        DoneBox(todo.done)
+        Checkbox(checked = todo.done.value, onCheckedChange = { todo.done.value = it })
         Spacer(Modifier.width(8.dp))
         Text(todo.title, modifier = Modifier.weight(1.0))
         Button(onClick = { removeTodo(todos, todo.id) }) {
             Text("Remove")
         }
     }
-}
-
-// An item's checkbox: it alone reads the item's done state, a restart scope that a toggle
-// recomposes without the list.
-package compose fun DoneBox(done: &MutableState<Bool>): Unit {
-    Checkbox(checked = done.value, onCheckedChange = { done.value = it })
 }

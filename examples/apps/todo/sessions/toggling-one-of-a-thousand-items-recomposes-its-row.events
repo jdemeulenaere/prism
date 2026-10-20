@@ -1,0 +1,6 @@
+# entry: ../large.prism
+# example-apps: "Toggling one of a thousand items recomposes its row". The second item's row
+# and the count of items left run; the screen and every other row do not.
+dump recompositions
+click checkbox 2
+dump recompositions

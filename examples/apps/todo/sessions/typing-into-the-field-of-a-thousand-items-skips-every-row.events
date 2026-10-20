@@ -1,0 +1,7 @@
+# entry: ../large.prism
+# example-apps: "Typing into the field of a thousand items skips every row". The screen runs
+# for the draft, and each of the 1,000 rows skips.
+click textfield
+dump recompositions
+type "a"
+dump recompositions
