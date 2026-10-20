@@ -1,0 +1,8 @@
+import /prism/core
+
+struct Box : Copy { val w: Int }
+val Box.twice: Int get() = w * 2
+fun main() { var i = 0; while (i < 4) { println(Box(i).twice); i += 1 } }
+// expect: ok
+// run: 0
+// watch: edits

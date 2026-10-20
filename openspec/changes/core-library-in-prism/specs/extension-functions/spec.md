@@ -35,7 +35,7 @@ A read of an extension property MUST call its getter with a shared borrow of the
 - **THEN** the type checker emits `E4004`, saying that `Int` cannot be called
 
 ### Requirement: Getter Bodies Are Extension Bodies
-A getter's body MUST be checked as the body of an extension function with a shared receiver, the property's type parameters and no parameters, returning the property's type. `this`, a bare name reading the receiver's fields, members and extensions, `return`, and the elision rules for borrows a body returns apply as in such a function. A getter is not a composable context.
+A getter's body MUST be checked as the body of an extension function with a shared receiver, the property's type parameters and no parameters, returning the property's type. `this`, a bare name reading the receiver's fields, members and extensions, `return`, and the elision rules for borrows a body returns apply as in such a function. A getter is not a composable context, and a reload swaps an edited getter's body at its next read, as a function's.
 
 #### Scenario: A getter with a block body
 - **WHEN** `struct Team { val members: List<String> }` and `val Team.label: String get() { if (members.isEmpty()) return "empty"; return members[0].clone() }` are declared and `fun main() { println(Team(listOf("ann", "bo")).label); println(Team(listOf()).label) }` runs with `--check-allocations`
@@ -48,6 +48,13 @@ A getter's body MUST be checked as the body of an extension function with a shar
 #### Scenario: A getter calling a composable rejected
 - **WHEN** `compose fun Leaf() {}`, `struct Box : Copy { val w: Int }` and `val Box.leaf: Int get() { Leaf(); return 1 }` are checked
 - **THEN** the type checker emits `E4008` for the call of `Leaf`
+
+#### Scenario: A getter edit reaches the next read
+- **WHEN** `struct Box : Copy { val w: Int }`, `val Box.twice: Int get() = w * 2` and `fun main() { var i = 0; while (i < 4) { println(Box(i).twice); i += 1 } }` run under the script `after line 2: edit main.prism main.prism.v2`, where `main.prism.v2` declares the getter `get() = w * 10` and the same `main`
+- **THEN** stdout holds `0`, `2`, `20` and `30`, and the exit status is 0: a getter is a function with a slot, swapped at its next call
+
+### Requirement: Extension Property Declarations Are Checked
+An extension property MUST be rejected with `E4010` when the file declares another extension property or extension function of the same name on the same receiver type constructor, when it is named like a field of its receiver struct or a variant of its receiver enum, or when it is named like a member of its receiver type (a member of a built-in type, or an intrinsic extension of a library type). An extension property and a top-level function or value MAY share a name.
 
 #### Scenario: A property and a function of one name rejected
 - **WHEN** a file declares `struct Box : Copy { val w: Int }`, `val Box.size: Int get() = w` and `fun Box.size(): Int = w`
