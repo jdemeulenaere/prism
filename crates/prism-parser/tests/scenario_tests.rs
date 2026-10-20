@@ -1993,3 +1993,60 @@ fn extension_properties_without_a_getter_rejected() {
         );
     }
 }
+
+/// syntax: "Field modifiers in both struct forms" (D1 of `field-visibility`).
+#[test]
+fn field_modifiers_in_both_struct_forms() {
+    let file = parse(concat!(
+        "struct Account { private var balance: Int, package val bank: String, public val owner: String, val note: String }\n",
+        "struct Session(private val id: Int, val name: String)\n",
+    ));
+    let fields = |index: usize| {
+        let Declaration::Struct(s) = &file.declarations[index] else {
+            panic!("expected a struct");
+        };
+        s.fields
+            .iter()
+            .map(|f| (f.name.clone(), f.visibility, f.is_var))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        fields(0),
+        vec![
+            ("balance".to_string(), Some(Visibility::Private), true),
+            ("bank".to_string(), Some(Visibility::Package), false),
+            ("owner".to_string(), Some(Visibility::Public), false),
+            ("note".to_string(), None, false),
+        ]
+    );
+    assert_eq!(
+        fields(1),
+        vec![
+            ("id".to_string(), Some(Visibility::Private), false),
+            ("name".to_string(), None, false),
+        ]
+    );
+}
+
+/// syntax: "Misplaced field modifiers rejected" (D1 of `field-visibility`).
+#[test]
+fn misplaced_field_modifiers_rejected() {
+    for source in [
+        "struct A { private private val x: Int }\n",
+        "struct B { private public val x: Int }\n",
+        "struct C(private x: Int)\n",
+        "enum E { X(private Int) }\n",
+    ] {
+        let error = prism_parser::parse_source(source).expect_err(source);
+        assert_eq!(error.code, "E2001", "{}", source);
+        assert!(
+            error
+                .message
+                .contains("takes one visibility modifier, followed by 'val' or 'var'")
+                && error.message.contains("enum payloads take none"),
+            "{}: {}",
+            source,
+            error.message
+        );
+    }
+}

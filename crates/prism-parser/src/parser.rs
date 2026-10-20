@@ -1339,6 +1339,38 @@ impl Parser {
         Ok(params)
     }
 
+    /// The visibility a modifier token names, if it is one.
+    fn visibility_of(kind: &TokenKind) -> Option<Visibility> {
+        match kind {
+            TokenKind::Private => Some(Visibility::Private),
+            TokenKind::Package => Some(Visibility::Package),
+            TokenKind::Public => Some(Visibility::Public),
+            _ => None,
+        }
+    }
+
+    /// A struct field's optional visibility modifier, which `val` or `var` must follow (D1 of
+    /// `field-visibility`).
+    fn parse_field_visibility(&mut self) -> Result<Option<Visibility>, ParseError> {
+        let Some(visibility) = Self::visibility_of(self.peek_kind()) else {
+            return Ok(None);
+        };
+        self.bump();
+        if !matches!(self.peek_kind(), TokenKind::Val | TokenKind::Var) {
+            return Err(Self::misplaced_field_modifier(self.peek().span));
+        }
+        Ok(Some(visibility))
+    }
+
+    /// The error for a repeated field modifier, one not followed by `val` or `var`, or one on
+    /// an enum payload.
+    fn misplaced_field_modifier(span: Span) -> ParseError {
+        ParseError::new(
+            "A struct field takes one visibility modifier, followed by 'val' or 'var', as in 'private val id: Int'; enum payloads take none",
+            span,
+        )
+    }
+
     fn parse_struct(
         &mut self,
         visibility: Visibility,
@@ -1356,6 +1388,7 @@ impl Parser {
             self.bump();
             while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
                 let f_start = self.peek().span;
+                let field_visibility = self.parse_field_visibility()?;
                 let is_var = match self.peek_kind() {
                     TokenKind::Var => {
                         self.bump();
@@ -1376,6 +1409,7 @@ impl Parser {
                 reject_stored_borrow(&fty, "Struct fields")?;
                 let f_end = fty.span;
                 fields.push(StructField {
+                    visibility: field_visibility,
                     is_var,
                     name: fname,
                     ty: fty,
@@ -1397,6 +1431,7 @@ impl Parser {
             self.expect(TokenKind::LBrace)?;
             while self.peek_kind() != &TokenKind::RBrace && !self.is_eof() {
                 let f_start = self.peek().span;
+                let field_visibility = self.parse_field_visibility()?;
                 let is_var = match self.peek_kind() {
                     TokenKind::Var => {
                         self.bump();
@@ -1422,6 +1457,7 @@ impl Parser {
                 reject_stored_borrow(&fty, "Struct fields")?;
                 let f_end = fty.span;
                 fields.push(StructField {
+                    visibility: field_visibility,
                     is_var,
                     name: fname,
                     ty: fty,
@@ -1518,6 +1554,9 @@ impl Parser {
             if self.peek_kind() == &TokenKind::LParen {
                 self.bump();
                 while self.peek_kind() != &TokenKind::RParen && !self.is_eof() {
+                    if Self::visibility_of(self.peek_kind()).is_some() {
+                        return Err(Self::misplaced_field_modifier(self.peek().span));
+                    }
                     let payload = self.parse_type()?;
                     reject_stored_borrow(&payload, "Enum variant payloads")?;
                     vfields.push(payload);

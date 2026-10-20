@@ -12970,12 +12970,14 @@ mod tests {
                     intrinsic: None,
                     fields: vec![
                         prism_ast::StructField {
+                            visibility: None,
                             name: "x".to_string(),
                             is_var: false,
                             ty: prism_ast::Type::named("Int", Span::dummy()),
                             span: Span::dummy(),
                         },
                         prism_ast::StructField {
+                            visibility: None,
                             name: "x".to_string(),
                             is_var: false,
                             ty: prism_ast::Type::named("Int", Span::dummy()),

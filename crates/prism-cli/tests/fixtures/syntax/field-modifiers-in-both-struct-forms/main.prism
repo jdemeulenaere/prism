@@ -1,0 +1,4 @@
+// expect: ok
+struct Account { private var balance: Int, package val bank: String, public val owner: String, val note: String }
+
+struct Session(private val id: Int, val name: String)

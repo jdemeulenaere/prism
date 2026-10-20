@@ -359,17 +359,24 @@ impl<'a> Printer<'a> {
     }
 
     /// A struct field; `val` is printed in the block form, and in the shorthand form when
-    /// written (D5).
+    /// written (D5), and a visibility modifier as written, which `val` or `var` always follows
+    /// (D8 of `field-visibility`).
     fn field(&mut self, field: &StructField, is_block_form: bool) -> Document {
+        let modifier = field
+            .visibility
+            .map_or(String::new(), |visibility| format!("{} ", visibility));
         let keyword = if field.is_var {
             "var "
-        } else if is_block_form || self.kind_at(field.span.start) == Some(&TokenKind::Val) {
+        } else if is_block_form
+            || field.visibility.is_some()
+            || self.kind_at(field.span.start) == Some(&TokenKind::Val)
+        {
             "val "
         } else {
             ""
         };
         concat(vec![
-            text(format!("{}{}: ", keyword, field.name)),
+            text(format!("{}{}{}: ", modifier, keyword, field.name)),
             self.ty(&field.ty),
         ])
     }

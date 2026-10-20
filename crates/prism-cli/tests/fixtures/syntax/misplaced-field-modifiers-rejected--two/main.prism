@@ -1,0 +1,2 @@
+// expect: E2001
+struct B { private public val x: Int }

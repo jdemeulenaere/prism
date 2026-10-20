@@ -16,9 +16,9 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement fi
 
 ## 2. Syntax and formatting (D1, D8)
 
-- [ ] 2.1 AST: `StructField` gains `visibility: Option<Visibility>`, `None` when unmarked. Update every construction and match on it: the parser, formatter, ABI extraction, type checker and test helpers. Verify with `cargo build --workspace`.
-- [ ] 2.2 Parser: accept one of `private`, `package` and `public` before `val`/`var` of a field, in block and shorthand structs. Reject with `E2001`: two modifiers, a repeated one, a modifier not followed by `val` or `var`, and a modifier on an enum payload, with the message of "Misplaced field modifiers rejected". Add fixtures under `syntax/` for "Field modifiers in both struct forms" and "Misplaced field modifiers rejected". Verify with `cargo test -p prism-parser -p prism-cli --test fixture_tests`.
-- [ ] 2.3 Formatter: print the modifier as written, before `val`/`var`, in both struct forms. `verify.rs` compares the new field. Add a fixture or `fmt_cli_tests.rs` case for "Field modifiers formatted", and an idempotency check over the new `syntax/` fixtures. Verify with `cargo test -p prism-formatter -p prism-cli --test fmt_cli_tests`.
+- [x] 2.1 AST: `StructField` gains `visibility: Option<Visibility>`, `None` when unmarked. Update every construction and match on it: the parser, formatter, ABI extraction, type checker and test helpers. Verify with `cargo build --workspace`.
+- [x] 2.2 Parser: accept one of `private`, `package` and `public` before `val`/`var` of a field, in block and shorthand structs. Reject with `E2001`: two modifiers, a repeated one, a modifier not followed by `val` or `var`, and a modifier on an enum payload, with the message of "Misplaced field modifiers rejected". Add fixtures under `syntax/` for "Field modifiers in both struct forms" and "Misplaced field modifiers rejected". Verify with `cargo test -p prism-parser -p prism-cli --test fixture_tests`.
+- [x] 2.3 Formatter: print the modifier as written, before `val`/`var`, in both struct forms. `verify.rs` compares the new field. Add a fixture or `fmt_cli_tests.rs` case for "Field modifiers formatted", and an idempotency check over the new `syntax/` fixtures. Verify with `cargo test -p prism-formatter -p prism-cli --test fmt_cli_tests`.
 
 ## 3. ABI (D6)
 

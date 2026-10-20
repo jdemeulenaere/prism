@@ -227,6 +227,9 @@ impl FunctionDecl {
 /// Struct field declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StructField {
+    /// The field's visibility modifier as written (`private val id: Int`), `None` when it has
+    /// none: an unmarked field is visible wherever its struct is (D1 of `field-visibility`).
+    pub visibility: Option<Visibility>,
     pub is_var: bool, // true for `var`, false for `val`
     pub name: String,
     pub ty: Type,
