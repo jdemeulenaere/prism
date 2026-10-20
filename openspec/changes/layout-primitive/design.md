@@ -25,6 +25,15 @@ The user is away. Every decision the user might take differently is marked **(au
 
 Library code in this design is written on that baseline. No open packet modifies a block this one modifies. Task 1.1 rebases each block on the main specs once they are archived. `layout-in-prism` (11b) is proposed alongside and lands after this change.
 
+**Baseline update (task 1.1, 2026-10-20, on `e3d0e070` "Archive compose-library-in-prism").** `vararg`, `core-library-in-prism`, `field-visibility` and `compose-library-in-prism` are archived. Reconciliation:
+
+- **MODIFIED blocks.** Each was compared with the current main text of `ui` ("Constraint Layout in Logical Pixels", "Layout Reuses Clean Measurements", "Script Targets by Kind", "Dumping the Laid-Out Tree", "Layout and Drawing After a Reload", "Layout and Drawing Take Linear Time") and `example-apps` ("The Toolkit Tour"). None changed since the proposal: every main scenario is kept, and only this change's sentences differ. No ADDED block names a requirement that exists by now.
+- **Names the tasks use** all exist as named: `Context::measure`, `measure_content`, `measure_box`, `measure_line`, `relayout_from`, `remeasure_dirty_children` and `Layout::run` (`layout.rs`); `NodeKind`, `Node`, `UiTree::set_on_value_change`, `value_change_pair`; `HandlerKind`, `HandlerTable`, `runtime::borrowed`, `runtime::run_handler`; `UI_FUNCTIONS`, `TreeBuilder`, `App::reload_point`, `App::settle`.
+- **How `compose-library-in-prism` landed.** `NodeId` is `package struct NodeId : Copy { package val word: Int }` and `HandlerId` a public struct over a `package` word; `Node(kind, update, content)` and `LeafNode(kind, update)` are `@ExplicitGroupsComposable` package functions of `/prism/compose/ui`; the setters are `package external fun prism_ui_*(node: Int, ...)`; registrations return an `Int` word. D9's `LayoutNode` is written on exactly this shape.
+- **`Layout::run` and the thread state.** Today the app calls `with_state(|state| layout.run(&mut state.tree, measurer))`, so the whole pass holds the thread's borrow. D14's rule means the pass itself moves into the thread state's reach: see D21.
+
+`openspec validate layout-primitive --strict` is clean with no INFO lines.
+
 **Current state** (main specs and code):
 
 - **Node kinds.** `crates/prism-ui/src/node.rs` has `NodeKind::{Window, Column, Row, Box, Text, Spacer, TextField}`. A node holds its arrangement and alignment, its decoded chain (`Vec<ChainEntry>`) and its layout state:
@@ -533,11 +542,30 @@ Rejected:
 - **`app_frame_timing`**:
   - every existing target is still met;
   - the paced toggle and typing sessions' `layout` medians may grow by at most 0.05 ms;
-  - a new session resizes `large.prism` between 800 × 600 and 800 × 601 fifty times, each a full relayout of about 7,000 nodes, 5,000 of them through their policies (seven nodes a row, five of them containers). Its `layout` p99 must be under 4 ms, it must report the median against task 1.2's native baseline (at most 3×), and every resize frame after the first must allocate nothing (`example-apps` "A Full Relayout of a Thousand Items").
+  - a new session resizes `large.prism` between 800 × 600 and 801 × 600 fifty times, each a full relayout of about 7,000 nodes, 5,000 of them through their policies (seven nodes a row, five of them containers). Its `layout` p99 must be under 4 ms, it must report the median against task 1.2's native baseline (at most 3×), and every resize frame after the first must allocate nothing (`example-apps` "A Full Relayout of a Thousand Items").
 - **Startup**: the todo app's first frame within 3 ms of its baseline cold and 1 ms warm, and under the 50 ms and 20 ms targets.
 - **`ui_run_timing`**: under 1 ms per click.
 
 A missed budget is investigated before archiving, as `compose-library-in-prism` D15 does.
+
+**Baseline (task 1.2, 2026-10-20, release build on `e3d0e070`, M4 Pro, no other build running).**
+
+| Measurement | Median | p99 / other |
+|---|---|---|
+| `ui_timing` full layout, 1,000 / 10,000 / 100,000 nodes | 0.066 / 0.493 / 2.708 ms | growth ×7.5, ×5.5; relayout / layout at 10,000: 0.0002 |
+| `ui_timing` display list, same trees | 0.035 / 0.259 / 1.829 ms | growth ×7.4, ×7.1 |
+| `app_frame_timing` counter click, frame | 0.003 ms | 0.003 ms |
+| todo toggle (paced), `layout` / frame | 0.002 / 1.958 ms | 0.005 / 3.686 ms |
+| todo typing (paced), `layout` / recomposition / frame | 0.002 / 1.499 / 2.474 ms | 0.004 / 3.031 / 4.489 ms (frame p99 target of 4 ms already missed before this change: the `strong-skipping` follow-up) |
+| todo toggle back to back, `layout` / frame | 0.000 / 0.159 ms | 0.000 / 0.202 ms |
+| todo first frame | 31.568 ms cold | 3.143 ms warm |
+| `ui_run_timing`, a click among 1,000 texts | 0.208 ms | |
+| `large.prism`, 50 × (`resize 800 601`, `frame`, `resize 800 600`, `frame`), `layout` | 0.017 ms | 0.023 ms; 0 allocations per frame, none in 99 of 101 |
+| `large.prism`, 50 × (`resize 801 600`, ..., `resize 800 600`, ...), `layout` | 0.177 ms | 0.196 ms; 0 allocations per frame, none in 99 of 101 |
+| `compile_timing` `ui-calls` 256 / 1024 / 4096, `compose` stage | 11.5 / 51.2 / 227.3 ms | ×4.7 per ×4 |
+| `compile_timing` `nested-compose-ui` 16 to 128, `compose` stage | 4.9 / 9.3 / 19.1 / 37.4 ms | ×2.01 per ×2 |
+
+**Correction of the resize session (autonomous).** A height change of one pixel does not relayout `large.prism` in full: past the first screen, the column gives its rows a main-axis maximum of 0 at either height, so they keep their constraints and their cached sizes (0.017 ms above). A width change gives every row a new cross-axis maximum, so each of the about 7,000 nodes is measured again (0.177 ms, the first frame's layout). The resize session and the scenario "Resizing a thousand items allocates nothing" therefore alternate between 800 × 600 and 801 × 600. Rejected: keeping the height change, which would measure the cache, not the policies.
 
 ### D19. Behaviour is unchanged; the tour shows a custom layout (autonomous)
 
