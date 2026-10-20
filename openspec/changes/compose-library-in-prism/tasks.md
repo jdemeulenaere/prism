@@ -11,7 +11,7 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 1. Reconcile and baseline
 
-- [ ] 1.1 Check that `drop-and-clone-hooks`, `vararg`, `core-library-in-prism` and `field-visibility` are archived, and stop if one is not.
+- [x] 1.1 Check that `drop-and-clone-hooks`, `vararg`, `core-library-in-prism` and `field-visibility` are archived, and stop if one is not.
   - Re-read the main `syntax`, `formatting`, `standard-library`, `compose`, `mir`, `typed-tree`, `code-generation`, `compilation-and-abi`, `ui`, `references` and `diagnostics` specs.
   - Rebase every MODIFIED and REMOVED block on the current main text, keeping every scenario of the main requirement. This matters most for the blocks written on `core-library-in-prism`'s versions (design, "Baseline"): `standard-library` "Library Modules Compile Like Workspace Files" and the REMOVED "The UI Intrinsics".
   - Turn ADDED blocks whose requirement exists by then into MODIFIED.
@@ -24,7 +24,7 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
     - `prism_compose_start`, `prism_compose_set_content` and `prism_ui_run_app` in `crates/prism-compose/src/entry.rs` and `crates/prism-ui/src/entry.rs`.
   - Get `openspec validate compose-library-in-prism --strict` clean with no INFO lines.
   - Record the reconciliation as a "Baseline update" paragraph in `design.md`.
-- [ ] 1.2 On an idle machine and a release build, before any code change, record in `design.md` (D15) the medians and 90th percentiles of:
+- [x] 1.2 On an idle machine and a release build, before any code change, record in `design.md` (D15) the medians and 90th percentiles of:
   - `cargo test --release -p prism-cli --test run_timing -- --ignored --nocapture` (cold and warm);
   - `--test warm_run_timing`, `--test ui_run_timing`, `--test app_frame_timing` and `--test list_timing`, each with `-- --ignored --nocapture`;
   - the `many-composables`, `composable-calls`, `ui-calls` and `nested-compose-ui` shapes of `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture`.

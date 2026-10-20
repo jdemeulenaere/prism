@@ -23,6 +23,14 @@ The user is away. Every decision the user might take differently is marked **(au
 
 No other open packet modifies a block this one modifies. Task 1.1 rebases each block on the main specs once those packets are archived.
 
+**Baseline update (task 1.1, on `946ea3a`, "Archive field-visibility").** `drop-and-clone-hooks`, `vararg`, `core-library-in-prism` and `field-visibility` are archived. Every MODIFIED block was compared with the current main text:
+
+- each keeps every scenario of its main requirement, and differs from it only by the changes this packet makes;
+- the two blocks written on `core-library-in-prism`'s versions match the archived text: "Library Modules Compile Like Workspace Files" differs only by `prism/composer.prism` in "An imported module is parsed", and the REMOVED "The UI Intrinsics" names the main requirement (whose scenario says `escaping` content for `runApp`, while the library declares it `attached`: the replacing scenario "The public UI declarations" follows the library);
+- no ADDED block names a requirement that exists in the main specs, and every REMOVED block names one.
+
+The code names the tasks use all exist: `IntrinsicStruct`, `Type::contains_keeper` (and `prism-borrowck`'s `places::contains_keeper`, which calls it), `checker.rs`'s `reject_composition_in_composable` (the `E4030` list), `is_composition_operation` (in the transform, and on `BuiltinFunction` in `prism-mir`), `uses_composition_operations` (`lib.rs`), `Rewriter::intrinsic`, `adapter_value`, `state_object`, `Rewriter::node`, `root_content_body`, `stability.rs`'s `WeakReference` id, `BodyOwner::RootContent`, `ComposerOperation`, the `RunApp` arm of `lower.rs`, and the three runtime entries. One more user of root content was found: the hot-reload contract's `BodyKind::RootContent` (`crates/prism-codegen/src/contract.rs`), which goes with `BodyOwner::RootContent` (its contract tag 7 is retired). The later packets `layout-primitive` and `layout-in-prism` were already written on this packet's design. `openspec validate compose-library-in-prism --strict` is clean.
+
 **Current state** (main specs and code, with `core-library-in-prism`'s changes assumed):
 
 - `/prism/compose/runtime` declares every name as an intrinsic. `/prism/compose/ui` declares `NodeId`, `HandlerId`, `Node`, `LeafNode` and `runApp` as intrinsics, beside its Prism toolkit code. `/prism/composer` is Prism over 20 externals, on `Int` words.
@@ -430,6 +438,23 @@ A regression of more than 5 % in a cold, warm or frame median is investigated be
 
 - No new stage. The annotation checks are per declaration and library-only, so workspace shapes cannot use them.
 - `compile_timing`'s `many-composables`, `composable-calls`, `ui-calls` and `nested-compose-ui` shapes are re-run under `PRISM_ASSERT_TIMING=1`. They must stay within ×4.6 per ×4 and should not slow down, since the transform does less.
+
+**Baseline (task 1.2)**, on `946ea3a` before any code change, release build, idle machine (2026-10-20):
+
+| Measurement | Median | p90 / p99 |
+|---|---|---|
+| `run_timing` cold, total to main / wall | 11.07 / 14.11 ms | p90 12.30 / 15.67 ms |
+| `run_timing` warm, total to main / wall | 2.10 / 4.87 ms | p90 2.14 / 4.95 ms |
+| `warm_run_timing` `many_files` 1024, cold / warm front end | 219.8 / 79.2 ms | |
+| `ui_run_timing`, a click among 1000 texts | 0.222 ms | |
+| `app_frame_timing` counter click frame | 0.003 ms | p99 0.004 ms |
+| `app_frame_timing` todo toggle recomposition / frame | 0.142 / 1.876 ms | p99 0.362 / 3.424 ms |
+| `app_frame_timing` todo typing recomposition / frame | 1.499 / 2.408 ms | p99 3.097 / 4.555 ms (the 4 ms p99 target was already missed) |
+| `app_frame_timing` todo idle click recomposition | 4.541 ms (once) | frames that change nothing allocate nothing: met |
+| `app_frame_timing` todo first frame, cold / warm | 31.1 / 3.06 ms | |
+| `list_timing`, a million adds | 7.55 ms | p90 9.48 ms |
+
+`compile_timing` (`PRISM_ASSERT_TIMING=1`, passed): `many-composables` 256/1024/4096 lower 9.2/40.8/167.3 ms, compose 2.1/9.5/39.4 ms; `ui-calls` compose 3.4/16.3/75.3 ms, borrow 11.5/51.7/226.5 ms; `composable-calls` 4096 compose 2.9 ms; `nested-compose-ui` 128 compose 16.6 ms, lower 50.0 ms (all stages ×1.9 to ×2.05 per ×2).
 
 ### D16. No new error code (autonomous)
 
