@@ -36,7 +36,7 @@ The grammar MUST accept `do body while (condition)` as a statement whose body is
 - **THEN** the type checker emits `E4001` for the `x` in `val y = x`
 
 ### Requirement: For Loops Over Ranges
-The grammar MUST accept `for (name in iterable) body` as a statement. The iterable, read through `&`, `&mut` and `Heap<T>` layers as conditions are, MUST be a `Range` or a list (`collections`, "For Loops Over Lists"), and is otherwise `E4002`, naming both. It is evaluated once, before the first iteration. The loop variable MUST be a fresh immutable binding in each iteration, an `Int` over a range and a borrow of the element over a list, in a scope enclosing the body, so the body may shadow it.
+`for (name in iterable) body` MUST be a statement. Its iterable, read through `&`, `&mut` and `Heap<T>` layers, MUST be a `Range`, a list (`collections`) or a type with the cursor protocol (`operators`), else `E4002` naming them, and is evaluated once, before the first iteration. The loop variable MUST be a fresh immutable binding per iteration, in a scope enclosing the body, which may shadow it: an `Int` over a range, an element borrow over a list, `next`'s result over a cursor.
 
 #### Scenario: Counting loop over a half-open range
 - **WHEN** `fun f(n: Int): Int { var sum = 0; for (i in 0..<n) { sum = sum + i }; return sum }` is checked
@@ -166,3 +166,7 @@ Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while
 Decisions from `collections` (planned autonomously on 2026-10-18, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **`for` iterates lists too, without a protocol** (D9, D10; supersedes "`for` iterates only the built-in `Range` for now" above). The iterable is a `Range` or a `List`, read through `&`, `&mut` and `Heap<T>` layers; over a list the variable is a `&T` (or `&mut T`) per element, and the list is borrowed for the whole loop. A user-visible iteration protocol waits for traits (`collections`, "Design Rationale").
+
+Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
+
+- **Other types iterate through a cursor protocol** (D11; supersedes "without a protocol" above). A `for` over any type other than `Range` and `List` calls its `iterator`, `hasNext` and `next` operators, the collection itself serving the protocol with a cursor holding no reference, since an iterator object borrowing its collection would be a struct holding a borrow. The loop variable is `next`'s result.

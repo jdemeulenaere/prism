@@ -302,6 +302,13 @@ The formatter MUST print a file's imports sorted by path, a root-anchored path (
 - **WHEN** formatting `import widgets\n// The core.\nimport /prism/core\nfun main() {}`
 - **THEN** the result is `import widgets\n// The core.\nimport /prism/core\n\nfun main() {}\n`
 
+### Requirement: Operator Syntax Is Printed
+`prism fmt` MUST print `operator` in the canonical modifier order (visibility, `external` or `intrinsic`, `operator`, `compose`, receiver mode), index lists as `a[i, j]` with one space after each comma, and `in` and `!in` with one space on each side, breaking an index list as an argument list.
+
+#### Scenario: Operator syntax formatted
+- **WHEN** `prism fmt -` reads `public  operator mut fun Bag.get( index :Int ):&mut Item = &mut items[index]`, `val c = m[ 1,2 ]` and `val b = x  !in xs`
+- **THEN** it writes `public operator mut fun Bag.get(index: Int): &mut Item = &mut items[index]`, `val c = m[1, 2]` and `val b = x !in xs`
+
 ## Design Rationale
 
 Decisions from `prism-fmt` (planned autonomously on 2026-10-17, reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):
@@ -343,3 +350,7 @@ Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled w
 Decisions from `explicit-library` (planned and implemented on 2026-10-20, and logged in `docs/decisions-for-review.md`):
 
 - **Imports are sorted** (D9). Explicit imports multiply (a UI file imports up to five library modules), and an order that depends on who added which import first churns diffs, so the formatter sorts a file's imports by path text, a root-anchored path with its leading `/`, which puts root-anchored imports before sibling ones and library imports among the root-anchored ones; a stable sort keeps duplicates in order. Imports have no order to preserve: `E4012` and the Phase 1 binder treat them as a set, and only the check key hashes them in order. A comment from the first import to the end of the last import's line keeps the written order, so no comment moves relative to code; the verifier compares imports as sorted lists. Rejected: the written order, blank-line groups (library, root-anchored, sibling), and moving comments with their import.
+
+Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
+
+- **Operator syntax is printed, with no new layout rule** (D17): `operator` in the canonical modifier order, index lists like argument lists, `in` and `!in` spaced.

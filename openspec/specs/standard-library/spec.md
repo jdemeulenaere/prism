@@ -307,6 +307,17 @@ A scenario of these specifications whose program uses a library function, extens
 - **WHEN** a file declaring `import /prism/compose/runtime` declares `compose fun Counter() { val count = remember { mutableStateOf(0) }; SideEffect { } }` and `public fun counter(): MutableState<Int> = mutableStateOf(0)`
 - **THEN** it typechecks, and `prism abi` writes the signature of `counter` as `public fun counter(): MutableState<Int>`
 
+### Requirement: Intrinsic Operators
+An `intrinsic` declaration MAY carry `operator` when the catalog lists the intrinsic as an operator: `List<T>.contains` of `/prism/collections` is declared `public intrinsic operator fun <T> List<T>.contains(element: &T): Bool`. A declaration whose `operator` flag differs from the catalog's MUST be rejected with `E4029`, as any other signature difference.
+
+#### Scenario: The list membership operator
+- **WHEN** a file declares `fun f(xs: &List<Int>): Bool = 3 in xs`
+- **THEN** the file typechecks, `in` calling the intrinsic member `contains` of `List`
+
+#### Scenario: An intrinsic's operator flag must match the catalog
+- **WHEN** a library test module declares `public intrinsic fun <T> List<T>.contains(element: &T): Bool` without `operator`, or `public intrinsic operator fun <T> List<T>.indexOf(element: &T): Int`
+- **THEN** the type checker emits `E4029` for each, showing the signature the compiler provides
+
 ## Design Rationale
 
 Decisions from `standard-library` (planned autonomously on 2026-10-18, implemented and reviewed the same day, and logged in `docs/decisions-for-review.md`). Why `prism` is a reserved root package is in the Design Rationale of `package-resolution`.
@@ -361,3 +372,7 @@ Decisions from `explicit-library` (review item A4, agreed with the user on 2026-
 - **Scenarios omit library imports** (D12). A scenario showing no import is read with the imports of the library modules it uses, which its fixture declares; scenarios about imports show them.
 - **Module names unchanged** (D13). `print` stays in `/prism/core`; splitting the core is `library-in-prism`'s decision.
 - **A library type named without its import is `E4001`** (D15, at review). Unknown type names stay opaque (type-system), so `fun f(s: MutableState<Int>)` without the runtime import typechecked until a member use, and six fixtures passed after the migration only for that reason. The checker records the annotation names that lower to an opaque type, and the driver reports those the library declares as a public struct or enum as `E4001` (`UnresolvedTypeName`) with the import help, dropping the later `E4006` on that value; other unknown names stay opaque. Cost: none unless a file names an unknown type. Rejected: rejecting every unknown name now (it breaks the `E6001` scenarios, which reach the backend through unknown types; the ROADMAP item stays), and giving the checker the library's type names (the index on every program's success path).
+
+Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
+
+- **Intrinsic operators** (D8). The catalog records whether an intrinsic is an operator, and a declaration whose `operator` flag differs is `E4029`; `List<T>.contains` is the only one, serving `in` and `!in`.

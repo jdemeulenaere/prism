@@ -431,6 +431,21 @@ Phase 2 of a workspace file MUST see the ABIs of its direct imports and, after t
 - **WHEN** a file without imports declares `fun f(xs: &List<Int>): Int = xs.size` and `fun g(): Int = listOf(1).size`
 - **THEN** `f` typechecks, and `g` is rejected with `E4001` for `listOf`, although `/prism/collections` is an input of the file
 
+### Requirement: Operator Functions and Equality Operators in the ABI
+Phase 1 MUST record whether an exported function is `operator`, and, in the record of an exported struct or enum and in its definition among the reachable types, whether it has an `equals` operator; the ABI hash and the structural hash of definitions MUST cover both. Editing an operator function's body MUST change neither.
+
+#### Scenario: Marking a function operator changes the hash
+- **WHEN** `public fun Vector2.plus(other: Vector2): Vector2` in `geometry/vector.prism` becomes `public operator fun Vector2.plus(other: Vector2): Vector2`
+- **THEN** the exported ABI hash of `geometry/vector` changes, and importers are re-checked
+
+#### Scenario: Adding an equality operator changes the type's definition
+- **WHEN** `models/user.prism`, which exports `public struct User { val id: Int, val name: String }`, gains `public operator fun User.equals(other: &User): Bool = id == other.id`
+- **THEN** its ABI records that `User` has an `equals` operator, its ABI hash changes, and the instance key of any instance whose type arguments reach `User` (`List<User>`'s glue) changes
+
+#### Scenario: Editing an operator body recompiles nothing downstream
+- **WHEN** the body of the exported `equals` or `plus` of `models/user` changes
+- **THEN** the exported ABI hash is unchanged, so no importer is re-checked
+
 ## Design Rationale
 - **The ABI comes from the AST and the direct imports' exported type names, never from bodies.** Explicit types on exported declarations let Phase 1 run before any body is checked (`type-checker-core`). Phase 1a reads each file's exported struct and enum names from its AST alone. Phase 1b then binds each nominal name in an exported signature to the file's own declarations or to the one direct import exporting it, reading only those 1a outputs, so import cycles still work and no body is read (`typechecker-soundness`, D4).
 - **ABI types are structured trees, not strings** (`typechecker-soundness`, D4). Importers once re-parsed `Display` strings, which split higher-order types wrongly and resolved names in the importer's scope. A tree recorded once is exact, hashing it structurally (a tag byte per node) covers structure rather than formatting, and each bound nominal type records whether it is a struct or an enum, so an importer can type a value of a type whose module it does not import. A balanced-parenthesis string parser was rejected: two parsers can drift, and names would still bind in the wrong scope. The module path is part of the hash, because it is part of every exported type's identity.
@@ -500,3 +515,7 @@ Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by 
 Decisions from `explicit-library` (review item A4, agreed with the user on 2026-10-20; the mechanism decided while proposing and implementing, and logged in `docs/decisions-for-review.md`):
 
 - **Member modules replace the prelude modules as implicit inputs** (D2, D14). With no prelude, a workspace file's Phase 2 sees its direct imports and, after them, only the members of the built-in types that `/prism/core` and `/prism/collections` declare, through one `MemberScope` per graph shared by every checker (one `Arc` copy per file and one lookup per member the file's own and imported members miss). The two member modules are still parsed for every program and counted by check keys, after the direct imports; `/prism/compose/runtime` is an input only of the files that import it. Instances of library generics are planned from imports, as any import's. Library files see neither. Rejected: members typed from the catalog with no module loaded, and a per-file member scope from imports only (`s.length` would need an import).
+
+Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
+
+- **Operator flags and equality operators are in the ABI** (D15). `ExportedSymbol::Function::is_operator` and an `equality` flag on struct and enum symbols and reachable definitions are covered by the ABI hash and the structural hash of definitions, so marking a function `operator` or adding `equals` re-checks importers and changes instance keys reaching the type, while editing an operator's body changes nothing downstream. An importer reads the flag from both the exported symbols and the reachable definitions (review fix).

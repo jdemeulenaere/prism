@@ -711,6 +711,17 @@ A weak capture MUST be held in a closure's environment as one word that owns not
 - **WHEN** `compose fun Show(s: &String) {}` and `compose fun Screen(items: &State<List<String>>) { Show(items.value[0]) }` are declared and `prism dump-clif main.prism` runs
 - **THEN** `main::Screen` calls `prism_compose_state_version` with the handle and the record of `List<String>`, and passes its result as the last argument of its call of `main::Show`
 
+### Requirement: Equality Calls a Type's Equality Operator
+Where the equality expansion or an equality glue function compares two values of a struct or enum with an `equals` operator, it MUST call that function, through the function table, with the addresses of the two values, instead of expanding its fields or payloads, counting one comparison toward the inline budget. Glue of nullables, boxes, lists, kept values and state records MUST reach it the same way.
+
+#### Scenario: Equality expansion calling equals
+- **WHEN** `prism dump-clif main.prism` runs on a file declaring `struct User { val id: Int, val name: String }`, `operator fun User.equals(other: &User): Bool = id == other.id`, `struct Team { val lead: User, val size: Int }` and `fun same(a: &Team, b: &Team): Bool = a == b`
+- **THEN** `same` compares `size` inline and calls the function of `User.equals` for `lead`, and no code compares the `name` strings
+
+#### Scenario: List search calling equals
+- **WHEN** `prism dump-clif main.prism` runs on a file declaring that `User` and `fun has(xs: &List<User>, u: &User): Bool = xs.contains(u)`
+- **THEN** the index-of glue of `List<User>` calls the function of `User.equals` for each element compared
+
 ## Design Rationale
 
 Decisions from `codegen-core` (planned autonomously on 2026-10-17, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
@@ -861,3 +872,7 @@ Decisions from `strong-skipping` (review item A1, agreed with the user on 2026-1
 - **Version words in machine signatures** (D4, D21). A composable's signature, and a composable closure's, ends with one 64-bit version word per borrow parameter (shared or mutable, whatever its referent) after the composer and change words, and a call of a composable function value passes them after the change words; the backend reads them from the MIR's parameter lists, so a function value and every function type it converts to in place agree.
 - **Identity slot records** (D7). The record of a kept borrow's type `&T` or `(&T)?` has `&T`'s fingerprint, size 16, alignment 8, no drop entry and generated glue `<unit>#identity(<type>)` comparing both words; `Keep` of an identity stores the two words in a 16-byte stack slot for `prism_compose_keep`. A reload that changes `T` changes the fingerprint, so the slot resets. Rejected: an untyped two-word slot, a new runtime entry.
 - **`state version` is one call** (D3). `prism_compose_state_version` takes the handle word and the value's record and returns the version, with the located error test of the other state operations; `prism_compose_remember_slot` stores a lent `remember` value in a new block (D19 of the `compose` rationale).
+
+Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
+
+- **A type's `equals` is called by the equality expansion and every glue** (D16). Expanding equality of a struct or enum with an `equals` operator emits a call of that function through the function table with the two addresses, counting one comparison of the inline budget, and the type gets no structural glue; nullable, box, list, kept-value, slot-record and closure-environment equality reach it through the same expansion, so every comparison of the type agrees.

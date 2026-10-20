@@ -44,7 +44,7 @@ The type checker MUST infer types for unannotated `val` and `var` bindings, enfo
 - **THEN** the type checker emits `E4004` twice, each saying `type 'Double' cannot be called as a function`: the alias `Float` is the same type, and no message calls it `Float`
 
 #### Scenario: Ordering comparison needs Int, Double or Char
-- **WHEN** `<`, `<=`, `>` or `>=` compares two `Int`s, two `Double`s or two `Char`s, it has type `Bool`; when it compares two `Bool`s (`false < true`), two `String`s, values of different types (`1 < 2.0`), or any other type
+- **WHEN** `<`, `<=`, `>` or `>=` compares two `Int`s, two `Double`s or two `Char`s, it has type `Bool`; when it compares two `Bool`s (`false < true`), two `String`s, values of different types (`1 < 2.0`), or any other type, and no `compareTo` operator function of the left operand's type applies (`operators`)
 - **THEN** the type checker rejects it with `E4002` through `OperatorMismatch`, whose message names the operator and both operand types (`operator '<' cannot be applied to 'Bool' and 'Bool'`) and whose help names the accepted types, rather than a mismatch between two identical types
 
 #### Scenario: Reassignment to immutable val rejected
@@ -88,8 +88,8 @@ The type checker MUST infer types for unannotated `val` and `var` bindings, enfo
 - **THEN** the result is `A?`, not `A??`, and the chain resolves `name` against `A` to give `String?`
 
 #### Scenario: Indexing expression evaluation
-- **WHEN** indexing into a collection or array `target[index]`
-- **THEN** `index` must evaluate to `Int` and the expression produces the element type (or emits `E4002` if incompatible)
+- **WHEN** indexing into a `List` or a `String`, `target[index]`
+- **THEN** `index` must evaluate to `Int` and the expression produces the element type (or emits `E4002` if incompatible); indexing any other type calls its `get` operator function, whose parameters type the indices (`operators`)
 
 ### Requirement: Function Signature and Invocation Typechecking
 Function calls and closures MUST validate argument count, argument types, default parameter handling, and enforce composable calling context constraints across closure boundaries.
@@ -517,7 +517,7 @@ A half-open range `a..<b` MUST be typed exactly like a closed range `a..b`: both
 - **THEN** the program typechecks without errors
 
 ### Requirement: Compound Assignment Typing
-`t op= v` MUST typecheck as `t = t op v` with `t` written once. The target MUST be writable under the rules for `=` (`E4003` otherwise). The operator MUST apply to the target's type and the value's type under the operator rules: `Int` with `Int` and `Double` with `Double` for every compound operator, and `String` with `String` for `+=` only. Otherwise the type checker MUST report `E4002`, with help naming the operand types the operator accepts.
+`t op= v` MUST typecheck as `t = t op v` with `t` written once. The target MUST be writable under the rules for `=` (`E4003` otherwise). The operator MUST apply to the target's type and the value's type: built in for `Int` with `Int` and `Double` with `Double` for every compound operator and `String` with `String` for `+=` only, else through an operator function (`operators`). Otherwise the type checker MUST report `E4002`, with help naming the operand types the operator accepts.
 
 #### Scenario: Compound assignment of numbers and strings
 - **WHEN** a body runs `var n = 1; n += 2; n -= 1; n *= 3; n /= 2; n %= 2`, `var d = 1.5; d += 0.5; d %= 1.0` and `var s = "a"; s += "b"`
@@ -1083,3 +1083,7 @@ Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by 
 Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
 - **`attached` in function types converts contravariantly** (D9). A function type converts to one where an unmarked parameter is `attached`, or an `attached` one `escaping`, and nothing else converts; `MutableState<T>` converts to `State<T>` by value and behind a shared reference, keeping the representation (D5). `remember`'s result is typed by the catalog's rule: a copy of a `Copy` value, else a shared borrow (D6).
+
+Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
+
+- **Indexing, ordering and compound assignment reach operator functions** (D3, D13). Built-in operators apply first, from the operand types after their layers; otherwise the receiver's operator function is called, and `t op= v` is `t = t op v` with the target written once, a consuming function needing a whole binding.

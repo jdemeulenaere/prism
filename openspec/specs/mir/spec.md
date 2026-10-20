@@ -701,6 +701,24 @@ A composable closure that captures a dereference of a reference MUST also captur
 - **WHEN** `prism dump-mir --composed` runs on a file declaring `compose fun Show(s: &String) {}` and `compose fun Screen(items: &State<List<String>>) { for (s in items.value) { key(s.length) { Show(s) } } }`
 - **THEN** `main::Screen` builds the closure value of the `key` lambda from a borrow of `s` and then a borrow of the local holding the version it passes for `s`, and the lambda's body passes a copy of its last capture local as the version argument of its call of `main::Show`
 
+### Requirement: Cursor Loops Call the Protocol
+A cursor loop MUST lower to: a borrow of the iterable for the whole loop, a cursor local assigned the call of `iterator` with that borrow reborrowed shared, a loop header calling `hasNext` with a reborrow and a shared borrow of the cursor and branching on its result, a body block that assigns `next`'s result (called with a reborrow of the loop's mode and a mutable borrow of the cursor) to the variable, and an exit dropping the cursor. `continue` MUST jump to the header.
+
+#### Scenario: Cursor loop MIR
+- **WHEN** `prism dump-mir main.prism` runs on a file declaring the `Bag` cursor protocol of `operators` and `fun f(b: &Bag) { for (item in b) { if (item.name == "x") continue } }`
+- **THEN** the MIR of `f` calls `iterator` once before the loop, calls `hasNext` in the header block with `&cursor`, calls `next` with `&mut cursor` at the start of each iteration, jumps from the `continue` to the header, and marks the cursor's storage dead on the exit edge
+
+### Requirement: Compound Assignments Through Operator Functions Lower Once
+A compound assignment through an operator function MUST evaluate its target place once, call the function with that place as the receiver (borrowed, or moved for a consuming receiver) and the value, and assign the result to the same place, dropping the old value first unless it was moved.
+
+#### Scenario: Compound assignment MIR
+- **WHEN** `prism dump-mir main.prism` runs on a file declaring `struct Text { val s: String }`, `operator fun Text.plus(other: &Text): Text = Text(s + other.s)` and `fun f(xs: &mut List<Text>, i: Int, t: &Text) { xs[i] += t }`
+- **THEN** the MIR of `f` computes the index place once, borrows the element for the call of `plus`, drops the old element and assigns the call's result to that same place
+
+#### Scenario: Consuming compound assignment MIR
+- **WHEN** `prism dump-mir main.prism` runs on a file declaring `struct Text { val s: String }`, `operator consuming fun Text.plus(other: &Text): Text = Text(s + other.s)` and `fun g(t: &Text): Text { var a = Text("x"); a += t; return a }`
+- **THEN** the MIR of `g` moves `a` into the call of `plus` and assigns the call's result to `a`, with no drop of the moved value
+
 ## Design Rationale
 Decisions from `mir-lowering` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with `prism dump-mir` for snapshot tests; the rest decided while proposing, implementing and reviewing the change and logged in `docs/decisions-for-review.md`). The consumers are the borrow checker (`borrowck-moves`, `borrowck-exclusivity`, `borrowck-elision`), drop elaboration, closure conversion, the Cranelift backend, `hot-reload` and `compose-transform`.
 
@@ -835,3 +853,7 @@ Decisions from `strong-skipping` (review item A1, agreed with the user on 2026-1
 - **Hidden version captures** (D6). A composable closure built in a composable body gets one hidden `Int` capture, `$version(<path>)`, per capture holding a reference and per borrowed capture of a place reached through one (or through such a capture of its author), so `key(todo.id) { TodoRow(todo) }` and `Column { ... }` keep identities. A borrowing closure borrows the local holding the version (its author's version local, `$version` argument or hidden capture, or a temporary for a constant), so its environment stays in the creating frame and a value built in an earlier iteration reads a reference and its version as they are now; an owning closure copies it. Closures built outside composable bodies get none. Rejected: owned copies always (one environment allocation per row per pass, found by the benchmark), losing identities inside lambdas, inlining `key`'s content.
 - **A kept identity** (D7). `Keep(&T)` of an identity takes the reference, its version and the passed bits, and keeps them in one 16-byte slot of type `&T`; the restart function reads the reference with `KeptParameter` and the version with `KeptVersion`. Rejected: a two-word MIR value (MIR has no pair type), two slots per parameter.
 - **Instance requests recorded per body** (found at review while timing `inst`). `Body::requests_instances` records whether a call of the body names a generic with type arguments; the builder, the restart and root-content constructors and the codec's decoder compute it from the body's blocks while they are at hand, every other pass keeps it, and the validator checks it. A file's summary then reads only the bodies that request instances: scanning every 360-byte block of a large composed file outgrew the caches (the `inst` stage of `borrowed-arguments` grew x5.4 and x6.3 per x4).
+
+Decisions from `operator-conventions` (planned autonomously on 2026-10-20 for part L1 of the review's agreed item A4, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`; the conventions themselves are in `operators`):
+
+- **Cursor loops and compound assignments lower to existing shapes** (D14). A cursor loop is a header calling `hasNext` and a body calling `next`, the cursor dropped on exit; a compound assignment through an operator function evaluates its target once. No new MIR form, so the borrow checker and the backend need nothing new.
