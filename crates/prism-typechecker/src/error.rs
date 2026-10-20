@@ -16,6 +16,16 @@ pub enum TypeError {
         import_suggestions: Vec<String>,
     },
 
+    /// E4001: An annotation names a type that is neither built in, a type parameter in scope,
+    /// nor a struct or enum the file declares or imports (D15 of `explicit-library`).
+    UnresolvedTypeName {
+        name: String,
+        span: Span,
+        /// The library modules declaring a public struct or enum `name`, whose import would
+        /// resolve it, which the driver fills before rendering; empty when built.
+        import_suggestions: Vec<String>,
+    },
+
     /// E4001: A bare name found only on an outer receiver, a field (`field`) or an extension
     /// of `receiver`, which the innermost lambda with a receiver hides (D4 of
     /// `receiver-lambdas`).
@@ -579,6 +589,7 @@ impl TypeError {
     pub fn code(&self) -> &'static str {
         match self {
             TypeError::UnresolvedSymbol { .. } => "E4001",
+            TypeError::UnresolvedTypeName { .. } => "E4001",
             TypeError::OuterReceiverName { .. } => "E4001",
             TypeError::UnboundPatternName { .. } => "E4001",
             TypeError::ThisOutsideExtension { .. } => "E4001",
@@ -634,6 +645,7 @@ impl TypeError {
     pub fn span(&self) -> Span {
         match self {
             TypeError::UnresolvedSymbol { span, .. } => *span,
+            TypeError::UnresolvedTypeName { span, .. } => *span,
             TypeError::OuterReceiverName { span, .. } => *span,
             TypeError::UnboundPatternName { span, .. } => *span,
             TypeError::CannotTakeApart { span, .. } => *span,
@@ -690,6 +702,9 @@ impl TypeError {
         match self {
             TypeError::UnresolvedSymbol { name, .. } => {
                 format!("unresolved symbol '{}'", name)
+            }
+            TypeError::UnresolvedTypeName { name, .. } => {
+                format!("unresolved type '{}'", name)
             }
             TypeError::MissingContext {
                 function,

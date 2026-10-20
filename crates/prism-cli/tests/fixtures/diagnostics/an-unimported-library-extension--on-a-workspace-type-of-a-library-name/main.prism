@@ -1,0 +1,7 @@
+// expect: E4006
+// run: 1
+struct Composition(val n: Int)
+
+fun h(c: &Composition): Bool = c.recompose()
+
+fun main() {}

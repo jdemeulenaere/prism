@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+import /prism/core
+
+struct Composition(val n: Int)
+
+fun size(c: &Composition): Int = c.n
+
+fun main() { println(size(Composition(3))) }

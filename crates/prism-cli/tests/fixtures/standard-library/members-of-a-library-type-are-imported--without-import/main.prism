@@ -1,4 +1,4 @@
-// expect: E4006
+// expect: E4001
 // run: 1
 fun f(scope: RecomposeScope) { scope.invalidate() }
 

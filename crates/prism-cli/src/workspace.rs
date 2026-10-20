@@ -857,6 +857,13 @@ fn typecheck_file(
     // Pass 1 (file-level forward declarations) and Pass 2 (function body checks)
     let tree = checker.check_module(&node.source_file);
     let mut errors = checker.errors;
+    // A library type named without its import is an error, not an opaque type, in every file
+    // (D15 of `explicit-library`).
+    crate::library_index::reject_unimported_library_types(
+        &graph.library,
+        &checker.unknown_type_names,
+        &mut errors,
+    );
     // A workspace file's unresolved library names get help naming their import; a library
     // file imports its siblings by another form (D8 of `explicit-library`).
     if !node.is_library() {

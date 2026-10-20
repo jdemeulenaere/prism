@@ -1,0 +1,10 @@
+error[E4001]: unresolved type 'Composition'
+  --> main.prism:3:24
+    3 | struct Holder { val c: Composition }
+      |                        ^
+   = help: 'Composition' is declared by the library module '/prism/compose/runtime': add 'import /prism/compose/runtime'
+error[E4001]: unresolved type 'MutableState'
+  --> main.prism:5:11
+    5 | fun f(s: &MutableState<Int>?) {}
+      |           ^
+   = help: 'MutableState' is declared by the library module '/prism/compose/runtime': add 'import /prism/compose/runtime'

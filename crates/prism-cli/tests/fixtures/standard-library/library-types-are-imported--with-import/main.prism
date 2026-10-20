@@ -1,0 +1,6 @@
+// expect: ok
+import /prism/compose/runtime
+
+struct Holder { val c: Composition }
+
+fun f(s: &MutableState<Int>?) {}

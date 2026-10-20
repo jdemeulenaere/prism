@@ -647,6 +647,11 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
             name,
             import_suggestions,
             ..
+        }
+        | TypeError::UnresolvedTypeName {
+            name,
+            import_suggestions,
+            ..
         } => (name, import_suggestions),
         TypeError::UnknownField {
             field_name,

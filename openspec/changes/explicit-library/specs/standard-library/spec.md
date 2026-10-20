@@ -6,7 +6,7 @@
 ## ADDED Requirements
 
 ### Requirement: Library Names Are Imported
-A file MUST see a public function, extension, struct, enum or value of a library module only through an import of that module, as for a workspace module: no library module is imported implicitly. Without the import, a use MUST be reported as for any unknown name (`E4001`) or member (`E4006`), with help naming the import (diagnostics, "Unresolved Library Names Suggest Their Import").
+A file MUST see a public function, extension, struct, enum or value of a library module only through an import of that module, as for a workspace module: no library module is imported implicitly. Without the import, a use MUST be reported as for any unknown name (`E4001`) or member (`E4006`), and an annotation naming such a struct or enum MUST be `E4001`, never an opaque type, each with help naming the import (diagnostics, "Unresolved Library Names Suggest Their Import").
 
 #### Scenario: Library functions are imported
 - **WHEN** a file without imports declares `fun main() { println(1) }`, and the same file then declares `import /prism/core`
@@ -18,7 +18,11 @@ A file MUST see a public function, extension, struct, enum or value of a library
 
 #### Scenario: Members of a library type are imported
 - **WHEN** a file without imports declares `fun f(scope: RecomposeScope) { scope.invalidate() }`, and the same file then declares `import /prism/compose/runtime`
-- **THEN** the first is rejected with `E4006` for `invalidate`, with help naming `import /prism/compose/runtime`, and the second typechecks
+- **THEN** the first is rejected with `E4001` for `RecomposeScope` alone, with help naming `import /prism/compose/runtime`, and the second typechecks
+
+#### Scenario: Library types are imported
+- **WHEN** a file without imports declares `struct Holder { val c: Composition }` and `fun f(s: &MutableState<Int>?) {}`, the same file then declares `import /prism/compose/runtime`, and a file without imports declares its own `struct Composition(val n: Int)` and `fun size(c: &Composition): Int = c.n`
+- **THEN** the first is rejected with `E4001` at `Composition` and at `MutableState`, each with help naming `import /prism/compose/runtime`, and the second and third typecheck
 
 ### Requirement: Library Names Follow the Rules of Imports
 A library name a file imports MUST behave as a name of any imported module: a top-level declaration of the same name in the file MUST shadow it (type-system, "Top-level declarations shadow imports"), a name or extension exported by two of its imports MUST be `E4012` at use, and the file's own extension MUST shadow an imported one. A file that does not import a library module MUST be free to declare any of its names as its own.

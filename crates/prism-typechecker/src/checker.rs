@@ -644,6 +644,11 @@ pub struct TypeChecker {
     default_inputs: Option<(Vec<prism_typed_tree::LocalId>, usize)>,
     /// Accumulated semantic errors.
     pub errors: Vec<TypeError>,
+    /// The annotations naming a type that is neither built in, a type parameter in scope, nor
+    /// declared, imported or seen in an import's signature, each with its name: opaque types,
+    /// which the driver reports as `E4001` when a library module declares a public type of that
+    /// name (D15 of `explicit-library`).
+    pub unknown_type_names: Vec<(String, Span)>,
     /// The type parameters in scope: those of the generic declaration whose signature, fields or
     /// body is being registered or checked (D12 of `generics`).
     type_parameter_scope: Vec<TypeParameter>,
@@ -716,6 +721,7 @@ impl TypeChecker {
             type_parameter_scope: Vec::new(),
             generic_callee: false,
             errors: Vec::new(),
+            unknown_type_names: Vec::new(),
             in_compose_stack: vec![false],
             in_default: false,
             intrinsic_call: false,
@@ -1254,7 +1260,8 @@ impl TypeChecker {
 
     /// Lowers an annotation to a semantic type, binding each name where the annotation appears:
     /// first to a type parameter in scope, then to a declared or imported struct or enum, with
-    /// its type arguments (D12 of `generics`). Names with no declaration stay opaque. A type
+    /// its type arguments (D12 of `generics`). Names with no declaration stay opaque, and
+    /// [`Self::check_annotation_names`] records them (D15 of `explicit-library`). A type
     /// written with the wrong number of type arguments is the error type; that and the other
     /// annotation errors are reported once, by [`Self::check_annotation_names`].
     pub fn lower_type(&self, ast_ty: &prism_ast::types::Type) -> Type {
@@ -1588,6 +1595,7 @@ impl TypeChecker {
     /// `package` visibility in another package, `E4014` for one only an import's signature
     /// names, `E4020` for a generic type, `Heap` or type parameter written with the wrong number
     /// of type arguments, and `E4022` for a type argument holding a borrow (D7 of `generics`).
+    /// A name nothing declares is recorded in [`Self::unknown_type_names`].
     fn check_annotation_names(&mut self, ast_ty: &prism_ast::types::Type) {
         use prism_ast::types::TypeKind;
         match &ast_ty.kind {
@@ -1620,6 +1628,11 @@ impl TypeChecker {
                             module: id.module,
                             span: ast_ty.span,
                         });
+                    } else if self.bind_type_name(name).is_none() {
+                        // Neither built in, declared, imported nor seen in an import's
+                        // signature: an opaque type, unless the driver finds a library type of
+                        // that name, named without its import (D15 of `explicit-library`).
+                        self.unknown_type_names.push((name.clone(), ast_ty.span));
                     }
                     match self.bind_type_name(name) {
                         Some(Type::Struct { id, .. }) | Some(Type::Enum { id, .. }) => {

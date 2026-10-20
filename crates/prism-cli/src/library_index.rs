@@ -2,10 +2,10 @@
 //! which library modules declare each public name, built from the library's own sources on the
 //! first diagnostic that needs it, so a program without such a diagnostic never builds it.
 
-use prism_ast::{Declaration, Type as AstType, TypeKind, Visibility};
+use prism_ast::{Declaration, Span, Type as AstType, TypeKind, Visibility};
 use prism_library::Library;
 use prism_typechecker::{Type, TypeError};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 /// The receiver of a library extension, as the index matches it.
@@ -23,6 +23,9 @@ pub(crate) struct LibraryIndex {
     /// Functions without a receiver, top-level values, structs and enums: the module paths
     /// (`prism/core`) declaring each name.
     names: HashMap<String, Vec<String>>,
+    /// Structs and enums, intrinsic structs included: the module paths declaring each name, for
+    /// an annotation naming a type (D15).
+    types: HashMap<String, Vec<String>>,
     /// Extension functions and properties: each declaring module with its receiver.
     extensions: HashMap<String, Vec<(ReceiverName, String)>>,
 }
@@ -79,9 +82,13 @@ impl LibraryIndex {
                             &module.path,
                         )
                     }
-                    Declaration::Struct(structure) => index.add_name(&structure.name, &module.path),
+                    Declaration::Struct(structure) => {
+                        index.add_name(&structure.name, &module.path);
+                        index.add_type(&structure.name, &module.path);
+                    }
                     Declaration::Enum(enumeration) => {
-                        index.add_name(&enumeration.name, &module.path)
+                        index.add_name(&enumeration.name, &module.path);
+                        index.add_type(&enumeration.name, &module.path);
                     }
                     Declaration::Var(value) => index.add_name(&value.name, &module.path),
                 }
@@ -92,6 +99,13 @@ impl LibraryIndex {
 
     fn add_name(&mut self, name: &str, module: &str) {
         let modules = self.names.entry(name.to_string()).or_default();
+        if !modules.iter().any(|known| known == module) {
+            modules.push(module.to_string());
+        }
+    }
+
+    fn add_type(&mut self, name: &str, module: &str) {
+        let modules = self.types.entry(name.to_string()).or_default();
         if !modules.iter().any(|known| known == module) {
             modules.push(module.to_string());
         }
@@ -108,6 +122,11 @@ impl LibraryIndex {
     /// The modules declaring a function, value, struct or enum named `name`.
     pub(crate) fn modules_declaring(&self, name: &str) -> Vec<String> {
         self.names.get(name).cloned().unwrap_or_default()
+    }
+
+    /// The modules declaring a struct or enum named `name`.
+    pub(crate) fn modules_declaring_type(&self, name: &str) -> Vec<String> {
+        self.types.get(name).cloned().unwrap_or_default()
     }
 
     /// The modules declaring an extension `name` that a receiver whose type constructor is
@@ -146,7 +165,9 @@ fn receiver_name(ty: &AstType, type_parameters: &[&str]) -> ReceiverName {
 }
 
 /// The name of the type constructor of `ty` after references and `Heap`, as a library
-/// extension's receiver names it; an opaque type by its written name.
+/// extension's receiver names it; an opaque type by its written name. A struct or enum of the
+/// workspace has none: a library extension never extends it, even one named like a library
+/// type (a file's own `struct Composition`).
 fn type_constructor_name(ty: &Type) -> Option<String> {
     match ty {
         Type::Reference { inner, .. } | Type::Heap(inner) => type_constructor_name(inner),
@@ -158,21 +179,85 @@ fn type_constructor_name(ty: &Type) -> Option<String> {
         Type::Unit => Some("Unit".to_string()),
         Type::Nothing => Some("Nothing".to_string()),
         Type::List(_) => Some("List".to_string()),
-        Type::Struct { id, .. } | Type::Enum { id, .. } => Some(id.name.clone()),
+        Type::Struct { id, .. } | Type::Enum { id, .. } if is_library_module(&id.module) => {
+            Some(id.name.clone())
+        }
         Type::Opaque(name) => Some(name.split('<').next().unwrap_or(name).to_string()),
         _ => None,
     }
 }
 
-/// Fills the import suggestions of the unresolved names (`E4001`) and members (`E4006`) of
-/// `errors` that a library module declares publicly, building the index of `library` only when
-/// one of them is present. A module the file already imports never declares such a name, or it
+/// Reports `E4001` for each annotation of `unknown` (the checker's opaque type names) naming a
+/// type that a library module declares publicly: a library type named without its import,
+/// which would otherwise be an opaque type that only a later use could reveal (D15). The
+/// `E4006` of a member of such an opaque value goes, being the same mistake. Builds the index
+/// only when the file names an unknown type.
+pub(crate) fn reject_unimported_library_types(
+    library: &Library,
+    unknown: &[(String, Span)],
+    errors: &mut Vec<TypeError>,
+) {
+    if unknown.is_empty() {
+        return;
+    }
+    let index = LibraryIndex::of(library);
+    let mut rejected: HashSet<&str> = HashSet::new();
+    let mut reported: HashSet<Span> = HashSet::new();
+    for (name, span) in unknown {
+        if index.modules_declaring_type(name).is_empty() || !reported.insert(*span) {
+            continue;
+        }
+        errors.push(TypeError::UnresolvedTypeName {
+            name: name.clone(),
+            span: *span,
+            import_suggestions: Vec::new(),
+        });
+        rejected.insert(name);
+    }
+    if rejected.is_empty() {
+        return;
+    }
+    errors.retain(|error| match error {
+        TypeError::UnknownField { target_type, .. } => {
+            !opaque_name(target_type).is_some_and(|name| rejected.contains(name))
+        }
+        _ => true,
+    });
+    errors.sort_by_key(|error| {
+        let span = error.span();
+        (span.line, span.column)
+    });
+}
+
+/// The name of the opaque type `ty` is, after references, boxes and nullables.
+fn opaque_name(ty: &Type) -> Option<&str> {
+    match ty {
+        Type::Reference { inner, .. } | Type::Heap(inner) | Type::Nullable(inner) => {
+            opaque_name(inner)
+        }
+        Type::Opaque(name) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// Whether `module` is a library module (`prism/compose/runtime`): a workspace file may not
+/// declare a package below `prism` (`E1008`), and a workspace's root file `prism.prism` is the
+/// module `prism`, not below it.
+fn is_library_module(module: &str) -> bool {
+    module.starts_with("prism/")
+}
+
+/// Fills the import suggestions of the unresolved names and types (`E4001`) and members
+/// (`E4006`) of `errors` that a library module declares publicly, building the index of
+/// `library` only when one of them is present. A module the file already imports never declares such a name, or it
 /// would have resolved.
 pub(crate) fn suggest_library_imports(library: &Library, errors: &mut [TypeError]) {
     let needs_index = errors.iter().any(|error| {
         matches!(
             error,
-            TypeError::UnresolvedSymbol { .. } | TypeError::UnknownField { .. }
+            TypeError::UnresolvedSymbol { .. }
+                | TypeError::UnresolvedTypeName { .. }
+                | TypeError::UnknownField { .. }
         )
     });
     if !needs_index {
@@ -187,6 +272,13 @@ pub(crate) fn suggest_library_imports(library: &Library, errors: &mut [TypeError
                 ..
             } => {
                 *import_suggestions = index.modules_declaring(name);
+            }
+            TypeError::UnresolvedTypeName {
+                name,
+                import_suggestions,
+                ..
+            } => {
+                *import_suggestions = index.modules_declaring_type(name);
             }
             TypeError::UnknownField {
                 target_type,
@@ -314,6 +406,61 @@ mod tests {
                 vec!["prism/collections".to_string()],
                 vec![],
                 vec!["prism/compose/runtime".to_string()],
+            ]
+        );
+    }
+
+    /// Types are indexed apart from functions: `Composition` is a struct of the compose runtime,
+    /// `Column` a function of the layout module and no type.
+    #[test]
+    fn the_index_holds_the_public_types_of_each_module() {
+        let index = LibraryIndex::of(Library::bundled());
+        assert_eq!(
+            index.modules_declaring_type("Composition"),
+            vec!["prism/compose/runtime"]
+        );
+        assert_eq!(
+            index.modules_declaring_type("Modifier"),
+            vec!["prism/compose/ui"]
+        );
+        assert!(index.modules_declaring_type("Column").is_empty());
+        assert!(index.modules_declaring_type("Missing").is_empty());
+    }
+
+    /// An opaque name the library declares as a type becomes `E4001`, and the `E4006` of a
+    /// member of a value of that opaque type goes; other opaque names stay (D15).
+    #[test]
+    fn unimported_library_types_are_rejected() {
+        let at = |line: u32, column: u32| prism_ast::Span {
+            line,
+            column,
+            ..prism_ast::Span::dummy()
+        };
+        let unknown = vec![
+            ("RecomposeScope".to_string(), at(1, 14)),
+            ("Missing".to_string(), at(2, 10)),
+        ];
+        let member_of = |name: &str, line: u32| TypeError::UnknownField {
+            target_type: Type::Reference {
+                mutable: false,
+                inner: Box::new(Type::Opaque(name.to_string())),
+            },
+            field_name: "invalidate".to_string(),
+            span: at(line, 40),
+            help: None,
+            import_suggestions: Vec::new(),
+        };
+        let mut errors = vec![member_of("RecomposeScope", 1), member_of("Missing", 2)];
+        reject_unimported_library_types(Library::bundled(), &unknown, &mut errors);
+        assert_eq!(
+            errors,
+            vec![
+                TypeError::UnresolvedTypeName {
+                    name: "RecomposeScope".to_string(),
+                    span: at(1, 14),
+                    import_suggestions: Vec::new(),
+                },
+                member_of("Missing", 2),
             ]
         );
     }
