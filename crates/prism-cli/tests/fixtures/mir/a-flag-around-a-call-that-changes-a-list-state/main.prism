@@ -1,0 +1,5 @@
+// expect: ok
+fun f(s: &MutableState<List<Int>>) {
+    s.value.add(1)
+    println(1)
+}

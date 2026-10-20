@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+compose fun items(): &List<Int> = remember { listOf(1, 2) }
+compose fun C() { println(items().size) }
+fun main() {
+    val c = composition { C() }
+}

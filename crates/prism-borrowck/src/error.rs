@@ -66,6 +66,20 @@ pub enum BorrowErrorKind {
         parameter: Option<String>,
         reason: UntiedReason,
     },
+    /// `E5010`: a value attached to the composition escapes elsewhere than to an `attached`
+    /// parameter (D9 and D24 of `owned-state`); `holder` says what holds it.
+    AttachedFunctionEscapes { holder: AttachedHolder },
+}
+
+/// What attaches an escaping value to the composition (D9 and D24 of `owned-state`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttachedHolder {
+    /// The value of an `attached` parameter, named `name`.
+    Parameter(Option<String>),
+    /// A closure capturing the state `name` weakly.
+    Closure(Option<String>),
+    /// A composition whose content captures the state `name` weakly.
+    Composition(Option<String>),
 }
 
 /// What makes an escaping function value hold a borrow (D6 of `escaping-closures`).
@@ -152,6 +166,7 @@ impl BorrowError {
             BorrowErrorKind::EscapingClosure { .. } => "E5007",
             BorrowErrorKind::DanglingBorrowReturn { .. } => "E5008",
             BorrowErrorKind::UntiedBorrowReturn { .. } => "E5009",
+            BorrowErrorKind::AttachedFunctionEscapes { .. } => "E5010",
         }
     }
 
@@ -224,6 +239,22 @@ impl BorrowError {
                     Borrowed::Temporary => {
                         "cannot return a borrow of a temporary value".to_string()
                     }
+                }
+            }
+            BorrowErrorKind::AttachedFunctionEscapes { holder } => {
+                return match holder {
+                    AttachedHolder::Parameter(name) => format!(
+                        "the attached parameter {} cannot escape: an attached function value is kept only by the composition",
+                        quoted(name)
+                    ),
+                    AttachedHolder::Closure(name) => format!(
+                        "a closure that captures {} weakly cannot escape: an attached function value is kept only by the composition",
+                        quoted(name)
+                    ),
+                    AttachedHolder::Composition(name) => format!(
+                        "a composition whose content captures {} weakly cannot be stored here",
+                        quoted(name)
+                    ),
                 }
             }
             BorrowErrorKind::UntiedBorrowReturn { parameter, reason } => {

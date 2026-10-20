@@ -1,0 +1,741 @@
+module main
+phase composed
+compose composed skippable fun main::A(_1: Int, _2: Point, _3: Int, _4: Int): Unit @3:1
+  local _0: Unit (return)
+  local _1 n: Int (argument)
+  local _2 p: Point (argument)
+  local _3 $composer: Int (argument)
+  local _4 $changed: Int (argument)
+  local _5: Int (temporary)
+  local _6: Int (temporary)
+  local _7: Unit (temporary)
+  local _8: Int (temporary)
+  local _9: Int (temporary)
+  local _10: Int (temporary)
+  local _11: Int (temporary)
+  local _12: Int (temporary)
+  local _13: Int (temporary)
+  local _14: Bool (temporary)
+  local _15: (Int) -> Unit (temporary)
+  bb0:
+    storage_live _5 @3:1
+    storage_live _6 @3:1
+    storage_live _7 @3:1
+    storage_live _8 @3:1
+    storage_live _9 @3:1
+    storage_live _10 @3:1
+    storage_live _11 @3:1
+    storage_live _12 @3:1
+    storage_live _13 @3:1
+    storage_live _14 @3:1
+    storage_live _15 @3:1
+    _7 = call composer start_restart_group key 0xf50ff820095051b7 /* body main::A */(copy _3) -> bb2 @3:1
+  bb1:
+    _15 = closure main::A#restart [] @3:1
+    _7 = call composer end_restart_group(copy _3, move _15) -> bb11 @3:1
+  bb2:
+    _8 = const 0 @3:1
+    _9 = bits copy _4 >>> const 1 @3:1
+    _9 = bits copy _9 & const 3 @3:1
+    _10 = call composer keep<Int>(copy _3, copy _1, copy _9) -> bb3 @3:1
+  bb3:
+    _5 = bits copy _10 & const 3 @3:1
+    _8 = bits copy _8 | copy _10 @3:1
+    _11 = bits copy _4 >>> const 3 @3:1
+    _11 = bits copy _11 & const 3 @3:1
+    _12 = call composer keep<main::Point>(copy _3, copy _2, copy _11) -> bb4 @3:1
+  bb4:
+    _6 = bits copy _12 & const 3 @3:1
+    _8 = bits copy _8 | copy _12 @3:1
+    _8 = bits copy _8 & const 4 @3:1
+    _13 = bits copy _4 & const 1 @3:1
+    switch copy _13 [0 -> bb6, otherwise -> bb5] @3:1
+  bb5:
+    _0 = const () @3:33
+    goto -> bb1 @3:1
+  bb6:
+    switch copy _8 [0 -> bb7, otherwise -> bb5] @3:1
+  bb7:
+    _14 = call composer skipping(copy _3) -> bb9 @3:1
+  bb8:
+    _7 = call composer skip_to_group_end(copy _3) -> bb10 @3:1
+  bb9:
+    switch copy _14 [0 -> bb5, otherwise -> bb8] @3:1
+  bb10:
+    goto -> bb1 @3:1
+  bb11:
+    storage_dead _15 @3:1
+    storage_dead _14 @3:1
+    storage_dead _13 @3:1
+    storage_dead _12 @3:1
+    storage_dead _11 @3:1
+    storage_dead _10 @3:1
+    storage_dead _9 @3:1
+    storage_dead _8 @3:1
+    storage_dead _7 @3:1
+    storage_dead _6 @3:1
+    storage_dead _5 @3:1
+    return @3:1
+compose composed fun main::B(_1: String, _2: Int, _3: Int): Unit @4:1
+  local _0: Unit (return)
+  local _1 s: String (argument)
+  local _2 $composer: Int (argument)
+  local _3 $changed: Int (argument)
+  local _4: Unit (temporary)
+  bb0:
+    storage_live _4 @4:1
+    _4 = call composer start_group key 0xb3a82bbe365e927b /* body main::B */(copy _2) -> bb2 @4:1
+  bb1:
+    _4 = call composer end_group(copy _2) -> bb3 @4:1
+  bb2:
+    _0 = const () @4:26
+    drop _1 -> bb1 @4:1
+  bb3:
+    storage_dead _4 @4:1
+    return @4:1
+compose composed fun main::C(_1: &Int, _2: Int, _3: Int): Unit @5:1
+  local _0: Unit (return)
+  local _1 r: &Int (argument)
+  local _2 $composer: Int (argument)
+  local _3 $changed: Int (argument)
+  local _4: Unit (temporary)
+  bb0:
+    storage_live _4 @5:1
+    _4 = call composer start_group key 0x2e2eed955fc758e4 /* body main::C */(copy _2) -> bb1 @5:1
+  bb1:
+    _0 = const () @5:24
+    _4 = call composer end_group(copy _2) -> bb2 @5:1
+  bb2:
+    storage_dead _4 @5:1
+    return @5:1
+compose composed fun main::D(_1: compose () -> Unit, _2: Int, _3: Int): Unit @6:1
+  local _0: Unit (return)
+  local _1 content: compose () -> Unit (argument)
+  local _2 $composer: Int (argument)
+  local _3 $changed: Int (argument)
+  local _4: Unit (temporary)
+  bb0:
+    storage_live _4 @6:1
+    _4 = call composer start_group key 0x79e1d25335bad282 /* body main::D */(copy _2) -> bb2 @6:1
+  bb1:
+    _4 = call composer end_group(copy _2) -> bb3 @6:1
+  bb2:
+    _0 = const () @6:44
+    drop _1 -> bb1 @6:1
+  bb3:
+    storage_dead _4 @6:1
+    return @6:1
+compose composed fun <T> main::E(_1: T, _2: Int, _3: Int): Unit @7:1
+  local _0: Unit (return)
+  local _1 x: T (argument)
+  local _2 $composer: Int (argument)
+  local _3 $changed: Int (argument)
+  local _4: Unit (temporary)
+  bb0:
+    storage_live _4 @7:1
+    _4 = call composer start_group key 0x8de32b812b51fea0 /* body main::E */(copy _2) -> bb2 @7:1
+  bb1:
+    _4 = call composer end_group(copy _2) -> bb3 @7:1
+  bb2:
+    _0 = const () @7:25
+    drop _1 -> bb1 @7:1
+  bb3:
+    storage_dead _4 @7:1
+    return @7:1
+compose composed skippable fun <T : Copy> main::F(_1: T, _2: Int, _3: Int): Unit @8:1
+  local _0: Unit (return)
+  local _1 x: T (argument)
+  local _2 $composer: Int (argument)
+  local _3 $changed: Int (argument)
+  local _4: Int (temporary)
+  local _5: Unit (temporary)
+  local _6: Int (temporary)
+  local _7: Int (temporary)
+  local _8: Int (temporary)
+  local _9: Int (temporary)
+  local _10: Bool (temporary)
+  local _11: (Int) -> Unit (temporary)
+  bb0:
+    storage_live _4 @8:1
+    storage_live _5 @8:1
+    storage_live _6 @8:1
+    storage_live _7 @8:1
+    storage_live _8 @8:1
+    storage_live _9 @8:1
+    storage_live _10 @8:1
+    storage_live _11 @8:1
+    _5 = call composer start_restart_group key 0x4da49f60b638e5ce /* body main::F */(copy _2) -> bb2 @8:1
+  bb1:
+    _11 = closure main::F#restart [] @8:1
+    _5 = call composer end_restart_group(copy _2, move _11) -> bb10 @8:1
+  bb2:
+    _6 = const 0 @8:1
+    _7 = bits copy _3 >>> const 1 @8:1
+    _7 = bits copy _7 & const 3 @8:1
+    _8 = call composer keep<T>(copy _2, copy _1, copy _7) -> bb3 @8:1
+  bb3:
+    _4 = bits copy _8 & const 3 @8:1
+    _6 = bits copy _6 | copy _8 @8:1
+    _6 = bits copy _6 & const 4 @8:1
+    _9 = bits copy _3 & const 1 @8:1
+    switch copy _9 [0 -> bb5, otherwise -> bb4] @8:1
+  bb4:
+    _0 = const () @8:32
+    goto -> bb1 @8:1
+  bb5:
+    switch copy _6 [0 -> bb6, otherwise -> bb4] @8:1
+  bb6:
+    _10 = call composer skipping(copy _2) -> bb8 @8:1
+  bb7:
+    _5 = call composer skip_to_group_end(copy _2) -> bb9 @8:1
+  bb8:
+    switch copy _10 [0 -> bb4, otherwise -> bb7] @8:1
+  bb9:
+    goto -> bb1 @8:1
+  bb10:
+    storage_dead _11 @8:1
+    storage_dead _10 @8:1
+    storage_dead _9 @8:1
+    storage_dead _8 @8:1
+    storage_dead _7 @8:1
+    storage_dead _6 @8:1
+    storage_dead _5 @8:1
+    storage_dead _4 @8:1
+    return @8:1
+compose composed skippable fun main::G(_1: () -> Unit, _2: Int, _3: Int): Unit @9:1
+  local _0: Unit (return)
+  local _1 onClick: () -> Unit (argument)
+  local _2 $composer: Int (argument)
+  local _3 $changed: Int (argument)
+  local _4: Int (temporary)
+  local _5: Bool (temporary)
+  local _6: Bool (temporary)
+  local _7: &() -> Unit (temporary)
+  local _8: Unit (temporary)
+  local _9: Int (temporary)
+  local _10: Int (temporary)
+  local _11: &() -> Unit (temporary)
+  local _12: () -> Unit (temporary)
+  local _13: Bool (temporary)
+  local _14: &() -> Unit (temporary)
+  local _15: () -> Unit (temporary)
+  local _16: () -> Unit (temporary)
+  local _17: &() -> Unit (temporary)
+  local _18: () -> Unit (temporary)
+  local _19: () -> Unit (temporary)
+  local _20: &() -> Unit (temporary)
+  local _21: () -> Unit (temporary)
+  local _22: Int (temporary)
+  local _23: Bool (temporary)
+  local _24: (Int) -> Unit (temporary)
+  bb0:
+    storage_live _4 @9:1
+    storage_live _5 @9:1
+    storage_live _6 @9:1
+    storage_live _7 @9:1
+    storage_live _8 @9:1
+    storage_live _9 @9:1
+    storage_live _10 @9:1
+    storage_live _11 @9:1
+    storage_live _12 @9:1
+    storage_live _13 @9:1
+    storage_live _14 @9:1
+    storage_live _15 @9:1
+    storage_live _16 @9:1
+    storage_live _17 @9:1
+    storage_live _18 @9:1
+    storage_live _19 @9:1
+    storage_live _20 @9:1
+    storage_live _21 @9:1
+    storage_live _22 @9:1
+    storage_live _23 @9:1
+    storage_live _24 @9:1
+    _7 = &_1 (argument) @9:1
+    _6 = call composer keepable(move _7) -> bb6 @9:1
+  bb1:
+    goto -> bb2 @9:1
+  bb2:
+    switch copy _5 [0 -> bb37, otherwise -> bb36] @9:1
+  bb3:
+    _0 = const () @9:45
+    drop _1 -> bb1 @9:1
+  bb4:
+    storage_dead _24 @9:1
+    storage_dead _23 @9:1
+    storage_dead _22 @9:1
+    storage_dead _21 @9:1
+    storage_dead _20 @9:1
+    storage_dead _19 @9:1
+    storage_dead _18 @9:1
+    storage_dead _17 @9:1
+    storage_dead _16 @9:1
+    storage_dead _15 @9:1
+    storage_dead _14 @9:1
+    storage_dead _13 @9:1
+    storage_dead _12 @9:1
+    storage_dead _11 @9:1
+    storage_dead _10 @9:1
+    storage_dead _9 @9:1
+    storage_dead _8 @9:1
+    storage_dead _7 @9:1
+    storage_dead _6 @9:1
+    storage_dead _5 @9:1
+    storage_dead _4 @9:1
+    return @9:1
+  bb5:
+    _8 = call composer start_group key 0x6c881c2753f0ce62 /* body main::G */(copy _2) -> bb35 @9:1
+  bb6:
+    switch copy _6 [0 -> bb5, otherwise -> bb7] @9:1
+  bb7:
+    _8 = call composer start_restart_group key 0x6c881c2753f0ce62 /* body main::G */(copy _2) -> bb8 @9:1
+  bb8:
+    _5 = const true @9:1
+    _9 = const 0 @9:1
+    _10 = bits copy _3 >>> const 1 @9:1
+    _10 = bits copy _10 & const 3 @9:1
+    switch copy _10 [0 -> bb9, 1 -> bb10, 2 -> bb11, otherwise -> bb12] @9:1
+  bb9:
+    _11 = &_1 (argument) @9:1
+    _12 = call composer duplicate(move _11) -> bb14 @9:1
+  bb10:
+    _16 = remembered<() -> Unit>(copy _2) -> [found: bb20, missing: bb21] @9:1
+  bb11:
+    _14 = &_1 (argument) @9:1
+    _15 = call composer duplicate(move _14) -> bb18 @9:1
+  bb12:
+    _19 = remembered<() -> Unit>(copy _2) -> [found: bb24, missing: bb25] @9:1
+  bb13:
+    _9 = bits copy _9 & const 4 @9:1
+    _22 = bits copy _3 & const 1 @9:1
+    switch copy _22 [0 -> bb29, otherwise -> bb28] @9:1
+  bb14:
+    _13 = call composer changed<() -> Unit>(copy _2, move _12) -> bb15 @9:1
+  bb15:
+    switch copy _13 [0 -> bb16, otherwise -> bb17] @9:1
+  bb16:
+    _4 = const 1 @9:1
+    goto -> bb13 @9:1
+  bb17:
+    _4 = const 2 @9:1
+    _9 = bits copy _9 | const 4 @9:1
+    goto -> bb13 @9:1
+  bb18:
+    _8 = call composer set_slot<() -> Unit>(copy _2, move _15) -> bb19 @9:1
+  bb19:
+    _4 = const 2 @9:1
+    _9 = bits copy _9 | const 4 @9:1
+    goto -> bb13 @9:1
+  bb20:
+    _4 = const 1 @9:1
+    goto -> bb13 @9:1
+  bb21:
+    _17 = &_1 (argument) @9:1
+    _18 = call composer duplicate(move _17) -> bb22 @9:1
+  bb22:
+    _8 = call composer set_slot<() -> Unit>(copy _2, move _18) -> bb23 @9:1
+  bb23:
+    goto -> bb20 @9:1
+  bb24:
+    _4 = const 3 @9:1
+    goto -> bb13 @9:1
+  bb25:
+    _20 = &_1 (argument) @9:1
+    _21 = call composer duplicate(move _20) -> bb26 @9:1
+  bb26:
+    _8 = call composer set_slot<() -> Unit>(copy _2, move _21) -> bb27 @9:1
+  bb27:
+    goto -> bb24 @9:1
+  bb28:
+    goto -> bb3 @9:1
+  bb29:
+    switch copy _9 [0 -> bb30, otherwise -> bb28] @9:1
+  bb30:
+    _23 = call composer skipping(copy _2) -> bb32 @9:1
+  bb31:
+    drop _1 -> bb33 @9:1
+  bb32:
+    switch copy _23 [0 -> bb28, otherwise -> bb31] @9:1
+  bb33:
+    _8 = call composer skip_to_group_end(copy _2) -> bb34 @9:1
+  bb34:
+    goto -> bb2 @9:1
+  bb35:
+    _5 = const false @9:1
+    _4 = bits copy _3 >>> const 1 @9:1
+    _4 = bits copy _4 & const 3 @9:1
+    goto -> bb3 @9:1
+  bb36:
+    _24 = closure main::G#restart [] @9:1
+    _8 = call composer end_restart_group(copy _2, move _24) -> bb39 @9:1
+  bb37:
+    _8 = call composer end_group(copy _2) -> bb38 @9:1
+  bb38:
+    goto -> bb4 @9:1
+  bb39:
+    goto -> bb4 @9:1
+compose composed fun main::H(_1: Int, _2: Int): Int @10:1
+  local _0: Int (return)
+  local _1 $composer: Int (argument)
+  local _2 $changed: Int (argument)
+  local _3: Unit (temporary)
+  bb0:
+    storage_live _3 @10:1
+    _3 = call composer start_group key 0x96c26c0d33d8fca8 /* body main::H */(copy _1) -> bb1 @10:1
+  bb1:
+    _0 = const 1 @10:24
+    _3 = call composer end_group(copy _1) -> bb2 @10:1
+  bb2:
+    storage_dead _3 @10:1
+    return @10:1
+compose composed skippable fun main::I(_1: &State<Int>, _2: &MutableState<String>, _3: Int, _4: Int): Unit @11:1
+  local _0: Unit (return)
+  local _1 s: &State<Int> (argument)
+  local _2 m: &MutableState<String> (argument)
+  local _3 $composer: Int (argument)
+  local _4 $changed: Int (argument)
+  local _5: Int (temporary)
+  local _6: Int (temporary)
+  local _7: Unit (temporary)
+  local _8: Int (temporary)
+  local _9: Int (temporary)
+  local _10: WeakReference<State<Int>> (temporary)
+  local _11: Int (temporary)
+  local _12: Int (temporary)
+  local _13: WeakReference<MutableState<String>> (temporary)
+  local _14: Int (temporary)
+  local _15: Int (temporary)
+  local _16: Bool (temporary)
+  local _17: (Int) -> Unit (temporary)
+  bb0:
+    storage_live _5 @11:1
+    storage_live _6 @11:1
+    storage_live _7 @11:1
+    storage_live _8 @11:1
+    storage_live _9 @11:1
+    storage_live _10 @11:1
+    storage_live _11 @11:1
+    storage_live _12 @11:1
+    storage_live _13 @11:1
+    storage_live _14 @11:1
+    storage_live _15 @11:1
+    storage_live _16 @11:1
+    storage_live _17 @11:1
+    _7 = call composer start_restart_group key 0xfb061e025b60f4b1 /* body main::I */(copy _3) -> bb2 @11:1
+  bb1:
+    _17 = closure main::I#restart [] @11:1
+    _7 = call composer end_restart_group(copy _3, move _17) -> bb13 @11:1
+  bb2:
+    _8 = const 0 @11:1
+    _9 = bits copy _4 >>> const 1 @11:1
+    _9 = bits copy _9 & const 3 @11:1
+    _10 = call state weak<Int>(copy _1) -> bb3 @11:1
+  bb3:
+    _11 = call composer keep<prism/compose/runtime::WeakReference<prism/compose/runtime::State<Int>>>(copy _3, copy _10, copy _9) -> bb4 @11:1
+  bb4:
+    _5 = bits copy _11 & const 3 @11:1
+    _8 = bits copy _8 | copy _11 @11:1
+    _12 = bits copy _4 >>> const 3 @11:1
+    _12 = bits copy _12 & const 3 @11:1
+    _13 = call state weak<String>(copy _2) -> bb5 @11:1
+  bb5:
+    _14 = call composer keep<prism/compose/runtime::WeakReference<prism/compose/runtime::MutableState<String>>>(copy _3, copy _13, copy _12) -> bb6 @11:1
+  bb6:
+    _6 = bits copy _14 & const 3 @11:1
+    _8 = bits copy _8 | copy _14 @11:1
+    _8 = bits copy _8 & const 4 @11:1
+    _15 = bits copy _4 & const 1 @11:1
+    switch copy _15 [0 -> bb8, otherwise -> bb7] @11:1
+  bb7:
+    _0 = const () @11:57
+    goto -> bb1 @11:1
+  bb8:
+    switch copy _8 [0 -> bb9, otherwise -> bb7] @11:1
+  bb9:
+    _16 = call composer skipping(copy _3) -> bb11 @11:1
+  bb10:
+    _7 = call composer skip_to_group_end(copy _3) -> bb12 @11:1
+  bb11:
+    switch copy _16 [0 -> bb7, otherwise -> bb10] @11:1
+  bb12:
+    goto -> bb1 @11:1
+  bb13:
+    storage_dead _17 @11:1
+    storage_dead _16 @11:1
+    storage_dead _15 @11:1
+    storage_dead _14 @11:1
+    storage_dead _13 @11:1
+    storage_dead _12 @11:1
+    storage_dead _11 @11:1
+    storage_dead _10 @11:1
+    storage_dead _9 @11:1
+    storage_dead _8 @11:1
+    storage_dead _7 @11:1
+    storage_dead _6 @11:1
+    storage_dead _5 @11:1
+    return @11:1
+compose composed skippable fun main::J(_1: () -> Unit, _2: Int, _3: Int): Unit @12:1
+  local _0: Unit (return)
+  local _1 onClick: () -> Unit (argument)
+  local _2 $composer: Int (argument)
+  local _3 $changed: Int (argument)
+  local _4: Int (temporary)
+  local _5: Bool (temporary)
+  local _6: Bool (temporary)
+  local _7: &() -> Unit (temporary)
+  local _8: Unit (temporary)
+  local _9: Int (temporary)
+  local _10: Int (temporary)
+  local _11: &() -> Unit (temporary)
+  local _12: () -> Unit (temporary)
+  local _13: Bool (temporary)
+  local _14: &() -> Unit (temporary)
+  local _15: () -> Unit (temporary)
+  local _16: () -> Unit (temporary)
+  local _17: &() -> Unit (temporary)
+  local _18: () -> Unit (temporary)
+  local _19: () -> Unit (temporary)
+  local _20: &() -> Unit (temporary)
+  local _21: () -> Unit (temporary)
+  local _22: Int (temporary)
+  local _23: Bool (temporary)
+  local _24: (Int) -> Unit (temporary)
+  bb0:
+    storage_live _4 @12:1
+    storage_live _5 @12:1
+    storage_live _6 @12:1
+    storage_live _7 @12:1
+    storage_live _8 @12:1
+    storage_live _9 @12:1
+    storage_live _10 @12:1
+    storage_live _11 @12:1
+    storage_live _12 @12:1
+    storage_live _13 @12:1
+    storage_live _14 @12:1
+    storage_live _15 @12:1
+    storage_live _16 @12:1
+    storage_live _17 @12:1
+    storage_live _18 @12:1
+    storage_live _19 @12:1
+    storage_live _20 @12:1
+    storage_live _21 @12:1
+    storage_live _22 @12:1
+    storage_live _23 @12:1
+    storage_live _24 @12:1
+    _7 = &_1 (argument) @12:1
+    _6 = call composer keepable(move _7) -> bb6 @12:1
+  bb1:
+    goto -> bb2 @12:1
+  bb2:
+    switch copy _5 [0 -> bb37, otherwise -> bb36] @12:1
+  bb3:
+    _0 = const () @12:45
+    drop _1 -> bb1 @12:1
+  bb4:
+    storage_dead _24 @12:1
+    storage_dead _23 @12:1
+    storage_dead _22 @12:1
+    storage_dead _21 @12:1
+    storage_dead _20 @12:1
+    storage_dead _19 @12:1
+    storage_dead _18 @12:1
+    storage_dead _17 @12:1
+    storage_dead _16 @12:1
+    storage_dead _15 @12:1
+    storage_dead _14 @12:1
+    storage_dead _13 @12:1
+    storage_dead _12 @12:1
+    storage_dead _11 @12:1
+    storage_dead _10 @12:1
+    storage_dead _9 @12:1
+    storage_dead _8 @12:1
+    storage_dead _7 @12:1
+    storage_dead _6 @12:1
+    storage_dead _5 @12:1
+    storage_dead _4 @12:1
+    return @12:1
+  bb5:
+    _8 = call composer start_group key 0x0fff1bd0ce436816 /* body main::J */(copy _2) -> bb35 @12:1
+  bb6:
+    switch copy _6 [0 -> bb5, otherwise -> bb7] @12:1
+  bb7:
+    _8 = call composer start_restart_group key 0x0fff1bd0ce436816 /* body main::J */(copy _2) -> bb8 @12:1
+  bb8:
+    _5 = const true @12:1
+    _9 = const 0 @12:1
+    _10 = bits copy _3 >>> const 1 @12:1
+    _10 = bits copy _10 & const 3 @12:1
+    switch copy _10 [0 -> bb9, 1 -> bb10, 2 -> bb11, otherwise -> bb12] @12:1
+  bb9:
+    _11 = &_1 (argument) @12:1
+    _12 = call composer duplicate(move _11) -> bb14 @12:1
+  bb10:
+    _16 = remembered<() -> Unit>(copy _2) -> [found: bb20, missing: bb21] @12:1
+  bb11:
+    _14 = &_1 (argument) @12:1
+    _15 = call composer duplicate(move _14) -> bb18 @12:1
+  bb12:
+    _19 = remembered<() -> Unit>(copy _2) -> [found: bb24, missing: bb25] @12:1
+  bb13:
+    _9 = bits copy _9 & const 4 @12:1
+    _22 = bits copy _3 & const 1 @12:1
+    switch copy _22 [0 -> bb29, otherwise -> bb28] @12:1
+  bb14:
+    _13 = call composer changed<() -> Unit>(copy _2, move _12) -> bb15 @12:1
+  bb15:
+    switch copy _13 [0 -> bb16, otherwise -> bb17] @12:1
+  bb16:
+    _4 = const 1 @12:1
+    goto -> bb13 @12:1
+  bb17:
+    _4 = const 2 @12:1
+    _9 = bits copy _9 | const 4 @12:1
+    goto -> bb13 @12:1
+  bb18:
+    _8 = call composer set_slot<() -> Unit>(copy _2, move _15) -> bb19 @12:1
+  bb19:
+    _4 = const 2 @12:1
+    _9 = bits copy _9 | const 4 @12:1
+    goto -> bb13 @12:1
+  bb20:
+    _4 = const 1 @12:1
+    goto -> bb13 @12:1
+  bb21:
+    _17 = &_1 (argument) @12:1
+    _18 = call composer duplicate(move _17) -> bb22 @12:1
+  bb22:
+    _8 = call composer set_slot<() -> Unit>(copy _2, move _18) -> bb23 @12:1
+  bb23:
+    goto -> bb20 @12:1
+  bb24:
+    _4 = const 3 @12:1
+    goto -> bb13 @12:1
+  bb25:
+    _20 = &_1 (argument) @12:1
+    _21 = call composer duplicate(move _20) -> bb26 @12:1
+  bb26:
+    _8 = call composer set_slot<() -> Unit>(copy _2, move _21) -> bb27 @12:1
+  bb27:
+    goto -> bb24 @12:1
+  bb28:
+    goto -> bb3 @12:1
+  bb29:
+    switch copy _9 [0 -> bb30, otherwise -> bb28] @12:1
+  bb30:
+    _23 = call composer skipping(copy _2) -> bb32 @12:1
+  bb31:
+    drop _1 -> bb33 @12:1
+  bb32:
+    switch copy _23 [0 -> bb28, otherwise -> bb31] @12:1
+  bb33:
+    _8 = call composer skip_to_group_end(copy _2) -> bb34 @12:1
+  bb34:
+    goto -> bb2 @12:1
+  bb35:
+    _5 = const false @12:1
+    _4 = bits copy _3 >>> const 1 @12:1
+    _4 = bits copy _4 & const 3 @12:1
+    goto -> bb3 @12:1
+  bb36:
+    _24 = closure main::J#restart [] @12:1
+    _8 = call composer end_restart_group(copy _2, move _24) -> bb39 @12:1
+  bb37:
+    _8 = call composer end_group(copy _2) -> bb38 @12:1
+  bb38:
+    goto -> bb4 @12:1
+  bb39:
+    goto -> bb4 @12:1
+compose composed fun main::K(_1: MutableState<Int>, _2: Int, _3: Int): Unit @13:1
+  local _0: Unit (return)
+  local _1 s: MutableState<Int> (argument)
+  local _2 $composer: Int (argument)
+  local _3 $changed: Int (argument)
+  local _4: Unit (temporary)
+  bb0:
+    storage_live _4 @13:1
+    _4 = call composer start_group key 0x2fc698fd88b0730f /* body main::K */(copy _2) -> bb2 @13:1
+  bb1:
+    _4 = call composer end_group(copy _2) -> bb3 @13:1
+  bb2:
+    _0 = const () @13:37
+    drop _1 -> bb1 @13:1
+  bb3:
+    storage_dead _4 @13:1
+    return @13:1
+closure main::A#restart(_1: Int): Unit @3:1
+  local _0: Unit (return)
+  local _1 $composer: Int (argument)
+  local _2 n: Int (temporary)
+  local _3 p: Point (temporary)
+  bb0:
+    storage_live _2 @3:1
+    storage_live _3 @3:1
+    _2 = call composer kept_parameter 0<Int>(copy _1) -> bb1 @3:1
+  bb1:
+    _3 = call composer kept_parameter 1<main::Point>(copy _1) -> bb2 @3:1
+  bb2:
+    _0 = call compose main::A(copy _2, copy _3, copy _1, const 11) -> bb3 @3:1
+  bb3:
+    storage_dead _3 @3:1
+    storage_dead _2 @3:1
+    return @3:1
+closure <T : Copy> main::F#restart(_1: Int): Unit @8:1
+  local _0: Unit (return)
+  local _1 $composer: Int (argument)
+  local _2 x: T (temporary)
+  bb0:
+    storage_live _2 @8:1
+    _2 = call composer kept_parameter 0<T>(copy _1) -> bb1 @8:1
+  bb1:
+    _0 = call compose main::F<T>(copy _2, copy _1, const 3) -> bb2 @8:1
+  bb2:
+    storage_dead _2 @8:1
+    return @8:1
+closure main::G#restart(_1: Int): Unit @9:1
+  local _0: Unit (return)
+  local _1 $composer: Int (argument)
+  local _2 onClick: () -> Unit (temporary)
+  bb0:
+    storage_live _2 @9:1
+    _2 = call composer kept_parameter 0<() -> Unit>(copy _1) -> bb1 @9:1
+  bb1:
+    _0 = call compose main::G(move _2, copy _1, const 3) -> bb2 @9:1
+  bb2:
+    storage_dead _2 @9:1
+    return @9:1
+closure main::I#restart(_1: Int): Unit @11:1
+  local _0: Unit (return)
+  local _1 $composer: Int (argument)
+  local _2 s: WeakReference<State<Int>> (temporary)
+  local _3 m: WeakReference<MutableState<String>> (temporary)
+  local _4: &State<Int> (temporary)
+  local _5: &MutableState<String> (temporary)
+  bb0:
+    storage_live _2 @11:1
+    storage_live _3 @11:1
+    storage_live _4 @11:1
+    storage_live _5 @11:1
+    _2 = call composer kept_parameter 0<prism/compose/runtime::WeakReference<prism/compose/runtime::State<Int>>>(copy _1) -> bb1 @11:1
+  bb1:
+    _3 = call composer kept_parameter 1<prism/compose/runtime::WeakReference<prism/compose/runtime::MutableState<String>>>(copy _1) -> bb2 @11:1
+  bb2:
+    _4 = &view(_2) (argument) @11:1
+    _5 = &view(_3) (argument) @11:1
+    _0 = call compose main::I(copy _4, copy _5, copy _1, const 11) -> bb3 @11:1
+  bb3:
+    storage_dead _5 @11:1
+    storage_dead _4 @11:1
+    storage_dead _3 @11:1
+    storage_dead _2 @11:1
+    return @11:1
+closure main::J#restart(_1: Int): Unit @12:1
+  local _0: Unit (return)
+  local _1 $composer: Int (argument)
+  local _2 onClick: () -> Unit (temporary)
+  bb0:
+    storage_live _2 @12:1
+    _2 = call composer kept_parameter 0<() -> Unit>(copy _1) -> bb1 @12:1
+  bb1:
+    _0 = call compose main::J(move _2, copy _1, const 3) -> bb2 @12:1
+  bb2:
+    storage_dead _2 @12:1
+    return @12:1

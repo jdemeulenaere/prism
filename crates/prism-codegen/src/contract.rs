@@ -333,6 +333,7 @@ pub fn slot_contract(
                 Some(CaptureMode::Shared) => 1,
                 Some(CaptureMode::Mutable) => 2,
                 Some(CaptureMode::Owned) => 3,
+                Some(CaptureMode::Weak) => 4,
                 None => 0,
             });
             hasher.write_hash(&fingerprints.fingerprint(&body.locals[local].ty));

@@ -2,7 +2,7 @@
 // run: 0
 struct Todo(val title: String)
 
-compose fun Todos(todos: State<List<Todo>>) {
+compose fun Todos(todos: &State<List<Todo>>) {
     println("count ${todos.value.size}")
     for (todo in todos.value) {
         println(todo.title)

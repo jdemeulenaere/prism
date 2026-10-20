@@ -244,6 +244,7 @@ impl Printer<'_> {
         for projection in &place.projections {
             text = match projection {
                 Projection::Deref => format!("(*{})", text),
+                Projection::View => format!("view({})", text),
                 Projection::Field(index) => {
                     let name = match &ty {
                         Some(Type::Struct { id, .. }) => self
@@ -389,6 +390,7 @@ impl Printer<'_> {
                     .enumerate()
                     .map(|(index, capture)| match (capture, modes.get(index)) {
                         (Capture::Owned(operand), _) => self.operand(operand),
+                        (Capture::Weak(place), _) => format!("weak {}", self.place(place)),
                         (Capture::Borrowed(place), Some(CaptureMode::Shared)) => {
                             format!("&{}", self.place(place))
                         }

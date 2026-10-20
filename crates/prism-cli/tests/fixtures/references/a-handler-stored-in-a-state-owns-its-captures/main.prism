@@ -4,5 +4,6 @@ fun main() {
     val n = 2
     val s = mutableStateOf({ 0 })
     s.value = { n * 3 }
-    s.read { f -> println(f()) }
+    val f = &s.value
+    println(f())
 }

@@ -1,4 +1,0 @@
-// expect: ok
-fun f(s: MutableState<List<Int>>) {
-    s.edit { v -> v.add(1) }
-}

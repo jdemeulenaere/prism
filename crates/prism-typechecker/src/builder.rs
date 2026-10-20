@@ -13,15 +13,6 @@ use prism_typed_tree::{
 };
 use std::collections::{HashMap, HashSet};
 
-/// A read of `s.value` of a type that is not `Copy`, built outside composable contexts (D7 of
-/// `state-handles`): `E4033` when the body ends, unless a mutable use of it was reported.
-pub(crate) struct PendingStateRead {
-    pub(crate) node: ExpressionId,
-    pub(crate) span: Span,
-    /// The handle as written, for the help.
-    pub(crate) handle: String,
-}
-
 /// A closure whose body is being checked.
 struct OpenClosure {
     /// The number of bindings that existed when the closure opened: a binding below it belongs
@@ -42,13 +33,11 @@ pub(crate) struct BodyBuilder {
     /// The number of closures opened in the body, so that a body without any skips deciding
     /// captures.
     opened_closures: usize,
-    /// The reads of `s.value` that only a composable context may make (D7 of `state-handles`).
-    pub(crate) pending_state_reads: Vec<PendingStateRead>,
-    /// The `s.value` nodes whose mutable use was reported, whose read is not reported again.
+    /// The `s.value` nodes whose mutable use was reported, which are not reported again.
     pub(crate) reported_state_values: HashSet<ExpressionId>,
-    /// The span of each `s.value` that is a place, with whether it is in a composable context,
-    /// so that a move out of it is reported as one (`E4017`).
-    pub(crate) state_value_spans: HashMap<Span, bool>,
+    /// The span of each `s.value` that is a place, so that a move out of it is reported as one
+    /// (`E4017`).
+    pub(crate) state_value_spans: HashSet<Span>,
 }
 
 impl BodyBuilder {
@@ -58,9 +47,8 @@ impl BodyBuilder {
             closures: Vec::new(),
             loops: Vec::new(),
             opened_closures: 0,
-            pending_state_reads: Vec::new(),
             reported_state_values: HashSet::new(),
-            state_value_spans: HashMap::new(),
+            state_value_spans: HashSet::new(),
         }
     }
 

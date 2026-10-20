@@ -4,7 +4,7 @@ compose composed skippable fun main::C(_1: Int, _2: Int): Unit @2:1
   local _0: Unit (return)
   local _1 $composer: Int (argument)
   local _2 $changed: Int (argument)
-  local _3 s: MutableState<Int> (user)
+  local _3 s: &MutableState<Int> (user)
   local _4: () -> MutableState<Int> (temporary)
   local _5: Bool (temporary)
   local _6: MutableState<Int> (temporary)
@@ -39,8 +39,7 @@ compose composed skippable fun main::C(_1: Int, _2: Int): Unit @2:1
   bb6:
     _6 = call _4() -> bb7 @3:13
   bb7:
-    _3 = copy _6 @3:13
-    _7 = call composer set_slot<prism/compose/runtime::MutableState<Int>>(copy _1, copy _6) -> bb8 @3:13
+    _3 = call composer set_slot<prism/compose/runtime::MutableState<Int>>(copy _1, move _6) -> bb8 @3:13
   bb8:
     _7 = call composer end_remember(copy _1) -> bb9 @3:13
   bb9:

@@ -1,0 +1,4 @@
+// expect: ok
+struct Todo { val id: Int, val done: MutableState<Bool> }
+fun keep(f: attached (Bool) -> Unit) {}
+fun row(todo: &Todo) { keep({ todo.done.value = it }) }

@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+fun keep(f: attached () -> Unit) {}
+fun forward(onClick: attached () -> Unit) { keep(onClick) }
+fun wrap(onClick: attached () -> Unit) { keep { println("x"); onClick() } }
+fun main() {
+    forward { }
+    wrap { }
+}

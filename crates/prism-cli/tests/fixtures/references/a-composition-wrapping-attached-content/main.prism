@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+fun wrap(content: attached compose () -> Unit): Composition = composition(content)
+fun main() {
+    val s = mutableStateOf(1)
+    val c = wrap { println(s.value) }
+    s.value = 2
+    println(c.recompose())
+}

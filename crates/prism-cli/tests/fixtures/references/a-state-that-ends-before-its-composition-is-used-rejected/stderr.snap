@@ -1,0 +1,12 @@
+error[E5006]: 's' does not live long enough
+  --> main.prism:7:22
+    7 |         c.setContent { println(s.value) }
+      |                      ^^^^^^^^^^^^^^^^^^^^ borrowed value does not live long enough
+  --> main.prism:8:5
+    8 |     }
+      |     ^ 's' dropped here while still borrowed
+  --> main.prism:9:13
+    9 |     println(c.recompose())
+      |             ^ borrow later used here
+   = note: a closure given to an attached parameter captures 's' weakly, so what keeps it, such as a composition, keeps 's' borrowed while it is used
+   = help: declare 's' before the composition, so that it outlives the composition's last use, or remember it in the composition's content

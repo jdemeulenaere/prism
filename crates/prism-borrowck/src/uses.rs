@@ -160,7 +160,9 @@ fn rvalue_effects(rvalue: &Rvalue, span: Span, effects: &mut Vec<PlaceEffect>) {
         Rvalue::Closure { captures, .. } => {
             for capture in captures {
                 match capture {
-                    Capture::Borrowed(place) => use_place(place, UseKind::Captured, span, effects),
+                    Capture::Borrowed(place) | Capture::Weak(place) => {
+                        use_place(place, UseKind::Captured, span, effects)
+                    }
                     Capture::Owned(Operand::Copy(place, at)) => {
                         use_place(place, UseKind::Captured, *at, effects)
                     }

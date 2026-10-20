@@ -1,23 +1,13 @@
 // expect: ok
 // run: 101
-compose fun Child(holder: MutableState<MutableState<Int>>) {
-    val s = remember { mutableStateOf(5) }
-    SideEffect { holder.value = s }
-}
-
-compose fun Parent(show: State<Bool>, holder: MutableState<MutableState<Int>>) {
-    if (show.value) {
-        Child(holder)
-    }
-}
+fun consume(s: MutableState<Int>) {}
 
 fun main() {
-    val show = mutableStateOf(true)
-    val holder = mutableStateOf(mutableStateOf(0))
-    val c = composition { Parent(show, holder) }
-    val kept = holder.value
-    println(kept.value)
-    show.value = false
-    println(c.recompose())
-    println(kept.value)
+    val s = mutableStateOf(5)
+    val ref = s.weak()
+    val c = composition { }
+    val r = ref.get()
+    consume(s)
+    c.setContent { }
+    println(r?.value ?: -1)
 }

@@ -297,24 +297,26 @@ fn signatures_of_the_compose_module() {
     for expected in [
         "public intrinsic struct Composition",
         "public intrinsic struct RecomposeScope : Copy",
-        "public intrinsic fun composition(content: escaping compose () -> Unit): Composition",
-        "public intrinsic fun Composition.setContent(content: escaping compose () -> Unit): Unit",
+        "public intrinsic fun composition(content: attached compose () -> Unit): Composition",
+        "public intrinsic fun Composition.setContent(content: attached compose () -> Unit): Unit",
         "public intrinsic fun Composition.recompose(): Bool",
         "public intrinsic fun Composition.dump(): String",
-        "public intrinsic compose fun <T : Copy> remember(calculation: () -> T): T",
+        "public intrinsic compose fun <T> remember(calculation: () -> T): T",
         "public intrinsic compose fun key(value: Int, content: compose () -> Unit): Unit",
         "public intrinsic compose fun currentRecomposeScope(): RecomposeScope",
         "public intrinsic fun RecomposeScope.invalidate(): Unit",
-        // standard-library: "Signatures of the state declarations" (`state-handles`).
-        "public intrinsic struct State<T> : Copy",
-        "public intrinsic struct MutableState<T> : Copy",
+        // standard-library: "Signatures of the state declarations" (`owned-state`).
+        "public intrinsic struct State<T>",
+        "public intrinsic struct MutableState<T>",
+        "public intrinsic struct WeakReference<T> : Copy",
         "public intrinsic fun <T> mutableStateOf(value: T): MutableState<T>",
         "public intrinsic val <T> State<T>.value: T",
         "public intrinsic var <T> MutableState<T>.value: T",
-        "public intrinsic fun <T, R> State<T>.read(reader: (&T) -> R): R",
         "public intrinsic fun <T> MutableState<T>.update(transform: (T) -> T): Unit",
-        "public intrinsic fun <T> MutableState<T>.edit(editor: (&mut T) -> Unit): Unit",
-        "public intrinsic compose fun SideEffect(effect: escaping () -> Unit): Unit",
+        "public intrinsic capture fun <T> State<T>.weak(): WeakReference<State<T>>",
+        "public intrinsic capture fun <T> MutableState<T>.weak(): WeakReference<MutableState<T>>",
+        "public intrinsic fun <T> WeakReference<T>.get(): (&T)?",
+        "public intrinsic compose fun SideEffect(effect: attached () -> Unit): Unit",
     ] {
         assert!(
             texts.contains(expected),
@@ -323,7 +325,7 @@ fn signatures_of_the_compose_module() {
             texts
         );
     }
-    assert_eq!(texts.len(), 19, "{:?}", texts);
+    assert_eq!(texts.len(), 21, "{:?}", texts);
     assert!(PRELUDE.contains(&"prism/compose/runtime"));
 }
 
@@ -430,7 +432,7 @@ fn the_public_signature_of_run_app() {
         .expect("runApp is exported");
     assert_eq!(
         run_app.0.declaration_text().unwrap(),
-        "public intrinsic fun runApp(title: &String, width: Int, height: Int, content: escaping compose () -> Unit): Unit"
+        "public intrinsic fun runApp(title: &String, width: Int, height: Int, content: attached compose () -> Unit): Unit"
     );
     let defaults: Vec<bool> = run_app.1.iter().map(|p| p.default.is_some()).collect();
     assert_eq!(defaults, [true, true, true, false]);
@@ -467,5 +469,51 @@ fn the_public_signature_of_run_app() {
             "{} is not public",
             hidden
         );
+    }
+}
+
+/// ui: "The toolkit's handler parameters in the ABI" (`owned-state`, D9): the handlers of the
+/// toolkit's clickable, toggleable and editable components are `attached`.
+#[test]
+fn the_toolkit_s_handler_parameters_in_the_abi() {
+    let abis = prism_cli::library_abis(&["prism/compose/material3", "prism/compose/foundation"])
+        .unwrap_or_else(|error| panic!("{}", error.render()));
+    assert_eq!(abis.len(), 2);
+    let texts: Vec<String> = abis
+        .iter()
+        .flat_map(|abi| abi.symbols.iter())
+        .filter_map(prism_abi::ExportedSymbol::declaration_text)
+        .collect();
+    let declaration = |prefix: &str| -> &String {
+        texts
+            .iter()
+            .find(|text| text.starts_with(prefix))
+            .unwrap_or_else(|| panic!("no declaration starting with {} in {:#?}", prefix, texts))
+    };
+    for (prefix, parameter) in [
+        ("public compose fun Button(", "onClick: attached () -> Unit"),
+        (
+            "public fun Modifier.clickable(",
+            "onClick: attached () -> Unit",
+        ),
+        (
+            "public compose fun Checkbox(",
+            "onCheckedChange: attached (Bool) -> Unit",
+        ),
+        (
+            "public fun Modifier.toggleable(",
+            "onValueChange: attached (Bool) -> Unit",
+        ),
+        (
+            "public compose fun TextField(",
+            "onValueChange: attached (String) -> Unit",
+        ),
+        (
+            "public compose fun BasicTextField(",
+            "onValueChange: attached (String) -> Unit",
+        ),
+    ] {
+        let text = declaration(prefix);
+        assert!(text.contains(parameter), "{} lacks {}", text, parameter);
     }
 }

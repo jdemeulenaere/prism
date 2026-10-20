@@ -69,6 +69,22 @@ pub(crate) fn is_composition_operation(builtin: BuiltinFunction) -> bool {
     )
 }
 
+/// The kind and value type of the state object a `&State<T>` or `&MutableState<T>` borrows.
+pub(crate) fn state_object(ty: &Type) -> (prism_typed_tree::IntrinsicStruct, Type) {
+    let object = match ty {
+        Type::Reference { inner, .. } => inner.as_ref(),
+        other => other,
+    };
+    match object {
+        Type::Struct { id, arguments } => (
+            id.intrinsic()
+                .unwrap_or(prism_typed_tree::IntrinsicStruct::State),
+            arguments.first().cloned().unwrap_or(Type::Error),
+        ),
+        _ => (prism_typed_tree::IntrinsicStruct::State, Type::Error),
+    }
+}
+
 /// The `(Int) -> Unit` type of restart functions and root content adapters.
 pub(crate) fn word_function() -> Type {
     Type::Fn {
@@ -276,6 +292,19 @@ impl<'a> Rewriter<'a> {
         destination: Place,
         span: Span,
     ) {
+        self.call_with(callee, arguments, parameters, Vec::new(), destination, span)
+    }
+
+    /// [`Self::call`] with type arguments.
+    fn call_with(
+        &mut self,
+        callee: Callee,
+        arguments: Vec<Operand>,
+        parameters: Vec<Type>,
+        type_arguments: Vec<Type>,
+        destination: Place,
+        span: Span,
+    ) {
         let next = self.new_block();
         let parameter_kinds = vec![ParameterKind::Plain; parameters.len()];
         self.terminate(
@@ -284,7 +313,7 @@ impl<'a> Rewriter<'a> {
                 arguments,
                 parameters,
                 parameter_kinds,
-                type_arguments: Vec::new(),
+                type_arguments,
                 destination,
                 target: Some(next),
                 is_compose: false,
@@ -927,8 +956,7 @@ impl<'a> Rewriter<'a> {
             Type::Fn { params, .. } => params.clone(),
             _ => Vec::new(),
         };
-        // The window whose state cells belong to the slot written below (D11 of
-        // `state-handles`).
+        // The window in which the calculation may create states (D15 of `owned-state`).
         let composer = self.composer();
         let unit = self.unit();
         self.operation(
@@ -945,17 +973,29 @@ impl<'a> Rewriter<'a> {
             Place::local(value),
             span,
         );
-        self.push(
-            StatementKind::assign(destination, Rvalue::Use(self.copy(value))),
-            span,
-        );
+        // A `Copy` value is given by copy; any other is moved into its slot and lent from
+        // there, the same borrow the found path gives (D6 of `owned-state`).
+        let copied = self.types.is_copy(&value_type);
+        let stored = if copied {
+            self.push(
+                StatementKind::assign(destination, Rvalue::Use(self.copy(value))),
+                span,
+            );
+            self.unit()
+        } else {
+            destination
+        };
         let composer = self.composer();
-        let unit = self.unit();
+        let operand = if copied {
+            self.copy(value)
+        } else {
+            Operand::Move(Place::local(value), span)
+        };
         self.operation(
             ComposerOperation::SetSlot(value_type.clone()),
-            vec![composer, self.copy(value)],
+            vec![composer, operand],
             vec![Type::Int, value_type],
-            unit,
+            stored,
             span,
         );
         let composer = self.composer();
@@ -1474,13 +1514,31 @@ impl<'a> Rewriter<'a> {
             span,
         );
         if !is_function_parameter(&ty) {
+            // A borrowed state is kept as its weak handle, compared by identity (D13 of
+            // `owned-state`).
+            let (kept, value) = if crate::stability::is_borrowed_state(&ty, self.types) {
+                let kept = crate::stability::kept_type(&ty, self.types);
+                let weak = self.temporary(kept.clone());
+                let (state_kind, value_type) = state_object(&ty);
+                let parameters = prism_mir::StateOperation::Weak.parameters(state_kind);
+                self.call_with(
+                    Callee::State(prism_mir::StateOperation::Weak),
+                    vec![self.copy(LocalId((index + 1) as u32))],
+                    parameters,
+                    vec![value_type],
+                    Place::local(weak),
+                    span,
+                );
+                (kept, self.copy(weak))
+            } else {
+                (ty.clone(), self.copy(LocalId((index + 1) as u32)))
+            };
             let result = self.temporary(Type::Int);
             let composer = self.composer();
-            let value = self.copy(LocalId((index + 1) as u32));
             self.operation(
-                ComposerOperation::Keep(ty.clone()),
+                ComposerOperation::Keep(kept.clone()),
                 vec![composer, value, self.copy(passed)],
-                vec![Type::Int, ty, Type::Int],
+                vec![Type::Int, kept, Type::Int],
                 Place::local(result),
                 span,
             );
@@ -1599,6 +1657,7 @@ impl<'a> Rewriter<'a> {
             self.id,
             &self.body,
             self.declared,
+            self.types,
             span,
         );
         self.appended.fill(restart, restart_body);
@@ -1705,7 +1764,7 @@ pub(crate) fn renumber_locals(body: &mut Body, first: usize, by: usize) {
                         Rvalue::Closure { captures, .. } => {
                             for capture in captures {
                                 match capture {
-                                    Capture::Borrowed(p) => place(p, &shift),
+                                    Capture::Borrowed(p) | Capture::Weak(p) => place(p, &shift),
                                     Capture::Owned(o) => operand(o, &shift),
                                 }
                             }

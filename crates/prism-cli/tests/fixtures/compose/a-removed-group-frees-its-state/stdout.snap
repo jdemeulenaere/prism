@@ -3,5 +3,5 @@ true
 root
   replaceable -8166907557552174077
     restart 7816671982661643378
-      slot prism/compose/runtime::State<Bool>
+      slot prism/compose/runtime::WeakReference<prism/compose/runtime::State<Bool>>
 nodes

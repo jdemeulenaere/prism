@@ -21,6 +21,19 @@ struct PendingReceiver {
     place: Place,
     /// The receiver's own span, where its borrow is taken.
     span: Span,
+    /// The guard of the state's value the receiver is a part of, taken where it is borrowed,
+    /// after the arguments (D3 of `owned-state`).
+    guard: Option<super::state::DeferredGuard>,
+}
+
+/// Whether a value of `ty` may hold a borrow its call's operands lent: a reference, a function
+/// value or a keeper, or a nullable or box of one.
+fn may_hold_borrow(ty: &Type) -> bool {
+    match ty {
+        Type::Reference { .. } | Type::Fn { .. } => true,
+        Type::Nullable(inner) | Type::Heap(inner) => may_hold_borrow(inner),
+        other => other.contains_keeper(),
+    }
 }
 
 /// The type of the slot a generator of a parameter of type `parameter` fills, when the
@@ -93,6 +106,60 @@ impl Builder<'_> {
         if matches!(&call.callee, TreeCallee::Builtin(builtin) if builtin.is_state_operation()) {
             return self.lower_state_call(destination, call, ty, span);
         }
+        // The guards of the states' values a call's operands borrow end with the call when its
+        // result holds no borrow (D3 of `owned-state`), so `xs.value.add(xs.value.size)` takes
+        // the shared guard of `size` and the exclusive one of `add` one after the other.
+        if self.guards_end_with_call(call, ty) {
+            let destination = self.destination_or_temporary(destination, ty, span);
+            self.push_scope(span);
+            self.lower_call_operands_and_call(Some(&destination), call, ty, span);
+            self.pop_scope();
+            return;
+        }
+        self.lower_call_operands_and_call(destination, call, ty, span)
+    }
+
+    /// Whether the guards a call's operands take end with the call: outside composable contexts,
+    /// for a call whose result holds no borrow and one of whose operands reads a state's value.
+    fn guards_end_with_call(&mut self, call: &Call, ty: &Type) -> bool {
+        if self.is_compose || may_hold_borrow(ty) {
+            return false;
+        }
+        call.arguments.iter().any(|argument| match argument {
+            Argument::Written(value) => self.reads_state_place(*value),
+            Argument::Default(_) => false,
+        })
+    }
+
+    /// Whether the expression `id` reads a state place outside closures, memoized so that each
+    /// node is visited once per body.
+    fn reads_state_place(&mut self, id: ExpressionId) -> bool {
+        if let Some(&known) = self.reads_state.get(&id) {
+            return known;
+        }
+        let kind = self.expression(id).kind.clone();
+        let found = match kind {
+            ExpressionKind::StatePlace { .. } => true,
+            ExpressionKind::Closure { .. } => false,
+            kind => {
+                let mut statements = Vec::new();
+                kind.children(&mut statements)
+                    .into_iter()
+                    .any(|child| self.reads_state_place(child))
+            }
+        };
+        self.reads_state.insert(id, found);
+        found
+    }
+
+    /// [`Self::lower_call`] once the call's scope is decided.
+    fn lower_call_operands_and_call(
+        &mut self,
+        destination: Option<&Place>,
+        call: &Call,
+        ty: &Type,
+        span: Span,
+    ) {
         // `n.dp` and `n.sp` build their unit from the `Int`, with no call (D7 of `ui-toolkit`).
         if let (
             TreeCallee::Builtin(BuiltinFunction::DpOfInt | BuiltinFunction::TextUnitOfInt),
@@ -239,6 +306,9 @@ impl Builder<'_> {
         let receiver_ty = call
             .parameter_type(index)
             .expect("a receiver is the first parameter after the context");
+        if let Some(guard) = pending.guard {
+            self.take_deferred_guard(guard);
+        }
         let local = self.new_temporary(receiver_ty, pending.span);
         let rvalue = Rvalue::Borrow {
             mutable: pending.mutable,
@@ -259,11 +329,26 @@ impl Builder<'_> {
                 mutable,
                 origin: TreeBorrowOrigin::Receiver,
                 place,
-            } => Some(PendingReceiver {
-                mutable,
-                place: self.place(place),
-                span,
-            }),
+            } => {
+                // A state's guard is taken with the borrow, after the arguments, which may read
+                // the state themselves.
+                self.defer_guard = true;
+                let place = self.place_with_access(
+                    place,
+                    if mutable {
+                        super::state::StateAccess::Exclusive
+                    } else {
+                        super::state::StateAccess::Shared
+                    },
+                );
+                self.defer_guard = false;
+                Some(PendingReceiver {
+                    mutable,
+                    place,
+                    span,
+                    guard: self.deferred_guard.take(),
+                })
+            }
             _ => None,
         }
     }

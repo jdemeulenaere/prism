@@ -55,10 +55,11 @@ pub enum IntrinsicStruct {
     Composition,
     /// A `Copy` handle of a restart scope.
     RecomposeScope,
-    /// `State<T>`, a `Copy` handle of a state cell, read-only (D3 of `state-handles`).
+    /// `State<T>`, an owned, read-only state object: one word naming the state cell it owns,
+    /// retired by its drop (D1 and D5 of `owned-state`).
     State,
-    /// `MutableState<T>`, a `Copy` handle of a state cell that may be written; it converts
-    /// to `State<T>`.
+    /// `MutableState<T>`, an owned state object that may be written; it converts to
+    /// `State<T>`.
     MutableState,
     /// `NodeId`, a `Copy` handle of a node of the UI tree, `package` to the toolkit (D3 of
     /// `ui-toolkit`).
@@ -66,15 +67,19 @@ pub enum IntrinsicStruct {
     /// `HandlerId`, a `Copy` handle of an entry of the UI handler table, compared by the
     /// runtime entry `prism_ui_handlers_equal` (D23 of `ui-toolkit`).
     HandlerId,
+    /// `WeakReference<T>`, a `Copy` word naming a state without keeping it (D11 of
+    /// `owned-state`).
+    WeakReference,
 }
 
 impl IntrinsicStruct {
     /// Every intrinsic struct, in the order of the library's declarations.
-    pub const ALL: [IntrinsicStruct; 6] = [
+    pub const ALL: [IntrinsicStruct; 7] = [
         IntrinsicStruct::Composition,
         IntrinsicStruct::RecomposeScope,
         IntrinsicStruct::State,
         IntrinsicStruct::MutableState,
+        IntrinsicStruct::WeakReference,
         IntrinsicStruct::NodeId,
         IntrinsicStruct::HandlerId,
     ];
@@ -98,6 +103,7 @@ impl IntrinsicStruct {
             IntrinsicStruct::MutableState => "MutableState",
             IntrinsicStruct::NodeId => "NodeId",
             IntrinsicStruct::HandlerId => "HandlerId",
+            IntrinsicStruct::WeakReference => "WeakReference",
         }
     }
 
@@ -108,13 +114,23 @@ impl IntrinsicStruct {
             | IntrinsicStruct::RecomposeScope
             | IntrinsicStruct::NodeId
             | IntrinsicStruct::HandlerId => &[],
-            IntrinsicStruct::State | IntrinsicStruct::MutableState => &["T"],
+            IntrinsicStruct::State
+            | IntrinsicStruct::MutableState
+            | IntrinsicStruct::WeakReference => &["T"],
         }
     }
 
-    /// Whether it is a state handle, `State<T>` or `MutableState<T>`.
+    /// Whether it is a state object, `State<T>` or `MutableState<T>`.
     pub fn is_state_handle(self) -> bool {
         matches!(self, IntrinsicStruct::State | IntrinsicStruct::MutableState)
+    }
+
+    /// Whether its values keep attached function values past the call that receives them (D24
+    /// of `owned-state`): a *keeper*, whose values carry the borrows of the weak captures of
+    /// the content they keep. Only `Composition` is one: `runApp` returns once its app has
+    /// ended, and the toolkit's handlers are kept by nodes of the composition.
+    pub fn is_keeper(self) -> bool {
+        self == IntrinsicStruct::Composition
     }
 
     /// The library module declaring it.
@@ -151,12 +167,15 @@ impl IntrinsicStruct {
     /// Its marker, which its declaration must write.
     pub fn marker(self) -> Option<TypeMarker> {
         match self {
-            IntrinsicStruct::Composition => None,
-            // The markers of an intrinsic struct hold for every type argument: a state handle
-            // is `Copy` whatever its value type (D3 of `state-handles`).
-            IntrinsicStruct::RecomposeScope
+            // A state object owns its state, so it is move-only whatever its value type (D1 of
+            // `owned-state`).
+            IntrinsicStruct::Composition
             | IntrinsicStruct::State
-            | IntrinsicStruct::MutableState
+            | IntrinsicStruct::MutableState => None,
+            // The markers of an intrinsic struct hold for every type argument: a weak reference
+            // is `Copy` whatever it names.
+            IntrinsicStruct::RecomposeScope
+            | IntrinsicStruct::WeakReference
             | IntrinsicStruct::NodeId
             | IntrinsicStruct::HandlerId => Some(TypeMarker::Copy),
         }
@@ -270,6 +289,10 @@ pub struct TypeTable {
     /// The position of each field of a struct, or variant of an enum, by name (the first of a
     /// repeated name), so that a member is found in constant time however many there are.
     member_indices: BTreeMap<NominalId, HashMap<String, usize>>,
+    /// The types a `capture` function of the library captures (D12 of `owned-state`), found
+    /// from declarations, never from names: closures given to `attached` parameters capture
+    /// their values weakly, and composables compare borrowed ones by identity.
+    captured_weakly: std::collections::BTreeSet<NominalId>,
 }
 
 /// The position of each member of `definition` by name, the first of a repeated name.
@@ -519,6 +542,9 @@ impl TypeTable {
                 }
                 restricted.insert_definition(id.clone(), definition.clone());
             }
+            if self.captured_weakly.contains(&id) {
+                restricted.captured_weakly.insert(id.clone());
+            }
             if let Some(marker) = self.markers.get(&id) {
                 restricted.markers.insert(id, marker.clone());
             }
@@ -526,10 +552,31 @@ impl TypeTable {
         restricted
     }
 
+    /// Records that the type `id` has a capture function (D12 of `owned-state`).
+    pub fn insert_capture_function(&mut self, id: NominalId) {
+        self.captured_weakly.insert(id);
+    }
+
+    /// Whether values of `ty` have a capture function: a struct whose declarations include one.
+    /// A set lookup, constant time per captured path and per parameter type.
+    pub fn has_capture_function(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Struct { id, .. } => self.captured_weakly.contains(id),
+            _ => false,
+        }
+    }
+
+    /// The types with a capture function, in order.
+    pub fn capture_function_types(&self) -> impl Iterator<Item = &NominalId> {
+        self.captured_weakly.iter()
+    }
+
     /// Adds the definitions and markers of `other` that this table does not record. Two tables
     /// of one program never disagree about a type, since a [`NominalId`] is unique in a program
     /// and every definition comes from the same declarations (D5 of `monomorphization`).
     pub fn extend_from(&mut self, other: &TypeTable) {
+        self.captured_weakly
+            .extend(other.captured_weakly.iter().cloned());
         for (id, definition) in &other.definitions {
             debug_assert!(
                 self.definitions
@@ -895,6 +942,16 @@ impl Type {
                         .all(|(target, param)| target.converts_in_place(param))
                     && ret.converts_in_place(target_ret)
             }
+            _ => false,
+        }
+    }
+
+    /// Whether the type is a keeper (D24 of `owned-state`), or a nullable or `Heap<T>` of one:
+    /// a value that may hold the borrows of the weak captures of the attached content it keeps.
+    pub fn contains_keeper(&self) -> bool {
+        match self {
+            Type::Struct { id, .. } => id.intrinsic().is_some_and(IntrinsicStruct::is_keeper),
+            Type::Nullable(inner) | Type::Heap(inner) => inner.contains_keeper(),
             _ => false,
         }
     }

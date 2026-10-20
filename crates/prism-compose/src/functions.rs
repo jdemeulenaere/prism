@@ -165,7 +165,7 @@ pub static COMPOSE_FUNCTIONS: &[RuntimeFunction] = &[
         name: "prism_compose_set_slot",
         address: address(prism_compose_set_slot as *const ()),
         parameters: &[I64, Pointer, Pointer],
-        result: None,
+        result: Some(Pointer),
         never_returns: false,
     },
     RuntimeFunction {
@@ -250,6 +250,20 @@ pub static COMPOSE_FUNCTIONS: &[RuntimeFunction] = &[
         address: address(prism_compose_state_end_edit as *const ()),
         parameters: &[I64, Pointer],
         result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_state_retire",
+        address: address(prism_compose_state_retire as *const ()),
+        parameters: &[I64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
+        name: "prism_compose_state_upgrade",
+        address: address(prism_compose_state_upgrade as *const ()),
+        parameters: &[I64],
+        result: Some(I8),
         never_returns: false,
     },
     RuntimeFunction {

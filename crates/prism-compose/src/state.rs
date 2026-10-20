@@ -1,31 +1,38 @@
-//! State cells (D6, D8 to D12, D14 and D15 of `state-handles`).
+//! State cells (D6, D8 to D10 and D14 of `state-handles`, D3, D7 and D16 of `owned-state`).
 //!
-//! A `State<T>` or `MutableState<T>` is one word, a generational [`Handle`] of a [`Cell`] in
-//! the thread's cell arena. A cell holds its value's slot type record, its value in a block of
-//! exactly the record's size and alignment that never moves while the cell lives (so a borrow
-//! of it taken during a pass stays valid however many cells the pass creates), a borrow flag,
-//! the scopes that read it, and nothing about its owner but whether it was released.
+//! A `State<T>` or `MutableState<T>` is a state object that owns one cell: one word, a
+//! generational [`Handle`] of a [`Cell`] in the thread's cell arena. A cell holds its value's
+//! slot type record, its value in a block of exactly the record's size and alignment that never
+//! moves while the cell lives (so a borrow of it stays valid however the state object moves and
+//! however many cells are created), a borrow flag and the scopes that read it. The runtime does
+//! not know who owns a cell: its state object does, and dropping the object retires the cell.
 //!
 //! - **Validation** (D8, D15). Every access validates the handle's index and generation and
 //!   compares the record it is given with the cell's, so a handle can never reach a freed cell
 //!   or a cell of another layout; a failure is the runtime error `stale state handle`.
-//! - **Borrow flags** (D6). A cell is free, shared by `read` closures (a count), empty while
-//!   `update` holds its value, or exclusive while `edit` holds it or a write drops the old
-//!   value. A conflicting access is `state accessed while borrowed`.
+//! - **Borrow flags** (D6, guards of `owned-state` D3). A cell is free, shared by guards
+//!   (a count), empty while `update` holds its value, or exclusive while an exclusive guard
+//!   holds it or a write drops the old value. A conflicting access is `state accessed while
+//!   borrowed`.
 //! - **Readers** (D9). A read during a pass registers the pass's current scope once per cell:
 //!   a vector with a linear membership test, backed by a hash set beyond eight scopes, pruned
 //!   of scopes that left their composition before it grows. A write invalidates them and
 //!   forgets them.
 //! - **Equal writes** (D10). A `value =` write compares the new value with the current one
 //!   through the record's equality entry; an equal one is dropped, and nothing is invalidated.
-//! - **Creation owners** (D11, D12). A stack of who owns the cells created now: a `remember`
-//!   window, whose cells are attached to the slot it writes, a composition, for the code that
-//!   runs as one of its handlers or side effects, or the program, for top-level initializers.
-//!   With an empty stack, a cell created outside a pass belongs to the program and one created
-//!   during a pass is `state created during composition outside remember`.
-//! - **Release** (D12). Freeing a cell drops its value through its record and frees its block,
-//!   outside the thread's state; a cell borrowed or emptied when its owner releases it becomes
-//!   stale at once and is freed when the borrowing call ends.
+//! - **Creation windows** (D15 of `owned-state`). A count of the windows that allow creating a
+//!   cell during a pass: a `remember` calculation, or a top-level value's initializer. A cell
+//!   created during a pass outside every window is `state created during composition outside
+//!   remember`.
+//! - **Retirement** (D7 of `owned-state`). Dropping a state object retires its cell: its
+//!   readers are invalidated and forgotten, a weak reference to it upgrades to nothing, and no
+//!   read registers a reader again, but its value stays valid, so borrows taken before and weak
+//!   handles held by nodes keep working. The cell is freed, its value dropped, at the end of the
+//!   first pass on the thread that starts after the retirement, after that pass's releases; at
+//!   once when no composition is live on the thread, and when the last one is disposed.
+//! - **Frees** (D12 of `state-handles`). Freeing a cell drops its value through its record and
+//!   frees its block, outside the thread's state; a cell held by a guard or `update` when its
+//!   free is due becomes stale at once and is freed when the last hold ends.
 //! - **Errors** (D14). An entry that fails records the error's kind in the thread's state and
 //!   returns a failure result; generated code then calls `prism_compose_state_error` with the
 //!   access's location.
@@ -38,16 +45,14 @@ use prism_runtime::PanicKind;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Whether a composition was started or a creation owner pushed, on any thread of the
-/// process. Until then no thread runs a pass or has a creation owner, so every cell created
-/// belongs to the program whatever a top-level initializer says, and its program scope has
-/// nothing to do: a program that does not use compose pays one load per top-level value
-/// initialized (D11). The thread that sets it reads it back in program order, which is all a
-/// thread's own scopes need.
+/// Whether a composition was started, on any thread of the process. Until then no thread runs
+/// a pass, so a top-level initializer may create cells without opening a creation window: a
+/// program that does not use compose pays one load per top-level value initialized (D11 of
+/// `state-handles`). The thread that sets it reads it back in program order, which is all a
+/// thread's own windows need.
 static IN_USE: AtomicBool = AtomicBool::new(false);
 
-/// Records that compose is in use: called when a composition starts and when a creation owner
-/// is pushed.
+/// Records that compose is in use: called when a composition starts.
 pub(crate) fn mark_in_use() {
     if !IN_USE.load(Ordering::Relaxed) {
         IN_USE.store(true, Ordering::Relaxed);
@@ -57,16 +62,16 @@ pub(crate) fn mark_in_use() {
 /// How many readers a cell tests linearly before it keeps a hash set of them too.
 const LINEAR_READERS: usize = 8;
 
-/// How a cell is held (D6).
+/// How a cell is held (D6 of `state-handles`, D3 of `owned-state`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flag {
     /// Nothing holds the cell.
     Free,
-    /// `count` `read` closures borrow its value shared.
+    /// `count` shared guards borrow its value.
     Shared(u32),
     /// `update` moved its value out.
     Empty,
-    /// `edit` borrows its value mutably, or a write drops its old value.
+    /// An exclusive guard borrows its value mutably, or a write drops its old value.
     Exclusive,
 }
 
@@ -133,21 +138,12 @@ pub struct Cell {
     pub value: *mut u8,
     pub flag: Flag,
     pub readers: Readers,
-    /// Whether the cell's owner released it while it was held: it is stale from then on, and
-    /// freed when the borrowing call ends (D12).
+    /// Whether its state object was dropped (D7 of `owned-state`): its readers were forgotten,
+    /// and a weak reference to it upgrades to nothing; its value stays valid until it is freed.
+    pub retired: bool,
+    /// Whether its free came due while a guard or `update` held it: it is stale from then on,
+    /// and freed when the last hold ends (D12 of `state-handles`).
     pub released: bool,
-}
-
-/// Who owns the cells created now (D11 and D12), innermost last.
-#[derive(Debug)]
-pub enum CreationOwner {
-    /// A `remember` calculation: the cells created while it runs, attached to its slot by
-    /// `end remember`.
-    Remember(Vec<Handle>),
-    /// A handler or side effect of the composition.
-    Composition(Handle),
-    /// A top-level value's initializer.
-    Program,
 }
 
 /// A state error waiting for its location (D14).
@@ -183,7 +179,8 @@ fn cell_mut(state: &mut State, handle: Handle, record: *const SlotType) -> State
     }
 }
 
-/// Registers the active pass's current scope as a reader of `handle` (D9).
+/// Registers the active pass's current scope as a reader of `handle` (D9), unless the cell is
+/// retired: nothing writes it any more that its readers need to see.
 fn register_reader(state: &mut State, handle: Handle) {
     if state.active.is_none() {
         return;
@@ -193,8 +190,10 @@ fn register_reader(state: &mut State, handle: Handle) {
     };
     let State { cells, groups, .. } = state;
     if let Some(cell) = cells.get_mut(handle) {
-        cell.readers
-            .register(scope, |reader| groups.contains(reader));
+        if !cell.retired {
+            cell.readers
+                .register(scope, |reader| groups.contains(reader));
+        }
     }
 }
 
@@ -221,6 +220,17 @@ fn check_writable(state: &State) -> StateResult<()> {
     }
 }
 
+/// Removes the cell `handle` from the arena when no hold is on it, for a free; else marks its
+/// free due, for the end of the last hold.
+fn take_if_free(state: &mut State, handle: Handle) -> Option<Cell> {
+    let cell = state.cells.get_mut(handle)?;
+    if cell.flag != Flag::Free {
+        cell.released = true;
+        return None;
+    }
+    state.cells.remove(handle)
+}
+
 /// Drops the value of a freed cell through its record and frees its block. Program code runs,
 /// so no borrow of the state may be held.
 ///
@@ -241,38 +251,119 @@ unsafe fn destroy(cell: Cell, empty: bool) {
 pub struct States;
 
 impl States {
-    /// Creates a cell of `record` holding the value at `value`, moved in, owned by the
-    /// innermost creation owner (D11, D12).
+    /// Creates a cell of `record` holding the value at `value`, moved in, for the state object
+    /// that owns it; during a pass, only in a creation window (D15 of `owned-state`).
     ///
     /// # Safety
     ///
     /// `record` must be a valid record and `value` a value of it that the caller gives up.
     pub unsafe fn create(record: *const SlotType, value: *mut u8) -> StateResult<Handle> {
         with_state(|state| {
-            if state.creation_owners.is_empty() && state.active.is_some() {
+            if state.creation_windows == 0 && state.active.is_some() {
                 return Err(StateError::CreatedDuringComposition);
             }
             let block = allocate_block(&*record);
             std::ptr::copy_nonoverlapping(value, block, (*record).size);
-            let handle = state.cells.insert(Cell {
+            Ok(state.cells.insert(Cell {
                 record,
                 value: block,
                 flag: Flag::Free,
                 readers: Readers::default(),
+                retired: false,
                 released: false,
-            });
-            match state.creation_owners.last_mut() {
-                Some(CreationOwner::Remember(cells)) => cells.push(handle),
-                Some(CreationOwner::Composition(composition)) => {
-                    let composition = *composition;
-                    match state.compositions.get_mut(composition) {
-                        Some(record) if !record.disposed => record.cells.push(handle),
-                        _ => state.program_cells.push(handle),
-                    }
-                }
-                Some(CreationOwner::Program) | None => state.program_cells.push(handle),
+            }))
+        })
+    }
+
+    /// Retires the cell of a dropped state object (D7 of `owned-state`): invalidates and
+    /// forgets its readers and marks it retired; with no composition live on the thread, frees
+    /// it at once (or when the hold on it ends), else records it for the end of the next pass.
+    /// A handle of a cell already gone does nothing. Program code may run (the value's drop).
+    pub fn retire(handle: Handle) {
+        let freed = with_state(|state| {
+            let cell = state.cells.get_mut(handle)?;
+            if cell.retired {
+                return None;
             }
-            Ok(handle)
+            cell.retired = true;
+            // A reader that ran in the pass whose releases retire the cell read the states it
+            // needs then; any other reader showed the retired state (D7 of `owned-state`).
+            let releasing = state.releasing_pass;
+            let mut readers = std::mem::take(&mut cell.readers);
+            for reader in readers.scopes() {
+                let current = releasing != 0
+                    && state
+                        .groups
+                        .get(*reader)
+                        .is_some_and(|group| group.visited == releasing);
+                if !current {
+                    invalidate_in(state, *reader);
+                }
+            }
+            readers.clear();
+            if let Some(cell) = state.cells.get_mut(handle) {
+                cell.readers = readers;
+            }
+            if state.live_compositions > 0 {
+                state.retired.push_back((handle, state.pass_counter));
+                return None;
+            }
+            take_if_free(state, handle)
+        });
+        if let Some(cell) = freed {
+            // SAFETY: the cell was removed from the arena and holds its value.
+            unsafe { destroy(cell, false) }
+        }
+    }
+
+    /// Frees the cells retired before the pass `identifier` started, at its end, after its
+    /// releases (D7 of `owned-state`). Retirements are recorded in pass order, so the due ones
+    /// are a prefix: the cost is their number.
+    pub fn free_retired_before(identifier: u64) {
+        loop {
+            let freed = with_state(|state| {
+                let &(handle, retired_at) = state.retired.front()?;
+                if retired_at >= identifier {
+                    return None;
+                }
+                state.retired.pop_front();
+                Some(take_if_free(state, handle))
+            });
+            match freed {
+                None => break,
+                // SAFETY: the cell was removed from the arena and holds its value.
+                Some(Some(cell)) => unsafe { destroy(cell, false) },
+                Some(None) => {}
+            }
+        }
+    }
+
+    /// Frees every retired cell: when the last composition of the thread is disposed, and at
+    /// exit under the allocation check. A freed value may retire more cells, which are freed
+    /// at once when no composition is live.
+    pub fn free_all_retired() {
+        loop {
+            let freed = with_state(|state| {
+                let (handle, _) = state.retired.pop_front()?;
+                Some(take_if_free(state, handle))
+            });
+            match freed {
+                None => break,
+                // SAFETY: the cell was removed from the arena and holds its value.
+                Some(Some(cell)) => unsafe { destroy(cell, false) },
+                Some(None) => {}
+            }
+        }
+    }
+
+    /// Whether `handle` names a live cell that is not retired: what a weak reference's `get()`
+    /// tests (D11 of `owned-state`).
+    pub fn upgrade(handle: Handle) -> bool {
+        with_state(|state| {
+            state
+                .cells
+                .get(handle)
+                .is_some_and(|cell| !cell.retired && !cell.released)
         })
     }
 
@@ -331,8 +422,8 @@ impl States {
         Ok(())
     }
 
-    /// Borrows the cell shared for a `read` closure, giving the value's address; during a pass
-    /// the current scope becomes a reader.
+    /// Takes a shared guard on the cell, giving the value's address; during a pass the current
+    /// scope becomes a reader.
     pub fn begin_read(handle: Handle, record: *const SlotType) -> StateResult<*const u8> {
         with_state(|state| {
             let cell = cell_mut(state, handle, record)?;
@@ -347,8 +438,8 @@ impl States {
         })
     }
 
-    /// Ends a shared borrow of [`States::begin_read`], freeing a cell released meanwhile once
-    /// its last borrow ends.
+    /// Ends a shared guard of [`States::begin_read`], freeing a cell whose free came due
+    /// meanwhile once its last hold ends.
     pub fn end_read(handle: Handle) {
         let freed = with_state(|state| {
             let cell = state.cells.get_mut(handle)?;
@@ -367,8 +458,8 @@ impl States {
         }
     }
 
-    /// Moves the cell's value to `destination` for an `update` closure; the cell holds nothing
-    /// until [`States::put`].
+    /// Moves the cell's value to `destination` for an `update` transform; the cell holds
+    /// nothing until [`States::put`].
     ///
     /// # Safety
     ///
@@ -390,9 +481,9 @@ impl States {
         })
     }
 
-    /// Moves the value at `value`, the result of an `update` closure, into the cell its
-    /// [`States::take`] emptied, and invalidates the readers; into a cell released meanwhile,
-    /// the value is dropped and the cell freed.
+    /// Moves the value at `value`, the result of an `update` transform, into the cell its
+    /// [`States::take`] emptied, and invalidates the readers; into a cell whose free came due
+    /// meanwhile, the value is dropped and the cell freed.
     ///
     /// # Safety
     ///
@@ -422,7 +513,7 @@ impl States {
         Ok(())
     }
 
-    /// Borrows the cell mutably for an `edit` closure, giving the value's address.
+    /// Takes an exclusive guard on the cell, giving the value's address.
     pub fn begin_edit(handle: Handle, record: *const SlotType) -> StateResult<*mut u8> {
         with_state(|state| {
             check_writable(state)?;
@@ -435,14 +526,14 @@ impl States {
         })
     }
 
-    /// Ends the mutable borrow of [`States::begin_edit`] and invalidates the readers, or frees
-    /// a cell released meanwhile.
+    /// Ends the exclusive guard of [`States::begin_edit`] and invalidates the readers, or frees
+    /// a cell whose free came due meanwhile.
     pub fn end_edit(handle: Handle) {
         Self::end_hold(handle, true)
     }
 
     /// Ends an exclusive hold of the cell, invalidating its readers when `changed`, or freeing
-    /// it when its owner released it meanwhile.
+    /// it when its free came due meanwhile.
     fn end_hold(handle: Handle, changed: bool) {
         let freed = with_state(|state| {
             let cell = state.cells.get_mut(handle)?;
@@ -461,61 +552,22 @@ impl States {
         }
     }
 
-    /// Releases the cells `handles`, in order: each is freed, its value dropped, or, when a
-    /// closure member holds it, made stale and freed when that call ends (D12). Program code
-    /// runs, so no borrow of the state may be held.
-    pub fn release(handles: &[Handle]) {
-        for &handle in handles {
-            let freed = with_state(|state| {
-                let cell = state.cells.get_mut(handle)?;
-                if cell.flag != Flag::Free {
-                    cell.released = true;
-                    return None;
-                }
-                state.cells.remove(handle)
-            });
-            if let Some(cell) = freed {
-                // SAFETY: the cell was removed from the arena and holds its value.
-                unsafe { destroy(cell, false) }
-            }
-        }
-    }
-
-    /// The type name of the cell `handle`, for dumps.
-    pub fn type_name(state: &State, handle: Handle) -> Option<String> {
-        let cell = state.cells.get(handle)?;
-        // SAFETY: records are static data.
-        Some(unsafe { (*cell.record).name() }.to_string())
-    }
-
-    /// Pushes `owner` as the innermost creation owner.
-    pub fn push_owner(owner: CreationOwner) {
-        mark_in_use();
-        with_state(|state| state.creation_owners.push(owner))
-    }
-
-    /// Opens the program scope of a top-level initializer (D11), giving whether it pushed the
-    /// program as the creation owner: it does not while compose is unused, since no pass runs
-    /// and no owner is pushed, so the program owns what the initializer creates anyway.
+    /// Opens the program scope of a top-level initializer (D11 of `state-handles`), a creation
+    /// window, giving whether it opened one: it does not while compose is unused, since no pass
+    /// runs.
     pub fn begin_program() -> bool {
         if !IN_USE.load(Ordering::Relaxed) {
             return false;
         }
-        with_state(|state| state.creation_owners.push(CreationOwner::Program));
+        with_state(|state| state.creation_windows += 1);
         true
     }
 
-    /// Closes the program scope [`States::begin_program`] opened, popping the program when it
-    /// pushed it.
-    pub fn end_program(pushed: bool) {
-        if pushed {
-            Self::pop_owner();
+    /// Closes the program scope [`States::begin_program`] opened, when it opened one.
+    pub fn end_program(opened: bool) {
+        if opened {
+            with_state(|state| state.creation_windows -= 1);
         }
-    }
-
-    /// Pops the innermost creation owner.
-    pub fn pop_owner() -> Option<CreationOwner> {
-        with_state(|state| state.creation_owners.pop())
     }
 
     /// The live cells of this thread.
@@ -534,17 +586,11 @@ impl States {
     }
 }
 
-/// Frees the cells the program owns, under the allocation check, then gives the report of
-/// compositions still live: the finish report `prism-codegen` installs (D12). A program cell
+/// Frees the retired cells, under the allocation check, then gives the report of compositions
+/// still live: the finish report `prism-codegen` installs (D7 of `owned-state`). A retired cell
 /// may hold a composition, whose drop disposes it, so the cells go first.
 pub fn finish_report() -> Option<String> {
-    loop {
-        let cells = with_state(|state| std::mem::take(&mut state.program_cells));
-        if cells.is_empty() {
-            break;
-        }
-        States::release(&cells);
-    }
+    States::free_all_retired();
     crate::thread::live_compositions_report()
 }
 

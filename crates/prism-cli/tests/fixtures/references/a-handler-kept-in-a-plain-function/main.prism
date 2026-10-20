@@ -1,0 +1,5 @@
+// expect: E5007
+// run: 1
+fun later(f: escaping () -> Unit) {}
+fun f(count: &MutableState<Int>) { later { count.value += 1 } }
+fun main() {}

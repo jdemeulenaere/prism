@@ -1,0 +1,3 @@
+package prism
+
+public intrinsic capture fun <T> MutableState<T>.weak(n: Int): WeakReference<MutableState<T>>

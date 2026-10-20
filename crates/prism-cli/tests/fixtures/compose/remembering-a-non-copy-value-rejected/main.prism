@@ -1,4 +1,0 @@
-// expect: E4021
-compose fun C() {
-    val s = remember { "a" + "b" }
-}

@@ -1,0 +1,10 @@
+// expect: E5006
+// run: 1
+fun main() {
+    val c = composition { }
+    if (true) {
+        val s = mutableStateOf(0)
+        c.setContent { println(s.value) }
+    }
+    println(c.recompose())
+}

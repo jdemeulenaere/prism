@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+compose fun Count(s: &State<List<Int>>) { println("count ${s.value.size}") }
+fun main() {
+    val s = mutableStateOf(listOf(1))
+    val c = composition { Count(s) }
+    s.value.add(2)
+    println(c.recompose())
+}

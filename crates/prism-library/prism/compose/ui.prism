@@ -69,13 +69,13 @@ package external fun prism_ui_set_enabled(node: NodeId, enabled: Bool): Unit
 package external fun prism_ui_set_on_value_change(node: NodeId, handler: HandlerId): Unit
 
 // Moves a click handler into the handler table, until a node claims it.
-package external fun prism_ui_register_click(handler: escaping () -> Unit): HandlerId
+package external fun prism_ui_register_click(handler: attached () -> Unit): HandlerId
 
 // Moves a toggle handler into the handler table, until a node claims it.
-package external fun prism_ui_register_toggle(handler: escaping (Bool) -> Unit): HandlerId
+package external fun prism_ui_register_toggle(handler: attached (Bool) -> Unit): HandlerId
 
 // Moves a text field's edit handler into the handler table, until a node claims it.
-package external fun prism_ui_register_text(handler: escaping (String) -> Unit): HandlerId
+package external fun prism_ui_register_text(handler: attached (String) -> Unit): HandlerId
 
 // Ends the program: a chain cannot hold a seventeenth element.
 package external fun prism_ui_modifier_overflow(): Nothing
@@ -341,5 +341,5 @@ public intrinsic fun runApp(
     title: &String = "Prism",
     width: Int = 800,
     height: Int = 600,
-    content: escaping compose () -> Unit,
+    content: attached compose () -> Unit,
 ): Unit

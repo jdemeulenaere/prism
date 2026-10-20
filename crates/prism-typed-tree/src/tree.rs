@@ -685,21 +685,26 @@ pub enum BuiltinFunction {
     CurrentRecomposeScope,
     /// `s.invalidate()` of a `RecomposeScope`.
     InvalidateScope,
-    /// `mutableStateOf(value)`: creates a state cell holding `value`, moved in, and gives a
-    /// `MutableState<T>` of it (D2 of `state-handles`). Its type argument is the value type.
+    /// `mutableStateOf(value)`: creates a state holding `value`, moved in, and gives the
+    /// `MutableState<T>` that owns it (D2 of `state-handles`, D1 of `owned-state`). Its type
+    /// argument is the value type.
     MutableStateOf,
     /// `s.value` of a `State<T>` or `MutableState<T>` whose `T` is `Copy`: a copy of the
-    /// cell's value, called with the handle copied as its receiver (D5). Any other `s.value`
-    /// is an [`ExpressionKind::StatePlace`].
+    /// state's value, called with a shared borrow of the state object as its receiver (D5 of
+    /// `state-handles`, D3 of `owned-state`). Any other `s.value` is an
+    /// [`ExpressionKind::StatePlace`].
     StateValue,
-    /// `s.read(reader)`: calls `reader` with a shared borrow of the cell's value and gives its
-    /// result (D6). Its type arguments are the value type and the result type.
-    StateRead,
-    /// `s.update(transform)`: moves the value out of the cell, calls `transform` with it and
-    /// moves the result back in.
+    /// `s.update(transform)`: moves the value out of the state, calls `transform` with it and
+    /// moves the result back in. Its receiver is a shared borrow of the state object.
     StateUpdate,
-    /// `s.edit(editor)`: calls `editor` with a mutable borrow of the cell's value.
-    StateEdit,
+    /// `s.weak()`, the capture function of `State<T>` and `MutableState<T>` (D11 and D12 of
+    /// `owned-state`): a `WeakReference` of the state object, a copy of its word. Its type
+    /// argument is the value type.
+    StateWeak,
+    /// `r.get()` of a `WeakReference<S>`: `null` once the state is retired, else a shared
+    /// borrow of a state object reaching it, the reference's own word viewed as one (D11 of
+    /// `owned-state`). Its type argument is the state object's type `S`.
+    WeakGet,
     /// `SideEffect(effect)`, a composable: queues `effect` to run after the pass (D13).
     SideEffect,
     /// `Node(kind, update, content)` of `/prism/compose/ui`, a composable: a node group of
@@ -762,9 +767,9 @@ impl BuiltinFunction {
             BuiltinFunction::InvalidateScope => "invalidate",
             BuiltinFunction::MutableStateOf => "mutableStateOf",
             BuiltinFunction::StateValue => "value",
-            BuiltinFunction::StateRead => "read",
             BuiltinFunction::StateUpdate => "update",
-            BuiltinFunction::StateEdit => "edit",
+            BuiltinFunction::StateWeak => "weak",
+            BuiltinFunction::WeakGet => "get",
             BuiltinFunction::SideEffect => "SideEffect",
             BuiltinFunction::UiNode => "Node",
             BuiltinFunction::UiLeafNode => "LeafNode",
@@ -794,9 +799,9 @@ impl BuiltinFunction {
             self,
             BuiltinFunction::MutableStateOf
                 | BuiltinFunction::StateValue
-                | BuiltinFunction::StateRead
                 | BuiltinFunction::StateUpdate
-                | BuiltinFunction::StateEdit
+                | BuiltinFunction::StateWeak
+                | BuiltinFunction::WeakGet
         )
     }
 
@@ -1320,10 +1325,14 @@ pub enum CaptureMode {
     Moved,
     /// The closure owns a copy of the binding, whose type is `Copy`.
     Copied,
+    /// The closure holds a weak handle of the state object at the path, made by its type's
+    /// capture function where the closure is built: one `Copy` word that owns nothing (D10
+    /// of `owned-state`). Only a closure given to `attached` parameters takes one.
+    Weak,
 }
 
 impl CaptureMode {
-    /// Whether the closure owns what it captures.
+    /// Whether the closure owns what it captures: a value moved or copied in, or a weak handle.
     pub fn is_owned(self) -> bool {
         !matches!(self, CaptureMode::Borrowed)
     }

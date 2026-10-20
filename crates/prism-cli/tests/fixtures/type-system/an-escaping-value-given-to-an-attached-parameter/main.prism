@@ -1,0 +1,3 @@
+// expect: ok
+fun keepIt(f: attached () -> Unit) {}
+fun g(h: escaping () -> Unit) { keepIt(h) }

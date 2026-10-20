@@ -1,6 +1,6 @@
 // expect: ok
 // run: 0
-compose fun Mark(seen: MutableState<Int>, n: State<Int>) {
+compose fun Mark(seen: &MutableState<Int>, n: &State<Int>) {
     println("mark ${n.value}")
     SideEffect { seen.value = 1 }
 }

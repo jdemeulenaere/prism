@@ -29,7 +29,7 @@ public fun Modifier.border(
 public fun Modifier.clickable(
     enabled: Bool = true,
     role: Role? = null,
-    onClick: escaping () -> Unit,
+    onClick: attached () -> Unit,
 ): Modifier = append(
     ModifierElement.Clickable(prism_ui_register_click(onClick), enabled, roleCode(role)),
 )
@@ -40,7 +40,7 @@ public fun Modifier.toggleable(
     value: Bool,
     enabled: Bool = true,
     role: Role? = null,
-    onValueChange: escaping (Bool) -> Unit,
+    onValueChange: attached (Bool) -> Unit,
 ): Modifier = append(
     ModifierElement.Toggleable(
         prism_ui_register_toggle(onValueChange),
@@ -75,7 +75,7 @@ public compose fun BasicText(
 // `onValueChange` with the new text, which the field shows once the program passes it back.
 public compose fun BasicTextField(
     value: &String,
-    onValueChange: escaping (String) -> Unit,
+    onValueChange: attached (String) -> Unit,
     modifier: Modifier = Modifier,
     enabled: Bool = true,
     textStyle: TextStyle = TextStyle.Default,

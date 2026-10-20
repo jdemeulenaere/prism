@@ -2,7 +2,7 @@ import /prism/compose/ui
 import /prism/compose/foundation
 import /prism/compose/layout
 import /prism/compose/material3
-compose fun Label(count: State<Int>, times: Int) { Text("n = ${count.value * times}") }
+compose fun Label(count: &State<Int>, times: Int) { Text("n = ${count.value * times}") }
 compose fun Counter() {
     val c = remember { mutableStateOf(0) }
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

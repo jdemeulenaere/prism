@@ -1,6 +1,7 @@
-//! Rust tests of state cells (`state-handles`): what a Prism program cannot observe (flag
-//! transitions, deduplicated readers, release while borrowed, release order, another thread)
-//! and the protocol of cells, remember windows and side effects driven from Rust content.
+//! Rust tests of state cells (`state-handles`, `owned-state`): what a Prism program cannot
+//! observe (flag transitions, deduplicated readers, retirement and frees, a free due while a
+//! guard holds the cell, another thread) and the protocol of cells, remember windows and side
+//! effects driven from Rust content.
 
 use crate::applier::NodeTree;
 use crate::composer::Composer;
@@ -50,10 +51,20 @@ fn read<T: Copy>(handle: Handle, record: &'static SlotType) -> Result<T, StateEr
     States::read(handle, record).map(|value| unsafe { *(value as *const T) })
 }
 
-/// Frees what the tests left in this thread's program cells.
+/// Frees what the tests left retired on this thread.
 fn reset() {
     finish_report();
     events();
+}
+
+/// A state object as generated code holds one: its handle, retired when it is dropped.
+#[derive(Debug, PartialEq)]
+struct StateObject(Handle);
+
+impl Drop for StateObject {
+    fn drop(&mut self) {
+        States::retire(self.0);
+    }
 }
 
 #[test]
@@ -111,7 +122,8 @@ fn stale_handles_are_detected() {
         States::read(Handle::new(9999, 1), text).err(),
         Some(StateError::Stale)
     );
-    States::release(&[cell]);
+    // With no composition live, a retired cell is freed at once.
+    States::retire(cell);
     assert_eq!(events(), ["drop a"]);
     assert_eq!(States::read(cell, text).err(), Some(StateError::Stale));
     // The index is reused with a new generation: the old handle stays stale.
@@ -119,10 +131,10 @@ fn stale_handles_are_detected() {
     assert_eq!(again.index(), cell.index());
     assert_eq!(States::read(cell, text).err(), Some(StateError::Stale));
     assert!(States::read(again, text).is_ok());
-    // A cell released while a closure member borrows it is stale at once, and freed when the
-    // borrow ends.
+    // A cell whose free comes due while a guard holds it is stale at once, and freed when the
+    // guard ends.
     States::begin_read(again, text).unwrap();
-    States::release(&[again]);
+    States::retire(again);
     assert!(events().is_empty(), "not freed while borrowed");
     assert_eq!(States::read(again, text).err(), Some(StateError::Stale));
     States::end_read(again);
@@ -140,7 +152,7 @@ fn equal_writes_keep_the_old_value_and_drop_the_new_one() {
     assert_eq!(events(), ["drop old"], "the old value is dropped");
     let value = States::read(cell, text).unwrap();
     assert_eq!(unsafe { (*(value as *const Tracked)).0 }, "new");
-    States::release(&[cell]);
+    States::retire(cell);
     assert_eq!(events(), ["drop new"]);
     reset();
 }
@@ -230,38 +242,48 @@ fn writes_and_creations_during_a_pass_fail() {
     reset();
 }
 
-/// Stores a handle in a typed slot at the cursor, as `remember` does on a miss, inside a
-/// remember window.
+/// Stores a state object in a typed slot at the cursor, as `remember` does on a miss, inside a
+/// remember window, and gives its handle.
 fn remember_cell<T>(
     k: Composer,
-    handle_record: &'static SlotType,
+    object_record: &'static SlotType,
     record: &'static SlotType,
     value: T,
 ) -> Handle {
-    let address = unsafe { k.slot(handle_record).unwrap() };
+    let address = unsafe { k.slot(object_record).unwrap() };
     if !address.is_null() {
-        return unsafe { *(address as *const Handle) };
+        return unsafe { (*(address as *const StateObject)).0 };
     }
     k.begin_remember().unwrap();
-    let mut handle = create(record, value).unwrap();
-    unsafe { k.set_slot(handle_record, (&mut handle as *mut Handle).cast()) }.unwrap();
+    let handle = create(record, value).unwrap();
+    let mut object = std::mem::ManuallyDrop::new(StateObject(handle));
+    unsafe { k.set_slot(object_record, (&mut *object as *mut StateObject).cast()) }.unwrap();
     k.end_remember().unwrap();
     handle
 }
 
+/// compose: "A retired cell outlives the pass that retired it": a remembered state removed
+/// by a pass is retired at its end and freed at the end of the next pass, after its releases.
 #[test]
-fn a_removed_group_releases_its_slot_and_then_its_cells() {
-    let handle_record = slot_type::<Handle>("MutableState<Tracked>");
+fn a_retired_cell_outlives_the_pass_that_retired_it() {
+    let object_record = slot_type::<StateObject>("MutableState<Tracked>");
     let tracked = slot_type::<Tracked>("Tracked");
     let wide = slot_type::<Tracked>("Slot");
     let show = Rc::new(Cell::new(true));
     let shown = show.clone();
+    let kept = Rc::new(Cell::new(None));
+    let keep = kept.clone();
     let c = Composition::start(
         Box::new(NodeTree::new()),
         content(move |k: Composer| {
             if shown.get() {
                 k.start_group(GroupKind::Replaceable, 1, 0).unwrap();
-                remember_cell(k, handle_record, tracked, Tracked("cell"));
+                keep.set(Some(remember_cell(
+                    k,
+                    object_record,
+                    tracked,
+                    Tracked("cell"),
+                )));
                 let mut slot = std::mem::ManuallyDrop::new(Tracked("slot"));
                 unsafe { k.set_slot(wide, (&mut *slot as *mut Tracked).cast()) }.unwrap();
                 k.end_group().unwrap();
@@ -269,18 +291,44 @@ fn a_removed_group_releases_its_slot_and_then_its_cells() {
         }),
     )
     .unwrap();
+    let cell = kept.get().unwrap();
     let dump = Composition::dump(c).unwrap();
-    assert!(
-        dump.contains("slot MutableState<Tracked>\n      cell Tracked\n"),
-        "{}",
-        dump
-    );
+    assert!(dump.contains("slot MutableState<Tracked>\n"), "{}", dump);
+    assert!(!dump.contains("cell"), "no cell lines: {}", dump);
+    assert!(States::upgrade(cell));
     show.set(false);
     invalidate_root(c);
     Composition::recompose(c).unwrap();
-    // Slots last to first; a slot's cells after its value.
-    assert_eq!(events(), ["drop slot", "drop cell"]);
+    // Slots last to first; the state object's slot retires its cell, which stays.
+    assert_eq!(events(), ["drop slot"]);
+    event("mark 1");
+    assert!(!States::upgrade(cell), "a weak reference finds it retired");
+    assert!(
+        States::read(cell, tracked).is_ok(),
+        "its value is still valid"
+    );
+    invalidate_root(c);
+    Composition::recompose(c).unwrap();
+    event("mark 2");
+    assert_eq!(events(), ["mark 1", "drop cell", "mark 2"]);
+    assert_eq!(States::read(cell, tracked).err(), Some(StateError::Stale));
     Composition::dispose(c).unwrap();
+    reset();
+}
+
+/// compose: "A state dropped with no composition is freed at once", and a retired cell left
+/// when the last composition is disposed is freed then.
+#[test]
+fn a_state_dropped_with_no_composition_is_freed_at_once() {
+    let tracked = slot_type::<Tracked>("Tracked");
+    drop(StateObject(create(tracked, Tracked("alone")).unwrap()));
+    event("mark");
+    assert_eq!(events(), ["drop alone", "mark"]);
+    let c = Composition::start(Box::new(NodeTree::new()), content(|_| {})).unwrap();
+    drop(StateObject(create(tracked, Tracked("beside")).unwrap()));
+    assert!(events().is_empty(), "kept while a composition is live");
+    Composition::dispose(c).unwrap();
+    assert_eq!(events(), ["drop beside"], "freed with the last composition");
     reset();
 }
 
@@ -288,58 +336,41 @@ fn invalidate_root(c: Handle) {
     crate::invalidate(Composition::root_scope(c).unwrap());
 }
 
+/// compose: "Releasing a cell during an edit": a cell retired while a guard holds it, whose
+/// free comes due at the end of a pass, is freed when the guard ends.
 #[test]
 fn releasing_a_cell_during_an_edit() {
-    let handle_record = slot_type::<Handle>("MutableState<Tracked>");
     let tracked = slot_type::<Tracked>("Tracked");
-    let show = Rc::new(Cell::new(true));
-    let kept = Rc::new(Cell::new(None));
-    let (shown, keep) = (show.clone(), kept.clone());
-    let c = Composition::start(
-        Box::new(NodeTree::new()),
-        content(move |k: Composer| {
-            if shown.get() {
-                k.start_group(GroupKind::Replaceable, 1, 0).unwrap();
-                keep.set(Some(remember_cell(k, handle_record, tracked, Tracked("v"))));
-                k.end_group().unwrap();
-            }
-        }),
-    )
-    .unwrap();
-    let cell = kept.get().unwrap();
-    // The editor recomposes the composition so that the cell's group is removed.
-    let value = States::begin_edit(cell, tracked).unwrap();
-    show.set(false);
+    let c = Composition::start(Box::new(NodeTree::new()), content(|_| {})).unwrap();
+    let cell = create(tracked, Tracked("v")).unwrap();
+    let value = States::begin_read(cell, tracked).unwrap();
+    States::retire(cell);
     invalidate_root(c);
     Composition::recompose(c).unwrap();
-    assert!(events().is_empty(), "not freed while the editor holds it");
+    assert!(events().is_empty(), "not freed while the guard holds it");
     assert_eq!(unsafe { (*(value as *const Tracked)).0 }, "v");
-    States::end_edit(cell);
-    assert_eq!(
-        events(),
-        ["drop v"],
-        "dropped once, after the editor returns"
-    );
+    States::end_read(cell);
+    assert_eq!(events(), ["drop v"], "dropped once, when the guard ends");
     assert_eq!(States::read(cell, tracked).err(), Some(StateError::Stale));
+    assert!(!States::upgrade(cell));
     Composition::dispose(c).unwrap();
     reset();
 }
 
+/// A retired cell's readers are invalidated and forgotten, and later reads register none.
 #[test]
-fn a_handler_s_cell_belongs_to_its_composition() {
-    let tracked = slot_type::<Tracked>("Tracked");
-    let c = Composition::start(Box::new(NodeTree::new()), content(|_| {})).unwrap();
-    let cell = Composition::run_handler(c, || create(tracked, Tracked("handler")).unwrap());
-    let program = create(tracked, Tracked("program")).unwrap();
+fn retiring_a_cell_invalidates_its_readers() {
+    let int = slot_type::<i64>("Int");
+    let cell = create(int, 1i64).unwrap();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let c = reader(cell, int, log.clone());
+    States::retire(cell);
+    assert!(Composition::recompose(c).unwrap(), "the reader recomposes");
+    let readers = with_state(|state| state.cells.get(cell).map(|c| c.readers.scopes().len()));
+    // The pass that recomposed the reader started after the retirement, so it freed the cell.
+    assert_eq!(readers, None);
     Composition::dispose(c).unwrap();
-    assert_eq!(events(), ["drop handler"]);
-    assert_eq!(States::read(cell, tracked).err(), Some(StateError::Stale));
-    assert!(
-        States::read(program, tracked).is_ok(),
-        "the program's cell lives on"
-    );
-    finish_report();
-    assert_eq!(events(), ["drop program"]);
+    reset();
 }
 
 #[test]
@@ -410,8 +441,11 @@ fn a_side_effect_runs_as_a_handler_and_may_write() {
     Composition::dispose(c).unwrap();
     assert_eq!(
         read::<i64>(made, int),
-        Err(StateError::Stale),
-        "freed with its composition"
+        Ok(5),
+        "a state belongs to its state object, not to the composition"
     );
+    States::retire(made);
+    States::retire(cell);
+    assert_eq!(read::<i64>(made, int), Err(StateError::Stale));
     reset();
 }

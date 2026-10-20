@@ -69,13 +69,10 @@ impl SlotType {
 pub enum Slot {
     /// A word slot: a 64-bit value and its type tag.
     Word { tag: i64, value: i64 },
-    /// A typed slot: its record, the block holding its value, and the state cells created
-    /// by the `remember` calculation whose result it holds, released after its value (D12
-    /// of `state-handles`).
+    /// A typed slot: its record and the block holding its value.
     Typed {
         slot_type: *const SlotType,
         value: *mut u8,
-        cells: Vec<crate::handle::Handle>,
     },
 }
 
@@ -90,11 +87,7 @@ impl Slot {
         let record = &*slot_type;
         let value = allocate_block(record);
         std::ptr::copy_nonoverlapping(source, value, record.size);
-        Slot::Typed {
-            slot_type,
-            value,
-            cells: Vec::new(),
-        }
+        Slot::Typed { slot_type, value }
     }
 
     /// The record of a typed slot that matches `slot_type`, with its value's address.
@@ -135,14 +128,6 @@ impl Slot {
                 slot_type, value, ..
             } => unsafe { (**slot_type).drop }.map(|drop| (drop, *value)),
             Slot::Word { .. } => None,
-        }
-    }
-
-    /// The state cells attached to the slot.
-    pub fn cells(&self) -> &[crate::handle::Handle] {
-        match self {
-            Slot::Typed { cells, .. } => cells,
-            Slot::Word { .. } => &[],
         }
     }
 }

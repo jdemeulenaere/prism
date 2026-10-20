@@ -1,10 +1,10 @@
 // expect: ok
 // run: 0
-compose fun Plus(onClick: escaping () -> Unit) {
+compose fun Plus(onClick: attached () -> Unit) {
     println("plus")
 }
 
-compose fun Screen(count: MutableState<Int>, tick: State<Int>) {
+compose fun Screen(count: &MutableState<Int>, tick: &State<Int>) {
     println("screen ${tick.value}")
     Plus(onClick = { count.value += 1 })
 }

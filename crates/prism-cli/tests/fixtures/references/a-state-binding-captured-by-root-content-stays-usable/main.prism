@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+fun main() {
+    val s = mutableStateOf(0)
+    val c = composition { println(s.value) }
+    s.value = 1
+    println(c.recompose())
+}

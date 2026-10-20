@@ -1,0 +1,10 @@
+// expect: E5005
+// run: 1
+fun take(s: MutableState<List<Int>>) {}
+fun f() {
+    val s = mutableStateOf(listOf(1))
+    val items = &s.value
+    take(s)
+    println(items.size)
+}
+fun main() {}

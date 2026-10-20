@@ -1,4 +1,0 @@
-// expect: E4033
-compose fun T(todos: State<List<Int>>) {
-    val onClick = { println(todos.value.size) }
-}

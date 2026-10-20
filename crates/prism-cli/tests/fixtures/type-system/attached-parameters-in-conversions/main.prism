@@ -1,0 +1,12 @@
+// expect: E4004
+fun runNow(f: () -> Unit) { f() }
+fun keepIt(f: attached () -> Unit) {}
+fun store(f: escaping () -> Unit) {}
+fun register(r: (attached () -> Unit) -> Unit) {}
+fun registerEscaping(r: (escaping () -> Unit) -> Unit) {}
+fun f() {
+    register(runNow)
+    register(keepIt)
+    registerEscaping(keepIt)
+}
+fun h() { register(store) }

@@ -12,8 +12,8 @@
 - **THEN** stdout is `computed`, `2` and `2`, one per line, and the exit status is 0: `s` borrows the kept `String`, past the call of `Leaf`, and the slot frees it when the composition is disposed
 
 #### Scenario: Remembering a value that holds a borrow rejected
-- **WHEN** `compose fun C(r: &Int) { val s = remember { r } }` is checked
-- **THEN** the type checker reports a borrow in a type argument (`E4022`)
+- **WHEN** `compose fun C(r: &Int) { val s = remember<&Int> { r } }` is checked
+- **THEN** the type checker reports a borrow in a type argument (`E4022`); without the type argument, `remember { r }` remembers a copy of the `Int`
 
 #### Scenario: Remembered state survives recomposition
 - **WHEN** `compose fun Counter(tick: &State<Int>) { val clicks = remember { println("created"); mutableStateOf(7) }; println("tick ${tick.value} clicks ${clicks.value}") }` is declared and `fun main() { val tick = mutableStateOf(0); val c = composition { Counter(tick) }; tick.value += 1; println(c.recompose()) }` runs

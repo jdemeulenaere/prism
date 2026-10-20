@@ -178,7 +178,7 @@ pub unsafe extern "C" fn prism_compose_slot(
     or_misuse(Composer(composer).slot(slot_type))
 }
 
-/// Moves the value at `value` into the slot at the cursor.
+/// Moves the value at `value` into the slot at the cursor, giving the stored value's address.
 ///
 /// # Safety
 ///
@@ -188,7 +188,7 @@ pub unsafe extern "C" fn prism_compose_set_slot(
     composer: u64,
     slot_type: *const SlotType,
     value: *mut u8,
-) {
+) -> *const u8 {
     or_misuse(Composer(composer).set_slot(slot_type, value))
 }
 
@@ -369,6 +369,20 @@ pub extern "C" fn prism_compose_state_end_edit(handle: u64, record: *const SlotT
     States::end_edit(Handle(handle))
 }
 
+/// Retires the cell `handle` of a dropped state object (D7 of `owned-state`): what the drop
+/// glue of `State<T>` and `MutableState<T>` calls.
+#[no_mangle]
+pub extern "C" fn prism_compose_state_retire(handle: u64) {
+    States::retire(Handle(handle))
+}
+
+/// Whether the weak handle `handle` names a live state that is not retired: 1, or 0 (D11 of
+/// `owned-state`), for `WeakReference.get()`.
+#[no_mangle]
+pub extern "C" fn prism_compose_state_upgrade(handle: u64) -> u8 {
+    u8::from(States::upgrade(Handle(handle)))
+}
+
 /// Ends the program with the error the last failed state operation recorded, at
 /// `file:line:column`.
 ///
@@ -393,9 +407,9 @@ pub unsafe extern "C" fn prism_compose_state_error(
     prism_runtime::panic_at_location(kind, "", &file, line, column)
 }
 
-/// Starts program code, a top-level value's initializer: the cells it creates belong to the
-/// program, even during a pass (D11 of `state-handles`). Gives 1 when it pushed the program as
-/// the creation owner and 0 when compose is unused, for `prism_compose_end_program`.
+/// Starts program code, a top-level value's initializer, a creation window: it may create
+/// state cells even during a pass (D11 of `state-handles`). Gives 1 when it opened the window
+/// and 0 when compose is unused, for `prism_compose_end_program`.
 #[no_mangle]
 pub extern "C" fn prism_compose_begin_program() -> u8 {
     u8::from(States::begin_program())
@@ -413,7 +427,7 @@ pub extern "C" fn prism_compose_begin_remember(composer: u64) {
     or_misuse(Composer(composer).begin_remember())
 }
 
-/// Closes the window of a `remember` calculation, attaching its cells to the slot written.
+/// Closes the window of a `remember` calculation, after its slot was written.
 #[no_mangle]
 pub extern "C" fn prism_compose_end_remember(composer: u64) {
     or_misuse(Composer(composer).end_remember())

@@ -1,0 +1,9 @@
+// expect: E5005
+// run: 1
+fun consume(s: MutableState<Int>) {}
+fun main() {
+    val s = mutableStateOf(0)
+    val c = composition { println(s.value) }
+    consume(s)
+    println(c.recompose())
+}

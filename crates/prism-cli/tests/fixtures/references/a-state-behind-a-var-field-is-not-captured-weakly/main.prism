@@ -1,0 +1,6 @@
+// expect: E5007
+// run: 1
+struct Holder { var s: MutableState<Int> }
+fun keep(f: attached () -> Unit) {}
+fun row(h: &Holder) { keep({ h.s.value += 1 }) }
+fun main() {}

@@ -3,9 +3,10 @@
 //! Each closure is a body of its own, lowered from the closure's subtree in its parent's
 //! arenas: its parameters are its arguments, and each binding it captures is a capture local,
 //! which stands for the binding itself and is never marked or dropped. The enclosing body builds
-//! the closure value from a move or copy of each binding the typed tree records as owned and the
+//! the closure value from a move or copy of each binding the typed tree records as owned, the
 //! place of each other one, whose borrow's kind is left to the borrow checker (D2 of
-//! `escaping-closures`).
+//! `escaping-closures`), and the place of each state object it captures weakly, whose capture
+//! local holds a weak reference viewed in place by the body's uses (D10 of `owned-state`).
 //!
 //! A function name or variant constructor read as a value is an adapter: a closure without
 //! captures that calls the function or builds the variant (D7 of `closures`).
@@ -89,6 +90,17 @@ impl Builder<'_> {
             // A captured path of reference type (`*slot` for `slot: &mut &T`) may be re-pointed
             // as the place it stands for, as a `var` holding a reference is.
             let mutable = binding.mutable || (!whole && matches!(ty, Type::Reference { .. }));
+            // A weak capture's local holds a weak reference to the state object, which its
+            // uses view in place (D10 of `owned-state`).
+            let weak = capture.mode == TreeCaptureMode::Weak;
+            let ty = if weak {
+                Type::Struct {
+                    id: prism_typed_tree::IntrinsicStruct::WeakReference.id(),
+                    arguments: vec![ty],
+                }
+            } else {
+                ty
+            };
             let local = closure.add_local(LocalDeclaration {
                 ty,
                 kind: LocalKind::Capture,
@@ -100,8 +112,16 @@ impl Builder<'_> {
             });
             closure.capture_count += 1;
             closure.capture_widenings.push(capture.widened.clone());
+            if weak {
+                closure.weak_captures.insert(local);
+            }
             if whole {
-                closure.bindings.insert(capture.local, Place::local(local));
+                let place = if weak {
+                    Place::local(local).project(Projection::View)
+                } else {
+                    Place::local(local)
+                };
+                closure.bindings.insert(capture.local, place);
             } else {
                 let projections = capture.projections.iter().map(projection).collect();
                 closure
@@ -127,6 +147,7 @@ impl Builder<'_> {
                 let place = self.captured_place(capture.local, &projections);
                 match capture.mode {
                     TreeCaptureMode::Borrowed => MirCapture::Borrowed(place),
+                    TreeCaptureMode::Weak => MirCapture::Weak(place),
                     TreeCaptureMode::Copied => {
                         MirCapture::Owned(Operand::Copy(place, capture.span))
                     }
@@ -172,6 +193,9 @@ impl Builder<'_> {
         match prefix {
             Some((length, local)) => {
                 let mut place = Place::local(local);
+                if self.weak_captures.contains(&local) {
+                    place = place.project(Projection::View);
+                }
                 place.projections.extend_from_slice(&projections[length..]);
                 place
             }

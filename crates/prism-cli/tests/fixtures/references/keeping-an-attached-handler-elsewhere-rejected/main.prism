@@ -1,0 +1,7 @@
+// expect: E5010
+// run: 1
+struct Button { val onClick: () -> Unit }
+fun store(f: escaping () -> Unit) {}
+fun a(onClick: attached () -> Unit): Button = Button(onClick)
+fun b(onClick: attached () -> Unit) { store(onClick) }
+fun main() {}

@@ -1,0 +1,9 @@
+// expect: ok
+import /prism/compose/ui
+import /prism/compose/material3
+fun consume(s: MutableState<Int>) {}
+fun main() {
+    val s = mutableStateOf(0)
+    runApp { Text("${s.value}") }
+    consume(s)
+}

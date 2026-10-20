@@ -1,7 +1,7 @@
 module main
 compose fun main::C(): Unit @2:1
   local _0: Unit (return)
-  local _1 s: MutableState<Int> (user)
+  local _1 s: &MutableState<Int> (user)
   local _2: () -> MutableState<Int> (temporary)
   bb0:
     storage_live _1 @3:5

@@ -14,10 +14,17 @@
 //! its captures' operands held, so one owning only values that hold no borrow passes, as does a
 //! closure without captures. The type checker makes every closure at such a position own its
 //! captures (D1), so this check is the safety net for borrows they still hold.
+//!
+//! A closure given to an `attached` parameter holds the loans of its weak captures, and a value
+//! of an `attached` parameter its input: both may be passed to `attached` parameters, and
+//! anywhere else they escape is `AttachedFunctionEscapes` (`E5010`, D9 and D24 of
+//! `owned-state`). A keeper (`Composition`) holding loans may be moved between locals and
+//! returned under the elision rules, never stored where loans are not tracked: `E5010` for the
+//! weak captures of its content, `E5007` for other borrows.
 
 use crate::borrows::{BorrowSet, Item, LoanId, LoanKind};
 use crate::dataflow::Results;
-use crate::error::{BorrowError, BorrowErrorKind, EscapingHolder, Label};
+use crate::error::{AttachedHolder, BorrowError, BorrowErrorKind, EscapingHolder, Label};
 use crate::loan_flow::{Holdings, LoanFlow};
 use crate::location::locations;
 use crate::places;
@@ -27,7 +34,7 @@ use prism_mir::{
     Place, Projection, Rvalue, StatementKind, TerminatorKind,
 };
 use prism_typed_tree::{BuiltinFunction, Type, Widening, WideningReason};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// The escapes of `body` of `file`, with the loans of the escaping values, whose end the
 /// conflict check need not report again.
@@ -45,6 +52,7 @@ pub(crate) fn check_escapes(
         body,
         borrows,
         flow: &flow.analysis,
+        closures: temporary_closures(body),
     };
     for location in locations(body) {
         let Some(statement) = body.blocks[location.block]
@@ -92,17 +100,30 @@ pub(crate) fn check_escapes(
                 let Some(place) = operand.place() else {
                     continue;
                 };
-                if !places::contains_function(&place.ty(body, &file.types)) {
+                let ty = place.ty(body, &file.types);
+                if !places::contains_function(&ty) && !places::contains_keeper(&ty) {
                     continue;
                 }
+                let attached = parameter_kinds
+                    .get(index)
+                    .is_some_and(|kind| kind.is_attached());
                 let items = flow.analysis.holds(state, place.local);
-                escaped.extend(checker.loans(&items));
                 let value = Value::Local(place.local);
-                errors.extend(checker.error(
+                // What an attached parameter keeps stays borrowed in this body, by what keeps
+                // it (D24 of `owned-state`): its end is still checked.
+                let escaping = if attached {
+                    checker.partition_attached(state, &items, &value).1
+                } else {
+                    items.clone()
+                };
+                escaped.extend(checker.loans(&escaping));
+                errors.extend(checker.escape(
                     state,
                     &items,
                     &value,
+                    &ty,
                     position,
+                    attached,
                     operand_span(operand, terminator.span),
                 ));
             }
@@ -121,28 +142,36 @@ pub(crate) fn check_escapes(
                 let Some(place) = operand.place() else {
                     continue;
                 };
-                if !places::contains_function(&place.ty(body, &file.types)) {
+                let ty = place.ty(body, &file.types);
+                if !places::contains_function(&ty) && !places::contains_keeper(&ty) {
                     continue;
                 }
                 let items = flow.analysis.holds(state, place.local);
                 escaped.extend(checker.loans(&items));
                 let value = Value::Local(place.local);
-                errors.extend(checker.error(
+                errors.extend(checker.escape(
                     state,
                     &items,
                     &value,
+                    &ty,
                     position,
+                    false,
                     operand_span(operand, statement.span),
                 ));
             }
         }
         let ty = destination.ty(body, &file.types);
-        if !places::contains_function(&ty) {
+        let keeper = places::contains_keeper(&ty);
+        if !places::contains_function(&ty) && !keeper {
             continue;
         }
         let Some(position) = checker.position(destination) else {
             continue;
         };
+        // A keeper's returned borrows follow the elision rules (`returns`).
+        if keeper && *destination == Place::return_place() {
+            continue;
+        }
         let items: Vec<Item> = flow
             .analysis
             .rvalue_items(state, rvalue, location)
@@ -160,7 +189,7 @@ pub(crate) fn check_escapes(
             _ => (Value::Other, statement.span),
         };
         escaped.extend(checker.loans(&items));
-        errors.extend(checker.error(state, &items, &value, position, span));
+        errors.extend(checker.escape(state, &items, &value, &ty, position, false, span));
     }
     (errors, escaped)
 }
@@ -186,6 +215,37 @@ struct Escapes<'a> {
     body: &'a Body,
     borrows: &'a BorrowSet,
     flow: &'a LoanFlow<'a>,
+    /// The closure each temporary is first assigned, so finding a value's closure takes
+    /// constant time at each of a body's escapes.
+    closures: HashMap<LocalId, (BodyId, &'a [Capture])>,
+}
+
+/// The closure each temporary of `body` is first assigned, in block and statement order.
+fn temporary_closures(body: &Body) -> HashMap<LocalId, (BodyId, &[Capture])> {
+    let mut closures = HashMap::new();
+    for (_, block) in body.blocks.iter() {
+        for statement in &block.statements {
+            let StatementKind::Assign(place, rvalue) = &statement.kind else {
+                continue;
+            };
+            let (
+                Some(local),
+                Rvalue::Closure {
+                    body: closure,
+                    captures,
+                },
+            ) = (place.as_local(), rvalue.as_ref())
+            else {
+                continue;
+            };
+            if body.locals[local].kind == LocalKind::Temporary {
+                closures
+                    .entry(local)
+                    .or_insert((*closure, captures.as_slice()));
+            }
+        }
+    }
+    closures
 }
 
 impl Escapes<'_> {
@@ -227,26 +287,7 @@ impl Escapes<'_> {
     fn closure_captures<'v>(&'v self, value: &'v Value) -> Option<(BodyId, &'v [Capture])> {
         match value {
             Value::Closure(body, captures) => Some((*body, captures)),
-            Value::Local(local) if self.body.locals[*local].kind == LocalKind::Temporary => {
-                self.body.blocks.iter().find_map(|(_, block)| {
-                    block
-                        .statements
-                        .iter()
-                        .find_map(|statement| match &statement.kind {
-                            StatementKind::Assign(place, rvalue)
-                                if place.as_local() == Some(*local) =>
-                            {
-                                match rvalue.as_ref() {
-                                    Rvalue::Closure { body, captures } => {
-                                        Some((*body, captures.as_slice()))
-                                    }
-                                    _ => None,
-                                }
-                            }
-                            _ => None,
-                        })
-                })
-            }
+            Value::Local(local) => self.closures.get(local).copied(),
             _ => None,
         }
     }
@@ -311,6 +352,24 @@ impl Escapes<'_> {
         let expression = path.trim_start_matches('*');
         let field = expression.rsplit('.').next().filter(|field| *field != name);
         let fresh = field.unwrap_or(if name == "m" { "k" } else { "m" });
+        // A state is captured weakly by a closure the composition keeps, and through an
+        // explicit weak reference by any other (D10 and D11 of `owned-state`).
+        if types.has_capture_function(&path_type) {
+            let base = field.unwrap_or(expression);
+            let base = base.rsplit('.').next().unwrap_or(base);
+            let help = format!(
+                "make a weak reference before the closure, 'val {}Ref = {}.weak()', and use '{}Ref.get()' inside it",
+                base, expression, base
+            );
+            let note = match widening.reason {
+                WideningReason::VariableField | WideningReason::MutableReference => Some(
+                    "a closure captures a state read through a reference weakly only when every field on the way is a 'val' and no reference on the way is mutable"
+                        .to_string(),
+                ),
+                WideningReason::NotCopy | WideningReason::VariableBinding => None,
+            };
+            return Some((help, note));
+        }
         let help = if types.is_copy(&path_type) {
             format!(
                 "copy '{}' into a 'val' before the closure and capture that instead: 'val {} = {}'",
@@ -336,6 +395,156 @@ impl Escapes<'_> {
             WideningReason::NotCopy | WideningReason::VariableBinding => None,
         };
         Some((help, note))
+    }
+
+    /// Whether `item` is attached rather than a borrow (D24 of `owned-state`): a loan of a weak
+    /// capture, or the input of an `attached` parameter.
+    fn is_attached_item(&self, item: &Item) -> bool {
+        match item {
+            Item::Loan(loan) => matches!(
+                self.borrows.loans[*loan].kind,
+                LoanKind::Capture { weak: true, .. }
+            ),
+            Item::Input(local) => self.body.locals[*local].parameter_kind.is_attached(),
+        }
+    }
+
+    /// `items`, held by `value`, split into what is attached to the composition (weak captures,
+    /// `attached` parameters, and what a closure holds through its weak captures alone, such as
+    /// the input of the reference a captured path goes through, `*count`) and the rest.
+    fn partition_attached(
+        &self,
+        state: &Holdings,
+        items: &[Item],
+        value: &Value,
+    ) -> (Vec<Item>, Vec<Item>) {
+        // Only a closure with weak captures holding something else needs its captures read.
+        let through_weak: Vec<Item> = match self.closure_captures(value) {
+            Some((_, captures))
+                if items.iter().any(|item| !self.is_attached_item(item))
+                    && captures
+                        .iter()
+                        .any(|capture| matches!(capture, Capture::Weak(_))) =>
+            {
+                let items_of = |weak: bool| -> Vec<Item> {
+                    captures
+                        .iter()
+                        .filter(|capture| matches!(capture, Capture::Weak(_)) == weak)
+                        .flat_map(|capture| self.flow.capture_items(state, capture))
+                        .map(|item| self.borrows.item(item))
+                        .collect()
+                };
+                let others = items_of(false);
+                items_of(true)
+                    .into_iter()
+                    .filter(|item| !others.contains(item))
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        items
+            .iter()
+            .copied()
+            .partition(|item| self.is_attached_item(item) || through_weak.contains(item))
+    }
+
+    /// The error for a value of type `ty` holding `items` that escapes at `span` (`position`):
+    /// `E5007` for a borrow it may hold, else, unless the position is an `attached` parameter,
+    /// `E5010` for what is attached to the composition.
+    #[allow(clippy::too_many_arguments)]
+    fn escape(
+        &self,
+        state: &Holdings,
+        items: &[Item],
+        value: &Value,
+        ty: &Type,
+        position: &str,
+        attached_position: bool,
+        span: Span,
+    ) -> Option<BorrowError> {
+        let (attached, borrowed) = self.partition_attached(state, items, value);
+        if !borrowed.is_empty() {
+            return self.error(state, &borrowed, value, position, span);
+        }
+        if attached_position {
+            return None;
+        }
+        let item = *attached.first()?;
+        Some(self.attached_error(item, ty, position, span))
+    }
+
+    /// `E5010` for a value of type `ty` holding the attached `item` that escapes at `span`.
+    fn attached_error(&self, item: Item, ty: &Type, position: &str, span: Span) -> BorrowError {
+        let primary = Label {
+            span,
+            message: position.to_string(),
+        };
+        let (holder, related, notes) = match item {
+            Item::Input(local) => {
+                let declaration = &self.body.locals[local];
+                let name = declaration.name.clone();
+                let related = vec![Label {
+                    span: declaration.span,
+                    message: format!("{} is an attached parameter here", places::quoted(&name)),
+                }];
+                let holder = if places::contains_keeper(ty) {
+                    AttachedHolder::Composition(name)
+                } else {
+                    AttachedHolder::Parameter(name)
+                };
+                (
+                    holder,
+                    related,
+                    vec!["an attached function value is kept only by the composition, which releases it with the group that passed it".to_string()],
+                )
+            }
+            Item::Loan(loan) => {
+                let loan_data = &self.borrows.loans[loan];
+                let LoanKind::Capture { closure, index, .. } = loan_data.kind else {
+                    unreachable!("an attached loan is a weak capture")
+                };
+                let closure_body = &self.file.bodies[closure];
+                let capture =
+                    &closure_body.locals[LocalId((closure_body.argument_count + 1 + index) as u32)];
+                let name = capture.name.clone();
+                let related = vec![Label {
+                    span: capture.span,
+                    message: format!("{} is captured weakly here", places::quoted(&name)),
+                }];
+                if places::contains_keeper(ty) {
+                    (
+                        AttachedHolder::Composition(name.clone()),
+                        related,
+                        vec![format!(
+                            "the composition's content captures {} weakly, so the composition keeps it borrowed while it is used",
+                            places::quoted(&name)
+                        )],
+                    )
+                } else {
+                    (
+                        AttachedHolder::Closure(name),
+                        related,
+                        vec!["a closure given to an attached parameter captures states weakly, and only the composition may keep it".to_string()],
+                    )
+                }
+            }
+        };
+        let helps = match &holder {
+            AttachedHolder::Composition(_) => vec![
+                "keep the composition in a local of the scope that owns the state, or remember the state in the content".to_string(),
+            ],
+            _ => vec![
+                "declare the receiving parameter 'attached', or call the function value here"
+                    .to_string(),
+            ],
+        };
+        BorrowError {
+            kind: BorrowErrorKind::AttachedFunctionEscapes { holder },
+            primary,
+            related,
+            notes,
+            helps,
+        }
     }
 
     /// The error for a value holding `items` that escapes at `span`, when it may hold a
@@ -461,7 +670,7 @@ impl Escapes<'_> {
             Item::Loan(loan) => {
                 let loan_data = &self.borrows.loans[loan];
                 match loan_data.kind {
-                    LoanKind::Capture { closure, index } => {
+                    LoanKind::Capture { closure, index, .. } => {
                         let closure_body = &self.file.bodies[closure];
                         let capture = &closure_body.locals
                             [LocalId((closure_body.argument_count + 1 + index) as u32)];

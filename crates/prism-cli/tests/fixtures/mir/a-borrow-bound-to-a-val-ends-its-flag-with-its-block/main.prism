@@ -1,0 +1,6 @@
+// expect: ok
+fun g(s: &MutableState<List<Int>>): Int {
+    val items = &s.value
+    println(items.size)
+    return 1
+}

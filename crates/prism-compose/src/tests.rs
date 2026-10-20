@@ -439,14 +439,44 @@ fn a_removed_groups_slots_are_released_after_the_pass() {
     Composition::dispose(c).unwrap();
 }
 
-/// compose: "Release order of a removed subtree".
+/// An applier that records the release of each node.
+struct RecordingReleases(NodeTree);
+
+impl Applier for RecordingReleases {
+    fn root(&self) -> NodeHandle {
+        self.0.root()
+    }
+    fn create(&mut self, kind: i64) -> NodeHandle {
+        self.0.create(kind)
+    }
+    fn place(&mut self, parent: NodeHandle, previous: Option<NodeHandle>, node: NodeHandle) {
+        self.0.place(parent, previous, node)
+    }
+    fn remove(&mut self, parent: NodeHandle, node: NodeHandle) {
+        self.0.remove(parent, node)
+    }
+    fn release(&mut self, node: NodeHandle) {
+        record_drop(format!("release node {}", self.0.number(node)));
+        self.0.release(node)
+    }
+    fn number(&self, node: NodeHandle) -> u64 {
+        self.0.number(node)
+    }
+    fn dump(&self, out: &mut String) {
+        self.0.dump(out)
+    }
+}
+
+/// compose: "Release order of a removed subtree" (R1 of `owned-state`): a group's node first,
+/// with the handlers it owns, then its restart function, then its slots last to first,
+/// children before parents.
 #[test]
 fn release_order_of_a_removed_subtree() {
     let tracked = slot_type::<Tracked>("Tracked");
     let show = Rc::new(Cell::new(true));
     let s = show.clone();
     let c = Composition::start(
-        tree(),
+        Box::new(RecordingReleases(NodeTree::new())),
         content(move |k| {
             if !s.get() {
                 return;
@@ -454,10 +484,9 @@ fn release_order_of_a_removed_subtree() {
             k.start_group(GroupKind::Restart, 1, 0).unwrap();
             set(k, tracked, Tracked("first slot"));
             set(k, tracked, Tracked("second slot"));
-            k.start_group(GroupKind::Restart, 2, 0).unwrap();
+            k.start_node_group(2, 7).unwrap();
             set(k, tracked, Tracked("child's slot"));
-            k.end_restart_group(named_restart("child's restart function", |_| {}))
-                .unwrap();
+            k.end_group().unwrap();
             k.end_restart_group(named_restart("restart function", |_| {}))
                 .unwrap();
         }),
@@ -469,11 +498,11 @@ fn release_order_of_a_removed_subtree() {
     assert_eq!(
         drops(),
         [
+            "release node 1",
             "drop child's slot",
-            "drop child's restart function",
+            "drop restart function",
             "drop second slot",
             "drop first slot",
-            "drop restart function"
         ]
     );
     Composition::dispose(c).unwrap();

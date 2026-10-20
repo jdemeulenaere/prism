@@ -1,0 +1,2 @@
+// expect: E4022
+compose fun C(r: &Int) { val s = remember<&Int> { r } }

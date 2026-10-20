@@ -5,11 +5,11 @@ A borrow of a state's value that holds the state's flag (compose, "Borrows of a 
 
 #### Scenario: A flag around a call that changes a list state
 - **WHEN** `prism dump-mir` runs on `fun f(s: &MutableState<List<Int>>) { s.value.add(1); println(1) }`
-- **THEN** the body calls `state begin exclusive<List<Int>>` with a copy of `s` before the call of `add`, and `state end<List<Int>>` after it, before the call of `println`
+- **THEN** the body calls `state begin exclusive<List<Int>>` with a borrow of `*s` and a borrow of the guard's local before the call of `add`, and `state end exclusive<List<Int>>` after it, before the call of `println`
 
 #### Scenario: A borrow bound to a val ends its flag with its block
 - **WHEN** `prism dump-mir` runs on `fun g(s: &MutableState<List<Int>>): Int { val items = &s.value; println(items.size); return 1 }`
-- **THEN** the body calls `state begin shared<List<Int>>` before `items` is initialized and `state end<List<Int>>` once, when the block's locals end, on the path that returns
+- **THEN** the body calls `state begin shared<List<Int>>` before `items` is initialized and `state end shared<List<Int>>` once, when the block's locals end, on the path that returns
 
 ### Requirement: Weak Captures Are Words of the Closure Value
 A weak capture MUST be a capture local of the weak reference's type. The enclosing body MUST build the closure value from a weak capture of the captured path's place, which makes the word by the capture function's operation and which the borrow checker sees as a shared borrow held by the closure value. A use of the path in the closure's body MUST be a place that views the local as the state object, never moved or dropped.
@@ -25,7 +25,7 @@ Every state operation MUST lower to `Call` terminators of state operations, each
 
 #### Scenario: A compound assignment through a handle
 - **WHEN** `prism dump-mir` runs on `fun f(s: &MutableState<Int>) { s.value += 1 }`
-- **THEN** the body copies `s` into a temporary once, calls `state read<Int>` with it, adds 1 to a copy of the referent with an overflow check, and calls `state write<Int>` with the temporary and the sum
+- **THEN** the body borrows `*s` into a temporary once, calls `state read<Int>` with it, adds 1 to a copy of the referent with an overflow check, and calls `state write<Int>` with the temporary and the sum
 
 #### Scenario: An update call
 - **WHEN** `prism dump-mir` runs on `fun f(s: &MutableState<Int>) { s.update { n -> n * 2 } }`

@@ -2000,7 +2000,7 @@ impl TypeChecker {
                     visibility,
                     kind,
                     is_compose,
-                    is_capture: _,
+                    is_capture,
                     receiver,
                     context,
                     name,
@@ -2049,6 +2049,13 @@ impl TypeChecker {
                                 continue;
                             };
                             let receiver_ty = type_from_abi(&receiver.ty, &type_parameters);
+                            // A capture function the catalog lists makes its receiver type
+                            // captured weakly (D12 of `owned-state`).
+                            if *is_capture && entry.signature.contains(" intrinsic capture fun ") {
+                                if let Type::Struct { id, .. } = &receiver_ty {
+                                    self.types.insert_capture_function(id.clone());
+                                }
+                            }
                             let key = (ReceiverKey::of(&receiver_ty), name.clone());
                             self.members.entry(key).or_insert(Extension {
                                 mode: receiver.mode,
@@ -2718,6 +2725,9 @@ impl TypeChecker {
         let receiver = f.receiver.as_ref().expect("an extension has a receiver");
         let text = crate::intrinsics::declaration_text(f);
         let constructor = crate::intrinsics::constructor_name(&receiver.ty);
+        if f.is_capture && !self.check_capture_function(f, constructor) {
+            return;
+        }
         let Some(entry) = self.check_intrinsic(constructor, &f.name, &text, f.span) else {
             return;
         };
@@ -2725,6 +2735,13 @@ impl TypeChecker {
             c.check_annotation_names(&receiver.ty);
             c.lower_type(&receiver.ty)
         });
+        // The compiler finds a type's capture function through its declarations, never by
+        // its name (D12 of `owned-state`).
+        if f.is_capture && entry.signature == text {
+            if let Type::Struct { id, .. } = &receiver_ty {
+                self.types.insert_capture_function(id.clone());
+            }
+        }
         let symbol = self.function_symbol(f);
         let key = (ReceiverKey::of(&receiver_ty), f.name.clone());
         self.members.insert(
@@ -2740,6 +2757,46 @@ impl TypeChecker {
                 context: None,
             },
         );
+    }
+
+    /// Reports `E4029` for the `capture` declaration `f` on the receiver type constructor
+    /// `constructor` when the catalog lists no capture function there, or when it takes
+    /// parameters (D12 of `owned-state`); other shapes differ from the catalog's text, which
+    /// `check_intrinsic` reports. Gives whether it reported nothing.
+    fn check_capture_function(&mut self, f: &FunctionDecl, constructor: Option<&str>) -> bool {
+        let listed = crate::intrinsics::lookup(&self.module_path, constructor, &f.name)
+            .is_some_and(|entry| entry.signature.contains(" intrinsic capture fun "));
+        if !listed {
+            self.errors.push(TypeError::InvalidLibraryDeclaration {
+                message: format!(
+                    "the compiler provides no capture function for '{}' in '/{}'",
+                    constructor.unwrap_or("?"),
+                    self.module_path
+                ),
+                help: Some(
+                    "a capture function is the compiler's: one per type it captures weakly, declared in that type's module".to_string(),
+                ),
+                span: f.span,
+            });
+            return false;
+        }
+        if !f.params.is_empty() {
+            self.errors.push(TypeError::InvalidLibraryDeclaration {
+                message: format!(
+                    "a capture function takes no parameters, but '{}' takes {}",
+                    f.name,
+                    f.params.len()
+                ),
+                help: Some(format!(
+                    "declare it as '{}'",
+                    crate::intrinsics::lookup(&self.module_path, constructor, &f.name)
+                        .map_or("", |entry| entry.signature)
+                )),
+                span: f.span,
+            });
+            return false;
+        }
+        true
     }
 
     /// Registers the intrinsic property `p` of a library file as a member of its receiver type
@@ -3136,7 +3193,6 @@ impl TypeChecker {
         span: Span,
         item: impl FnOnce(prism_typed_tree::BodyId) -> Item,
     ) {
-        self.report_pending_state_reads();
         let built = std::mem::replace(&mut self.builder, previous);
         let has_closures = built.has_closures();
         let mut built = built.finish();
@@ -6171,12 +6227,14 @@ impl TypeChecker {
         }
     }
 
-    /// Checks `remember(k1, ..., kn, calculation)`, typed as a call of `fun <T : Copy, K1 :
-    /// Copy, ..., Kn : Copy> remember(k1: K1, ..., kn: Kn, calculation: () -> T): T` with up to
-    /// three keys before the calculation (D12 of `compose-transform`), so a key or a value that
-    /// is not `Copy` is `E4021` and a borrowed one `E4022`, through the bounds of the type
-    /// parameters. Named arguments and a fourth key are `E4004`; outside a composable context
-    /// the call is `E4008`. Its type arguments are the value's type, then each key's.
+    /// Checks `remember(k1, ..., kn, calculation)`, typed as a call of `fun <T, K1 : Copy, ...,
+    /// Kn : Copy> remember(k1: K1, ..., kn: Kn, calculation: () -> T): T` with up to three keys
+    /// before the calculation (D12 of `compose-transform`), so a key that is not `Copy` is
+    /// `E4021` and a borrowed value or key `E4022`, through the type parameters. Its result is
+    /// typed by the catalog's rule (D6 of `owned-state`): a copy of a `Copy` value, else a shared
+    /// borrow of the slot's value. Named arguments and a fourth key are `E4004`; outside a
+    /// composable context the call is `E4008`. Its type arguments are the value's type, then
+    /// each key's.
     fn infer_remember(
         &mut self,
         type_arguments: &[prism_ast::types::Type],
@@ -6219,7 +6277,7 @@ impl TypeChecker {
         let value_parameter = TypeParameter {
             index: 0,
             name: "T".to_string(),
-            bound: Some(prism_ast::TypeMarker::Copy),
+            bound: None,
         };
         let mut type_parameters = vec![value_parameter.clone()];
         let mut params = Vec::new();
@@ -6250,6 +6308,14 @@ impl TypeChecker {
             receiver: None,
         };
         let defaults = vec![None; args.len()];
+        // An expected borrow is a borrow of the kept value.
+        let expected = match expected {
+            Some(Type::Reference {
+                mutable: false,
+                inner,
+            }) => Some(inner.as_ref()),
+            other => other,
+        };
         let checked = self.check_generic_call_arguments(
             &signature,
             type_arguments,
@@ -6268,7 +6334,15 @@ impl TypeChecker {
                 },
                 solution,
             )) => {
-                let ty = signature.ret.substitute(&solution);
+                let value = signature.ret.substitute(&solution);
+                let ty = if value == Type::Error || self.is_copy(&value) {
+                    value
+                } else {
+                    Type::Reference {
+                        mutable: false,
+                        inner: Box::new(value),
+                    }
+                };
                 let call = Call {
                     callee: Callee::Builtin(BuiltinFunction::Remember),
                     arguments,
@@ -9199,17 +9273,14 @@ impl TypeChecker {
                 return;
             }
         }
-        // The value of a state is a place of the cell, which is never moved out (D5 of
-        // `state-handles`); outside composable contexts its read is `E4033` already.
-        let state_value = self.builder.state_value_spans.get(&expr.span).copied();
-        if state_value == Some(false) {
-            return;
-        }
+        // The value of a state is a place of the state object, which is never moved out (D5 of
+        // `state-handles`).
+        let state_value = self.builder.state_value_spans.contains(&expr.span);
         let Some((source, borrowed)) = self.move_source(expr) else {
             return;
         };
-        let source = match (&expr.kind, state_value) {
-            (ExprKind::MemberAccess { target, .. }, Some(true)) => {
+        let source = match &expr.kind {
+            ExprKind::MemberAccess { target, .. } if state_value => {
                 format!("the value of the state '{}'", target)
             }
             _ => source,
@@ -9231,7 +9302,7 @@ impl TypeChecker {
         // A field of a whole owned struct local can be taken out by destructuring it (D7 of
         // `payload-patterns`).
         let destructure = match &expr.kind {
-            ExprKind::MemberAccess { .. } if state_value.is_some() => None,
+            ExprKind::MemberAccess { .. } if state_value => None,
             ExprKind::MemberAccess {
                 target,
                 member,

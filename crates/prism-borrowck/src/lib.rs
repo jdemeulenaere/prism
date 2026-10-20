@@ -53,7 +53,8 @@ mod test_bodies;
 pub mod uses;
 
 pub use error::{
-    AccessKind, BorrowError, BorrowErrorKind, Borrowed, EscapingHolder, Label, UntiedReason,
+    AccessKind, AttachedHolder, BorrowError, BorrowErrorKind, Borrowed, EscapingHolder, Label,
+    UntiedReason,
 };
 pub use location::Location;
 

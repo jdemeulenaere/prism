@@ -1,0 +1,29 @@
+// expect: ok
+// run: 0
+// headless: 400x300
+// events: events.txt
+import /prism/compose/ui
+import /prism/compose/layout
+import /prism/compose/material3
+struct Task { val id: Int, val done: MutableState<Bool> }
+fun remove(tasks: &MutableState<List<Task>>, id: Int) {
+    var index = 0
+    while (tasks.value[index].id != id) { index += 1 }
+    tasks.value.removeAt(index)
+}
+compose fun TaskRow(task: &Task, tasks: &MutableState<List<Task>>) {
+    val id = task.id
+    Row {
+        Checkbox(checked = task.done.value, onCheckedChange = { task.done.value = it })
+        Button(onClick = { remove(tasks, id) }) { Text("remove $id") }
+    }
+}
+compose fun Tasks() {
+    val tasks = remember { mutableStateOf(listOf(Task(1, mutableStateOf(true)), Task(2, mutableStateOf(false)))) }
+    Column {
+        for (task in tasks.value) {
+            key(task.id) { TaskRow(task, tasks) }
+        }
+    }
+}
+fun main() { runApp(width = 400, height = 300) { Tasks() } }

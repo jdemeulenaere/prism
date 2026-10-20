@@ -79,7 +79,12 @@ impl Builder<'_> {
                 place,
             } => {
                 let (mutable, origin, place) = (*mutable, (*origin).into(), *place);
-                let place = self.place(place);
+                let access = if mutable {
+                    super::state::StateAccess::Exclusive
+                } else {
+                    super::state::StateAccess::Shared
+                };
+                let place = self.place_with_access(place, access);
                 let destination = self.destination_or_temporary(destination, &ty, span);
                 let rvalue = Rvalue::Borrow {
                     mutable,
@@ -246,7 +251,7 @@ impl Builder<'_> {
                 base.project(Projection::Index(local))
             }
             ExpressionKind::NonNullPayload { nullable } => self.lower_payload(*nullable, span),
-            ExpressionKind::StatePlace { handle } => self.state_place(*handle, span),
+            ExpressionKind::StatePlace { handle } => self.state_place(id, *handle, span),
             ExpressionKind::Temporary { value } => {
                 let value = *value;
                 match self.preallocated.get(&id).cloned() {
@@ -820,6 +825,13 @@ impl Builder<'_> {
     /// long as the value instead of ending with the branch that creates it (D20 of
     /// `borrowck-exclusivity`). Lowering the `Temporary` node assigns that local.
     pub(super) fn preallocate_extended_temporaries(&mut self, value: ExpressionId) {
+        // The guard of a state's value the value borrows unconditionally lasts as long as the
+        // value (D3 of `owned-state`); one borrowed in a branch ends with its statement, so a
+        // binding keeping its borrow is `E5006`.
+        if let Some(state_place) = self.extended_state_place(value) {
+            let scope = self.scope_depth() - 1;
+            self.extended_guards.insert(state_place, scope);
+        }
         for temporary in self.extended_temporaries(value) {
             if self.preallocated.contains_key(&temporary) {
                 continue;
@@ -872,6 +884,32 @@ impl Builder<'_> {
         temporaries
     }
 
+    /// The state place at the root of the place of the written borrow that `value` is, through
+    /// coercions, fields and indices.
+    fn extended_state_place(&self, mut value: ExpressionId) -> Option<ExpressionId> {
+        loop {
+            match self.expression(value).kind {
+                ExpressionKind::Coerce { value: inner, .. } => value = inner,
+                ExpressionKind::Borrow {
+                    origin: prism_typed_tree::BorrowOrigin::Written,
+                    place,
+                    ..
+                } => {
+                    let mut id = place;
+                    loop {
+                        match self.expression(id).kind {
+                            ExpressionKind::Field { base, .. }
+                            | ExpressionKind::Index { base, .. } => id = base,
+                            ExpressionKind::StatePlace { .. } => return Some(id),
+                            _ => return None,
+                        }
+                    }
+                }
+                _ => return None,
+            }
+        }
+    }
+
     /// The `Temporary` node at the root of the place `id`, reached through fields and indices.
     pub(super) fn temporary_root(&self, mut id: ExpressionId) -> Option<ExpressionId> {
         loop {
@@ -899,19 +937,21 @@ impl Builder<'_> {
         let target_expression = self.expression(target);
         let (target_ty, target_span) = (target_expression.ty.clone(), target_expression.span);
         if !self.needs_drop(&target_ty) && self.is_binding(target) {
-            let place = self.place(target);
+            let place = self.place_with_access(target, super::state::StateAccess::Exclusive);
             self.expression_into(Some(&place), value);
             self.relocate_last_write(&place, target_span);
             return;
         }
         // An element's index is evaluated before the value, as Kotlin's `xs.set(i, v)` evaluates
         // its arguments; the bounds check runs at the write, after both (D8 of `collections`).
+        // A part of a state's value is written under an exclusive guard (D3 of `owned-state`).
+        let exclusive = super::state::StateAccess::Exclusive;
         let (mut operand, place) = if self.indexes(target) {
-            let place = self.place(target);
+            let place = self.place_with_access(target, exclusive);
             (self.operand(value), place)
         } else {
             let operand = self.operand(value);
-            (operand, self.place(target))
+            (operand, self.place_with_access(target, exclusive))
         };
         if self.needs_drop(&target_ty) {
             let value = self.expression(value);

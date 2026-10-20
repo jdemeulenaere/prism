@@ -1,6 +1,0 @@
-// expect: ok
-compose fun items(s: State<List<Int>>): &List<Int> = &s.value
-
-compose fun C(s: State<List<Int>>) {
-    println(items(s).size)
-}

@@ -6,5 +6,4 @@ root
       slot Int
       slot Int
       slot prism/compose/runtime::MutableState<String>
-        cell String
 nodes

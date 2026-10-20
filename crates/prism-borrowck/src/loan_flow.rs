@@ -107,11 +107,17 @@ impl Holdings {
         }
     }
 
-    /// Removes `items`, sorted, from every carrier.
+    /// Removes `items` from every carrier. Each item's holders are found through `by_item`, so
+    /// the cost follows the pairs removed rather than the size of the state, which a body with
+    /// many live borrows makes large.
     fn remove_items(&mut self, items: &[usize]) {
-        let kept = |item: u32| items.binary_search(&(item as usize)).is_err();
-        self.pairs.retain(|(_, item)| kept(*item));
-        self.by_item.retain(|(item, _)| kept(*item));
+        for &item in items {
+            let held: Vec<(u32, u32)> = self.by_item.with_first(item as u32).collect();
+            for (item, carrier) in held {
+                self.by_item.remove((item, carrier));
+                self.pairs.remove((carrier, item));
+            }
+        }
     }
 }
 
@@ -324,7 +330,7 @@ impl<'a> LoanFlow<'a> {
             .iter()
             .map(|capture| {
                 let mut items = self.capture_items(state, capture);
-                if let Capture::Borrowed(_) = capture {
+                if let Capture::Borrowed(_) | Capture::Weak(_) = capture {
                     if let Some(loan) = loans.next() {
                         items.push(loan.index());
                     }
@@ -361,12 +367,15 @@ impl<'a> LoanFlow<'a> {
 
     /// The items a closure value carries for `capture`: those of the captured place's root
     /// local, except for an owned value whose type carries no loans, such as an `Int` copied
-    /// through a reference (D6 of `escaping-closures`).
+    /// through a reference (D6 of `escaping-closures`). A weak capture carries them as a
+    /// borrowed one does, since it is a shared borrow of the place (D24 of `owned-state`).
     pub fn capture_items(&self, state: &Holdings, capture: &Capture) -> Vec<usize> {
         let Some(place) = capture.place() else {
             return Vec::new();
         };
-        if capture.is_owned() && !places::carries_loans(&place.ty(self.body, &self.file.types)) {
+        if matches!(capture, Capture::Owned(_))
+            && !places::carries_loans(&place.ty(self.body, &self.file.types))
+        {
             return Vec::new();
         }
         self.held(state, place.local)
@@ -526,12 +535,18 @@ impl<'a> LoanFlow<'a> {
         callee: &Callee,
         arguments: &[Operand],
         parameters: &[Type],
+        parameter_kinds: &[prism_mir::ParameterKind],
     ) -> Vec<(LocalId, Vec<usize>)> {
         // Each loan-carrying operand's items, and whether the call may write through it, with
-        // the type of what it writes when that is known: `R` for a `&mut R` argument.
-        let mut sources: Vec<(Vec<usize>, Option<Option<Type>>)> = Vec::new();
+        // the type of what it writes when that is known: `R` for a `&mut R` argument. A
+        // reference to a keeper, shared or not, receives what the call's `attached` arguments
+        // hold, which it keeps (D24 of `owned-state`).
+        let mut sources: Vec<(Vec<usize>, Option<Option<Type>>, bool)> = Vec::new();
+        let attached = self.attached_items(state, arguments, parameter_kinds);
+        let mut keepers: Vec<LocalId> = Vec::new();
         for (argument, parameter) in arguments.iter().zip(parameters) {
             if places::carries_loans(parameter) {
+                let keeps = referent(parameter).is_some_and(|ty| places::contains_keeper(&ty));
                 let writes = if places::writes_loans_through(parameter) {
                     Some(referent(parameter))
                 } else if places::contains_function(parameter) {
@@ -539,14 +554,21 @@ impl<'a> LoanFlow<'a> {
                 } else {
                     None
                 };
-                sources.push((self.operand_items(state, argument), writes));
+                let items = self.operand_items(state, argument);
+                if keeps && !attached.is_empty() {
+                    keepers.extend(self.referents(&items, false));
+                }
+                sources.push((items, writes, keeps));
             }
         }
         if let Callee::Value(place, _) = callee {
-            sources.push((self.held(state, place.local), Some(None)));
+            sources.push((self.held(state, place.local), Some(None), false));
         }
         let mut writes = Vec::new();
-        for (index, (items, through)) in sources.iter().enumerate() {
+        for keeper in keepers {
+            writes.push((keeper, attached.clone()));
+        }
+        for (index, (items, through, _)) in sources.iter().enumerate() {
             let Some(written) = through else {
                 continue;
             };
@@ -554,7 +576,7 @@ impl<'a> LoanFlow<'a> {
                 .iter()
                 .enumerate()
                 .filter(|(other, _)| *other != index)
-                .flat_map(|(_, (items, _))| items.iter().copied())
+                .flat_map(|(_, (items, _, _))| items.iter().copied())
                 .collect();
             others.sort_unstable();
             others.dedup();
@@ -593,7 +615,7 @@ fn rvalue_operands(rvalue: &Rvalue) -> Vec<&Operand> {
             .iter()
             .filter_map(|capture| match capture {
                 Capture::Owned(operand) => Some(operand),
-                Capture::Borrowed(_) => None,
+                Capture::Borrowed(_) | Capture::Weak(_) => None,
             })
             .collect(),
         Rvalue::Borrow { .. } | Rvalue::Discriminant(_) => Vec::new(),
@@ -663,25 +685,51 @@ impl LoanFlow<'_> {
             callee,
             arguments,
             parameters,
+            parameter_kinds,
             destination,
             ..
         } = &terminator.kind
         {
-            let items = self.call_items(state, callee, arguments, parameters);
-            for (local, written) in self.call_writes(state, callee, arguments, parameters) {
+            let ty = destination.ty(self.body, &self.file.types);
+            let keeper = places::contains_keeper(&ty);
+            let mut items = self.call_items(state, callee, arguments, parameters);
+            // A keeper's result also holds what it keeps: the arguments of its `attached`
+            // parameters (D24 of `owned-state`).
+            if keeper {
+                items.extend(self.attached_items(state, arguments, parameter_kinds));
+                items.sort_unstable();
+                items.dedup();
+            }
+            for (local, written) in
+                self.call_writes(state, callee, arguments, parameters, parameter_kinds)
+            {
                 self.give(state, local, &written);
             }
             for local in self.moved_locals(arguments.iter()) {
                 self.clear(state, local);
             }
-            let ty = destination.ty(self.body, &self.file.types);
-            let result = if places::is_input_borrow(&ty) {
+            let result = if places::is_input_borrow(&ty) || keeper {
                 items
             } else {
                 Vec::new()
             };
             self.write(state, destination, &result);
         }
+    }
+
+    /// The items of the arguments of a call's `attached` parameters (D24 of `owned-state`).
+    pub fn attached_items(
+        &self,
+        state: &Holdings,
+        arguments: &[Operand],
+        parameter_kinds: &[prism_mir::ParameterKind],
+    ) -> Vec<usize> {
+        arguments
+            .iter()
+            .zip(parameter_kinds)
+            .filter(|(_, kind)| kind.is_attached())
+            .flat_map(|(argument, _)| self.operand_items(state, argument))
+            .collect()
     }
 }
 

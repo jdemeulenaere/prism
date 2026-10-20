@@ -138,7 +138,8 @@ impl Builder<'_> {
         if let ExpressionKind::StatePlace { handle } = target_expression.kind {
             return self.lower_state_compound_assign(operator, handle, value, target_span, span);
         }
-        let mut place = self.place(target);
+        // A part of a state's value is changed under an exclusive guard (D3 of `owned-state`).
+        let mut place = self.place_with_access(target, super::state::StateAccess::Exclusive);
         if self.may_repoint(target, value) {
             place = self.pin_referent(target, place, target_span);
         }

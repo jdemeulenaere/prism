@@ -1,36 +1,39 @@
-//! State handles in the type checker (D3, D5 and D7 of `state-handles`).
+//! State objects in the type checker (D3, D5 and D7 of `state-handles`, D1 to D5 of
+//! `owned-state`).
 //!
-//! `s.value` of a `State<T>` or `MutableState<T>` is typed by its own rule rather than as a
-//! computed property:
+//! A state object (`State<T>`, `MutableState<T>`) is reached by value or through references;
+//! every operation on it takes a shared borrow of it. `s.value` is typed by its own rule rather
+//! than as a computed property:
 //!
 //! - for a `Copy` `T` (by its declared marker, a type parameter only through a `Copy` bound),
-//!   a read is a call of [`BuiltinFunction::StateValue`] with the handle copied as its
-//!   receiver, so borrowing it borrows a temporary;
-//! - for any other `T`, it is an [`ExpressionKind::StatePlace`] over the handle, which only a
-//!   composable context may read in place, borrow and project; outside one it is `E4033`;
+//!   a read is a call of [`BuiltinFunction::StateValue`] with a shared borrow of the state
+//!   object as its receiver, so borrowing it borrows a temporary;
+//! - for any other `T`, it is an [`ExpressionKind::StatePlace`] over that borrow, read in
+//!   place, borrowed and projected in every context, never moved out (`E4017`);
 //! - as the target of an assignment it is a state place of either kind, written through a
-//!   runtime call, never as a place rooted at the handle.
+//!   runtime call; a `MutableState<T>` is written through any access, shared borrows included
+//!   (D2 of `owned-state`), a `State<T>` never (`E4003`).
 //!
-//! A mutable borrow, a `mut fun` receiver or a part write of any `s.value` is `E4031` in a
-//! composable context and `E4033` elsewhere, with help naming `edit`. Writes, `update` and
-//! `edit` in a composable context are `E4031`, and `mutableStateOf` there is `E4032`. Each
-//! rule costs a member lookup, a marker lookup and a test of the composable-context flag.
+//! A mutable borrow, a `mut fun` receiver or a part write of `s.value` is `E4031` in a
+//! composable context and allowed elsewhere on a `MutableState<T>`, where it turns a `Copy`
+//! read into a state place. Writes and `update` in a composable context are `E4031`, and
+//! `mutableStateOf` there is `E4032`. Each rule costs a member lookup, a marker lookup and a
+//! test of the composable-context flag.
 
 use super::TypeChecker;
-use crate::builder::PendingStateRead;
 use crate::error::TypeError;
 use crate::types::Type;
 use prism_ast::expr::{CallArg, Expr};
 use prism_ast::Span;
 use prism_typed_tree::{
-    Argument, BuiltinFunction, Call, Callee, ExpressionId, ExpressionKind, IntrinsicStruct,
+    Argument, BorrowOrigin, BuiltinFunction, Call, Callee, ExpressionId, ExpressionKind,
+    IntrinsicStruct,
 };
 
 /// The member name of a state's value.
 pub(super) const VALUE: &str = "value";
 
-/// The handle kind and value type of `ty` when it is a state handle, `State<T>` or
-/// `MutableState<T>`.
+/// The kind and value type of `ty` when it is a state object, `State<T>` or `MutableState<T>`.
 pub(super) fn state_handle(ty: &Type) -> Option<(IntrinsicStruct, &Type)> {
     match ty {
         Type::Struct { id, arguments } => match (id.intrinsic(), &arguments[..]) {
@@ -41,7 +44,7 @@ pub(super) fn state_handle(ty: &Type) -> Option<(IntrinsicStruct, &Type)> {
     }
 }
 
-/// `State<T>` for `MutableState<T>`: the type a lookup that misses on a mutable handle is
+/// `State<T>` for `MutableState<T>`: the type a lookup that misses on a mutable state is
 /// retried on (D3 of `state-handles`).
 pub(super) fn read_only_handle(ty: &Type) -> Option<Type> {
     match state_handle(ty) {
@@ -54,8 +57,8 @@ pub(super) fn read_only_handle(ty: &Type) -> Option<Type> {
 }
 
 impl TypeChecker {
-    /// The type of `value` on the handle `peeled` and whether it may be assigned, when
-    /// `member` is `value` and the handle's module is visible: the value type, writable on a
+    /// The type of `value` on the state object `peeled` and whether it may be assigned, when
+    /// `member` is `value` and the state's module is visible: the value type, writable on a
     /// `MutableState<T>`.
     pub(super) fn state_value_member(&self, peeled: &Type, member: &str) -> Option<(Type, bool)> {
         if member != VALUE {
@@ -66,18 +69,22 @@ impl TypeChecker {
         Some((value.clone(), found.writable))
     }
 
-    /// The node of `s.value` read on the handle node `base` (D5): a call of the built-in
-    /// `value` for a `Copy` value type, else a state place, which outside composable contexts
-    /// waits for the end of the body to be reported unless a mutable use is reported first.
+    /// A shared borrow of the state object at the place `object` (D3 of `owned-state`), which a
+    /// closure using it captures as the path of `object` (`*count`, `todo.done`).
+    fn state_object_borrow(&mut self, object: ExpressionId) -> ExpressionId {
+        self.borrow(false, BorrowOrigin::Receiver, object)
+    }
+
+    /// The node of `s.value` read on the state object `base` (D5 of `state-handles`): a call
+    /// of the built-in `value` for a `Copy` value type, else a state place.
     pub(super) fn state_value_node(
         &mut self,
         base: ExpressionId,
         value: Type,
         span: Span,
     ) -> ExpressionId {
-        let handle_ty = self.ty(base);
-        let handle_text = self.describe_handle(base);
-        let handle = self.consume(base);
+        let handle = self.state_object_borrow(base);
+        let handle_ty = self.ty(handle);
         if self.is_copy(&value) {
             let call = Call {
                 callee: Callee::Builtin(BuiltinFunction::StateValue),
@@ -92,23 +99,14 @@ impl TypeChecker {
             };
             return self.add(ExpressionKind::Call(call), value, span);
         }
-        let node = self.add(ExpressionKind::StatePlace { handle }, value, span);
-        let in_compose = self.is_in_compose();
-        self.builder.state_value_spans.insert(span, in_compose);
-        if !in_compose {
-            self.builder.pending_state_reads.push(PendingStateRead {
-                node,
-                span,
-                handle: handle_text,
-            });
-        }
-        node
+        self.builder.state_value_spans.insert(span);
+        self.add(ExpressionKind::StatePlace { handle }, value, span)
     }
 
-    /// The target `s.value` of an assignment, on the handle node `base` (D5): a state place
-    /// over the handle, writable when the `value` found is the writable one of a
-    /// `MutableState<T>`, else `E4003`. Returns the place, the value type and whether it is
-    /// writable, or `None` when `base` is no state handle.
+    /// The target `s.value` of an assignment, on the node `base` reaching a state object (D5):
+    /// a state place over a shared borrow of it, writable when the `value` found is the
+    /// writable one of a `MutableState<T>`, else `E4003`. Returns the place, the value type and
+    /// whether it is writable, or `None` when `base` reaches no state object.
     pub(super) fn state_value_target(
         &mut self,
         base: ExpressionId,
@@ -120,19 +118,9 @@ impl TypeChecker {
         let (value, writable) = self.state_value_member(&handle_ty, member)?;
         let base = self.peel_indirection_nodes(base);
         if !writable {
-            self.errors.push(TypeError::ImmutabilityViolation {
-                message: format!(
-                    "cannot assign to the value of a '{}': a 'State<T>' is read-only",
-                    handle_ty
-                ),
-                span,
-                help: Some(format!(
-                    "take a 'MutableState<{}>' to write the state, and pass it where a '{}' is expected",
-                    value, handle_ty
-                )),
-            });
+            self.report_read_only_state(&handle_ty, &value, span);
         }
-        let handle = self.consume(base);
+        let handle = self.state_object_borrow(base);
         let node = self.add(
             ExpressionKind::StatePlace { handle },
             value.clone(),
@@ -141,14 +129,30 @@ impl TypeChecker {
         Some((node, value, writable))
     }
 
+    /// `E4003` for a change of the value of the read-only `State<T>` `handle_ty`, whose value
+    /// type is `value`.
+    fn report_read_only_state(&mut self, handle_ty: &Type, value: &Type, span: Span) {
+        self.errors.push(TypeError::ImmutabilityViolation {
+            message: format!(
+                "cannot assign to the value of a '{}': a 'State<T>' is read-only",
+                handle_ty
+            ),
+            span,
+            help: Some(format!(
+                "take a '&MutableState<{}>' to write the state, and pass it where a '&{}' is expected",
+                value, handle_ty
+            )),
+        });
+    }
+
     /// Reports the write of a state's value that `statement` is (`E4031` in a composable
     /// context), for an assignment or, when `compound`, a compound assignment of the state
-    /// place `target`; a compound assignment of a value that is not `Copy` is `E4033` outside
-    /// composable contexts, with help naming `update`.
+    /// place `target`; a compound assignment of a value that is not `Copy` would move it out,
+    /// `E4017` with help naming `update`.
     pub(super) fn check_state_write(&mut self, target: ExpressionId, compound: bool, span: Span) {
-        if !matches!(self.builder.kind(target), ExpressionKind::StatePlace { .. }) {
+        let ExpressionKind::StatePlace { handle } = self.builder.kind(target).clone() else {
             return;
-        }
+        };
         if self.is_in_compose() {
             let what = if compound {
                 "a compound assignment of a state's value"
@@ -163,60 +167,75 @@ impl TypeChecker {
         }
         let value = self.ty(target);
         if compound && !self.is_copy(&value) {
-            let handle = match self.builder.kind(target) {
-                ExpressionKind::StatePlace { handle } => *handle,
-                _ => unreachable!("a state place"),
-            };
             let handle = self.describe_handle(handle);
-            self.errors.push(TypeError::StateValueOutsideComposable {
-                message: format!(
-                    "a compound assignment reads the value of '{}', a '{}' that is not 'Copy', outside a composable context",
-                    handle, value
-                ),
-                help: format!(
-                    "replace the value with '{}.update {{ value -> ... }}'",
-                    handle
-                ),
+            self.errors.push(TypeError::CannotMoveOut {
+                source: format!("the value of the state '{}'", handle),
+                ty: value,
+                borrow: None,
+                clone: None,
+                destructure: None,
+                unbox: None,
+                remove: None,
+                captured: false,
                 span,
             });
         }
     }
 
     /// The `s.value` node a place is rooted at, through fields, elements and the temporary
-    /// holding a copied value: a state place, or a call of the built-in `value`.
-    pub(super) fn state_value_root(&self, mut id: ExpressionId) -> Option<ExpressionId> {
+    /// holding a copied value: a state place, or a call of the built-in `value`; and the
+    /// temporary over that call, when the place reads a part of a copied value.
+    fn state_value_root_and_temporary(
+        &self,
+        mut id: ExpressionId,
+    ) -> Option<(ExpressionId, Option<ExpressionId>)> {
+        let mut temporary = None;
         loop {
             match self.builder.kind(id) {
                 ExpressionKind::Field { base, .. } | ExpressionKind::Index { base, .. } => {
+                    temporary = None;
                     id = *base
                 }
-                ExpressionKind::Temporary { value } => id = *value,
-                ExpressionKind::StatePlace { .. } => return Some(id),
+                ExpressionKind::Temporary { value } => {
+                    temporary = Some(id);
+                    id = *value
+                }
+                ExpressionKind::StatePlace { .. } => return Some((id, None)),
                 ExpressionKind::Call(Call {
                     callee: Callee::Builtin(BuiltinFunction::StateValue),
                     ..
-                }) => return Some(id),
+                }) => return Some((id, temporary)),
                 _ => return None,
             }
         }
     }
 
+    /// The `s.value` node a place is rooted at, through fields, elements and the temporary
+    /// holding a copied value: a state place, or a call of the built-in `value`.
+    pub(super) fn state_value_root(&self, id: ExpressionId) -> Option<ExpressionId> {
+        self.state_value_root_and_temporary(id)
+            .map(|(root, _)| root)
+    }
+
     /// Reports a mutable use (`what`: a mutable borrow, a `mut fun` receiver or a part write)
-    /// of the place `place` when it is rooted at `s.value` (D5): `E4031` in a composable
-    /// context, `E4033` with help naming `edit` elsewhere. Returns whether it reported.
+    /// of the place `place` when it is rooted at `s.value` (D3 of `owned-state`): `E4031` in a
+    /// composable context, `E4003` on a read-only `State<T>`. Elsewhere it is allowed, and a
+    /// `Copy` read at its root becomes a state place, changed in place. Returns whether it
+    /// reported.
     pub(super) fn reject_state_mutation(
         &mut self,
         place: ExpressionId,
         what: &str,
         span: Span,
     ) -> bool {
-        let Some(root) = self.state_value_root(place) else {
+        let Some((root, temporary)) = self.state_value_root_and_temporary(place) else {
             return false;
         };
-        if !self.builder.reported_state_values.insert(root) {
+        if self.builder.reported_state_values.contains(&root) {
             return true;
         }
         if self.is_in_compose() {
+            self.builder.reported_state_values.insert(root);
             self.errors.push(TypeError::StateWriteInComposable {
                 what: format!("{} of a state's value", what),
                 span,
@@ -227,59 +246,33 @@ impl TypeChecker {
             ExpressionKind::StatePlace { handle } => *handle,
             ExpressionKind::Call(call) => match call.arguments.first() {
                 Some(Argument::Written(handle)) => *handle,
-                _ => root,
+                _ => return false,
             },
-            _ => root,
+            _ => return false,
         };
-        let handle = self.describe_handle(handle);
-        let copied = matches!(self.builder.kind(root), ExpressionKind::Call(_));
-        let help = if copied {
-            format!(
-                "change the value in place with '{}.edit {{ value -> ... }}', or assign the whole value with '{}.value = ...'",
-                handle, handle
-            )
-        } else {
-            format!(
-                "change the value in place with '{}.edit {{ value -> ... }}'",
-                handle
-            )
-        };
-        self.errors.push(TypeError::StateValueOutsideComposable {
-            message: format!(
-                "{} of the value of '{}' outside a composable context, where state is changed only through 'edit' or a whole assignment",
-                what, handle
-            ),
-            help,
-            span,
-        });
-        true
-    }
-
-    /// Reports the reads of `s.value` that only a composable context may make, built in the
-    /// body that ends (D7): `E4033` with help naming `read`.
-    pub(super) fn report_pending_state_reads(&mut self) {
-        let pending = std::mem::take(&mut self.builder.pending_state_reads);
-        for read in pending {
-            if self.builder.reported_state_values.contains(&read.node) {
-                continue;
-            }
-            let value = self.ty(read.node);
-            self.errors.push(TypeError::StateValueOutsideComposable {
-                message: format!(
-                    "the value of '{}' is a '{}', which is not 'Copy': outside a composable context it is read only through 'read'",
-                    read.handle, value
-                ),
-                help: format!(
-                    "borrow the value inside '{}.read {{ value -> ... }}'",
-                    read.handle
-                ),
-                span: read.span,
-            });
+        let handle_ty = super::peel_indirection(&self.ty(handle)).clone();
+        if let Some((IntrinsicStruct::State, value)) = state_handle(&handle_ty) {
+            let value = value.clone();
+            self.builder.reported_state_values.insert(root);
+            self.report_read_only_state(&handle_ty, &value, span);
+            return true;
         }
+        if let ExpressionKind::Call(_) = self.builder.kind(root) {
+            // A part of a `Copy` value is changed in place: the read becomes the state place.
+            let (value, root_span) = (self.ty(root), self.builder.span_of(root));
+            let target = temporary.unwrap_or(root);
+            self.builder.replace(
+                target,
+                ExpressionKind::StatePlace { handle },
+                value,
+                root_span,
+            );
+        }
+        false
     }
 
     /// `E4032` for `mutableStateOf(args)` in a composable context, with the call wrapped in
-    /// `remember` as its help (D7).
+    /// `remember` as its help (D7 of `state-handles`).
     pub(super) fn reject_unremembered_state(
         &mut self,
         callee: &Expr,
@@ -303,17 +296,13 @@ impl TypeChecker {
         let _ = span;
     }
 
-    /// `E4031` for a call of `update` or `edit` in a composable context (D7).
+    /// `E4031` for a call of `update` in a composable context (D7 of `state-handles`).
     pub(super) fn reject_state_member_in_composable(
         &mut self,
         builtin: BuiltinFunction,
         span: Span,
     ) {
-        if matches!(
-            builtin,
-            BuiltinFunction::StateUpdate | BuiltinFunction::StateEdit
-        ) && self.is_in_compose()
-        {
+        if builtin == BuiltinFunction::StateUpdate && self.is_in_compose() {
             self.errors.push(TypeError::StateWriteInComposable {
                 what: format!("a call of '{}'", builtin.name()),
                 span,
@@ -321,7 +310,7 @@ impl TypeChecker {
         }
     }
 
-    /// A short text for the handle node `id`, for diagnostics: the name of a local, a
+    /// A short text for the state node `id`, for diagnostics: the name of a local, a
     /// top-level value or a field path, else `state`.
     fn describe_handle(&self, id: ExpressionId) -> String {
         match self.builder.kind(id) {
@@ -330,9 +319,9 @@ impl TypeChecker {
             ExpressionKind::Field { base, name, .. } => {
                 format!("{}.{}", self.describe_handle(*base), name)
             }
-            ExpressionKind::Copy { place } | ExpressionKind::Move { place } => {
-                self.describe_handle(*place)
-            }
+            ExpressionKind::Copy { place }
+            | ExpressionKind::Move { place }
+            | ExpressionKind::Borrow { place, .. } => self.describe_handle(*place),
             ExpressionKind::Deref { pointer } => self.describe_handle(*pointer),
             ExpressionKind::Call(Call {
                 callee: Callee::Builtin(BuiltinFunction::StateValue),

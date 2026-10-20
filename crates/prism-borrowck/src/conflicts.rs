@@ -292,6 +292,12 @@ fn rvalue_events(
                         continue;
                     }
                     prism_mir::Capture::Borrowed(place) => place,
+                    // A weak capture reads the state object it names, as a shared borrow held
+                    // by the closure (D24 of `owned-state`).
+                    prism_mir::Capture::Weak(place) => {
+                        access(events, place, AccessKind::SharedBorrow, span);
+                        continue;
+                    }
                 };
                 let kind = match modes.get(index) {
                     Some(prism_mir::CaptureMode::Mutable) => AccessKind::MutableBorrow,
@@ -484,6 +490,29 @@ impl Checker<'_, '_> {
         let later = self.later_use(location, index, events, loan_id);
         let mut related = Vec::new();
         let mut helps = Vec::new();
+        let mut notes = Vec::new();
+        // A weak capture keeps its state borrowed while what keeps the closure, such as a
+        // composition, is used (D24 of `owned-state`).
+        if let LoanKind::Capture {
+            closure,
+            index,
+            weak: true,
+        } = loan.kind
+        {
+            let captured = places::quoted(
+                &self.file.bodies[closure].locals
+                    [LocalId((self.file.bodies[closure].argument_count + 1 + index) as u32)]
+                .name,
+            );
+            notes.push(format!(
+                "a closure given to an attached parameter captures {} weakly, so what keeps it, such as a composition, keeps {} borrowed while it is used",
+                captured, captured
+            ));
+            helps.push(format!(
+                "declare {} before the composition, so that it outlives the composition's last use, or remember it in the composition's content",
+                captured
+            ));
+        }
         let (kind_of_error, primary) = match kind {
             AccessKind::Drop | AccessKind::StorageDead => {
                 let name = place_name.clone();
@@ -550,7 +579,7 @@ impl Checker<'_, '_> {
                         message: primary,
                     },
                     related,
-                    notes: Vec::new(),
+                    notes,
                     helps,
                 };
             }
@@ -610,7 +639,11 @@ impl Checker<'_, '_> {
         );
         let both_mutable = kind == AccessKind::MutableBorrow && loan.mutable;
         match loan.kind {
-            LoanKind::Capture { closure, index } => {
+            LoanKind::Capture {
+                closure,
+                index,
+                weak,
+            } => {
                 let captured = self.file.bodies[closure].locals
                     [LocalId((self.file.bodies[closure].argument_count + 1 + index) as u32)]
                 .name
@@ -618,7 +651,9 @@ impl Checker<'_, '_> {
                 let captured = places::quoted(&captured);
                 related.push(Label {
                     span: loan.span,
-                    message: if loan.mutable {
+                    message: if weak {
+                        format!("the closure captures {} weakly here", captured)
+                    } else if loan.mutable {
                         format!("closure borrows {} mutably here", captured)
                     } else {
                         format!("closure borrows {} here", captured)
@@ -703,7 +738,7 @@ impl Checker<'_, '_> {
                 message: primary,
             },
             related,
-            notes: Vec::new(),
+            notes,
             helps,
         }
     }

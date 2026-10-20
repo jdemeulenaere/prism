@@ -39,6 +39,8 @@ pub struct PreludeScope {
     seen_nominals: HashMap<String, Vec<NominalId>>,
     /// Every struct and enum they export.
     exported_nominals: HashSet<NominalId>,
+    /// The types their capture functions capture (D12 of `owned-state`).
+    capture_types: Vec<NominalId>,
 }
 
 impl PreludeScope {
@@ -68,6 +70,7 @@ impl PreludeScope {
             intrinsic_functions,
             externals,
             types: prelude_types(&table),
+            capture_types: table.capture_function_types().cloned().collect(),
             seen_nominals,
             exported_nominals,
         }
@@ -127,6 +130,9 @@ impl PreludeScope {
             if let Some(marker) = marker {
                 table.insert_marker(id.clone(), marker.marker, marker.parameters.clone());
             }
+        }
+        for id in &self.capture_types {
+            table.insert_capture_function(id.clone());
         }
     }
 }

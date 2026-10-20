@@ -82,8 +82,15 @@ fn owns_storage_at(ty: &Type, types: &TypeTable, depth: usize) -> bool {
         // A list owns its buffer, or may come to: an empty list grows (D13 of `collections`).
         Type::String | Type::Heap(_) | Type::List(_) | Type::Fn { .. } => true,
         Type::Nullable(inner) => owns_storage_at(inner, types, depth + 1),
-        // A composition is disposed by its drop (D16 of `compose-transform`).
-        Type::Struct { id, .. } if id.intrinsic() == Some(IntrinsicStruct::Composition) => true,
+        // A composition is disposed by its drop (D16 of `compose-transform`), and a state
+        // object retires its state (D1 of `owned-state`).
+        Type::Struct { id, .. }
+            if id.intrinsic().is_some_and(|intrinsic| {
+                intrinsic == IntrinsicStruct::Composition || intrinsic.is_state_handle()
+            }) =>
+        {
+            true
+        }
         Type::Struct { id, arguments } => types
             .instantiated_fields(id, arguments)
             .unwrap_or_default()
@@ -508,6 +515,18 @@ impl<'a, 'c, 'm, M: Module> GlueLowering<'a, 'c, 'm, M> {
                     0,
                 );
                 lowering.call_runtime("prism_compose_dispose", &[handle])?;
+            }
+            // A state object's drop retires its state (D7 of `owned-state`).
+            (GlueKind::Drop, Type::Struct { id, .. })
+                if id.intrinsic().is_some_and(IntrinsicStruct::is_state_handle) =>
+            {
+                let handle = lowering.builder.ins().load(
+                    types::I64,
+                    MemFlagsData::trusted(),
+                    parameters[0],
+                    0,
+                );
+                lowering.call_runtime("prism_compose_state_retire", &[handle])?;
             }
             // A scalar's equality glue, which slot type records name, loads both values.
             (GlueKind::Equals, _)

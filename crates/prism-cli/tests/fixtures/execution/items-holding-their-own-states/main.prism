@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+struct Todo { val id: Int, val done: MutableState<Bool> }
+fun main() {
+    val todos = mutableStateOf(listOf(Todo(1, mutableStateOf(false)), Todo(2, mutableStateOf(true))))
+    todos.value[0].done.value = true
+    val removed = todos.value.removeAt(1)
+    println(removed.done.value)
+    var left = 0
+    for (t in todos.value) {
+        if (!t.done.value) { left += 1 }
+    }
+    println(left)
+}

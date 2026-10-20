@@ -1,0 +1,7 @@
+// expect: ok
+// run: 0
+val Count: MutableState<Int> = mutableStateOf(1)
+fun main() {
+    Count.value += 1
+    println(Count.value)
+}

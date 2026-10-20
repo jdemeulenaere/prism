@@ -305,6 +305,21 @@ pub(crate) struct Builder<'a> {
     path_bindings: HashMap<(prism_typed_tree::LocalId, Vec<Projection>), LocalId>,
     /// The bindings with an entry in `path_bindings`.
     path_captured: HashSet<prism_typed_tree::LocalId>,
+    /// The capture locals that hold weak handles, whose uses view them as the state object
+    /// (D10 of `owned-state`).
+    weak_captures: HashSet<LocalId>,
+    /// How the place being lowered is used, for the state place at its root (D3 of
+    /// `owned-state`).
+    state_access: state::StateAccess,
+    /// The state places a binding's initializer borrows, with the index of the scope of that
+    /// binding's block, which owns their guards.
+    extended_guards: HashMap<ExpressionId, usize>,
+    /// Whether the guard of the state place being lowered is taken later, by the borrow of a
+    /// receiver after the arguments, and that guard.
+    defer_guard: bool,
+    deferred_guard: Option<state::DeferredGuard>,
+    /// Whether each expression asked reads a state place, for the scope of a call's guards.
+    reads_state: HashMap<ExpressionId, bool>,
     /// Per capture local, the path its whole binding was widened from.
     capture_widenings: Vec<Option<prism_typed_tree::Widening>>,
     scopes: Vec<Scope>,
@@ -357,6 +372,12 @@ impl<'a> Builder<'a> {
             bindings: HashMap::new(),
             path_bindings: HashMap::new(),
             path_captured: HashSet::new(),
+            weak_captures: HashSet::new(),
+            state_access: state::StateAccess::Read,
+            extended_guards: HashMap::new(),
+            defer_guard: false,
+            deferred_guard: None,
+            reads_state: HashMap::new(),
             capture_widenings: Vec::new(),
             scopes: Vec::new(),
             loops: Vec::new(),

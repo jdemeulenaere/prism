@@ -1,6 +1,6 @@
 // expect: ok
 // run: 0
-fun <T : Copy> get(s: State<T>): T = s.value
+fun <T : Copy> get(s: &State<T>): T = s.value
 
 fun main() {
     println(get(mutableStateOf(5)))

@@ -6,16 +6,25 @@ use prism_mir::{Body, Place, Projection};
 use prism_typed_tree::{Type, TypeTable};
 
 /// Whether a value of type `ty` can hold loans: a reference or a function type outside a
-/// nominal type (`&T`, `&mut T`, `() -> Int`), or a nullable or `Heap<T>` of one. Structs and
-/// enums never carry loans, since their fields and payloads cannot be borrows and a capturing
-/// closure cannot be stored in them. Neither does a value of a type parameter: type arguments
-/// are borrow-free, and a capturing closure is never passed for one (D7 of `generics`).
+/// nominal type (`&T`, `&mut T`, `() -> Int`), a keeper (`Composition`, which holds the loans of
+/// the weak captures of the content it keeps, D24 of `owned-state`), or a nullable or `Heap<T>`
+/// of one. Other structs and enums never carry loans, since their fields and payloads cannot be
+/// borrows and a capturing closure cannot be stored in them. Neither does a value of a type
+/// parameter: type arguments are borrow-free, and a capturing closure is never passed for one
+/// (D7 of `generics`).
 pub fn carries_loans(ty: &Type) -> bool {
     match ty {
         Type::Reference { .. } | Type::Fn { .. } => true,
+        Type::Struct { .. } => ty.contains_keeper(),
         Type::Nullable(inner) | Type::Heap(inner) => carries_loans(inner),
         _ => false,
     }
+}
+
+/// Whether a value of type `ty` keeps attached function values past the call that gives them
+/// (D24 of `owned-state`): a keeper, or a nullable or `Heap<T>` of one.
+pub fn contains_keeper(ty: &Type) -> bool {
+    ty.contains_keeper()
 }
 
 /// Whether `ty` is a function type, or a nullable or `Heap<T>` of one. A type parameter is not:
@@ -29,13 +38,17 @@ pub fn contains_function(ty: &Type) -> bool {
 }
 
 /// Whether a value of type `ty` lets whoever holds it write loans into what it points at: a
-/// `&mut R` whose `R` carries loans (`&mut &Int`), or a nullable of one.
+/// `&mut R` whose `R` carries loans (`&mut &Int`), a reference to a keeper (`&Composition`), or
+/// a nullable of one.
 pub fn writes_loans_through(ty: &Type) -> bool {
     match ty {
         Type::Reference {
             mutable: true,
             inner,
         } => carries_loans(inner),
+        // A keeper keeps what an `attached` argument holds through any reference to it (D24 of
+        // `owned-state`).
+        Type::Reference { inner, .. } if inner.contains_keeper() => true,
         Type::Nullable(inner) => writes_loans_through(inner),
         _ => false,
     }
@@ -132,7 +145,10 @@ pub fn extends_through_reference(
     }
     let mut ty = prefix.ty(body, types);
     for projection in &place.projections[prefix.projections.len()..] {
-        if *projection == Projection::Deref && matches!(ty, Type::Reference { .. }) {
+        // A weak reference's view names a state object owned elsewhere (D10 of `owned-state`).
+        if (*projection == Projection::Deref && matches!(ty, Type::Reference { .. }))
+            || *projection == Projection::View
+        {
             return true;
         }
         match prism_mir::projection_type(&ty, *projection, types) {

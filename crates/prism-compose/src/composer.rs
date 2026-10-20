@@ -166,16 +166,21 @@ impl Composer {
     }
 
     /// Moves the value at `value` into the slot at the cursor, forgetting a slot of another
-    /// type there, and moves the cursor past it.
+    /// type there, and moves the cursor past it. Gives the address of the stored value, valid
+    /// until the pass ends, which `remember` of a value that is not `Copy` lends (D6 of
+    /// `owned-state`).
     ///
     /// # Safety
     ///
     /// `slot_type` must be a valid record and `value` a value of it that the caller gives up.
-    pub unsafe fn set_slot(self, slot_type: *const SlotType, value: *mut u8) -> ComposeResult<()> {
+    pub unsafe fn set_slot(
+        self,
+        slot_type: *const SlotType,
+        value: *mut u8,
+    ) -> ComposeResult<*const u8> {
         with_state(|state| {
             slot_position(state, self)?;
-            store(state, slot_type, value);
-            Ok(())
+            Ok(store(state, slot_type, value) as *const u8)
         })
     }
 
@@ -198,7 +203,7 @@ impl Composer {
             match (old, record.equals) {
                 (Some(old), Some(_)) => Ok(Some(old)),
                 _ => {
-                    store(state, slot_type, value);
+                    let _ = store(state, slot_type, value);
                     Ok(None)
                 }
             }
@@ -218,7 +223,7 @@ impl Composer {
                 advance(state);
                 Ok(false)
             } else {
-                store(state, slot_type, value);
+                let _ = store(state, slot_type, value);
                 Ok(true)
             }
         })?;
@@ -275,7 +280,7 @@ impl Composer {
                     if present {
                         advance(state);
                     } else {
-                        store(state, slot_type, value);
+                        let _ = store(state, slot_type, value);
                     }
                     Ok(Some(present))
                 })?;
@@ -377,43 +382,28 @@ impl Composer {
 
 impl Composer {
     /// Opens the window of a `remember` calculation that runs because its slot is missing or a
-    /// key changed (D11 of `state-handles`): the cells created until
-    /// [`Composer::end_remember`] belong to the slot the calculation's result is stored in.
+    /// key changed: the calculation may create state cells, which the slot's value owns (D15 of
+    /// `owned-state`).
     pub fn begin_remember(self) -> ComposeResult<()> {
         with_state(|state| {
             check(state, self)?;
-            state
-                .creation_owners
-                .push(crate::state::CreationOwner::Remember(Vec::new()));
+            state.creation_windows += 1;
             Ok(())
         })
     }
 
-    /// Closes the window of [`Composer::begin_remember`], after the result's slot was written:
-    /// attaches the cells created since to the slot before the cursor, or is the misuse `no slot
-    /// to read` when there is none.
+    /// Closes the window of [`Composer::begin_remember`], after the result's slot was written,
+    /// or is the misuse `no slot to read` when there is no slot before the cursor.
     pub fn end_remember(self) -> ComposeResult<()> {
         with_state(|state| {
             let (group, cursor) = slot_position(state, self)?;
-            let cells = match state.creation_owners.pop() {
-                Some(crate::state::CreationOwner::Remember(cells)) => cells,
-                Some(other) => {
-                    state.creation_owners.push(other);
-                    return Err(NO_SLOT);
-                }
-                None => return Err(NO_SLOT),
-            };
-            if cells.is_empty() {
-                return Ok(());
+            if state.creation_windows == 0 {
+                return Err(NO_SLOT);
             }
-            let slots = &mut state.groups.get_mut(group).unwrap().slots;
-            match cursor.checked_sub(1).and_then(|index| slots.get_mut(index)) {
-                Some(Slot::Typed {
-                    cells: attached, ..
-                }) => {
-                    attached.extend(cells);
-                    Ok(())
-                }
+            state.creation_windows -= 1;
+            let slots = &state.groups.get(group).unwrap().slots;
+            match cursor.checked_sub(1).and_then(|index| slots.get(index)) {
+                Some(Slot::Typed { .. }) => Ok(()),
                 _ => Err(NO_SLOT),
             }
         })
@@ -488,25 +478,34 @@ fn advance(state: &mut State) {
 /// # Safety
 ///
 /// As for [`Composer::set_slot`].
-unsafe fn store(state: &mut State, slot_type: *const SlotType, value: *mut u8) {
+unsafe fn store(state: &mut State, slot_type: *const SlotType, value: *mut u8) -> *mut u8 {
     let frame = *state.frames.last().unwrap();
     let cursor = frame.slot_cursor as usize;
     let slots = &mut state.groups.get_mut(frame.group).unwrap().slots;
-    match slots.get_mut(cursor) {
+    let stored = match slots.get_mut(cursor) {
         Some(slot) => {
-            // A slot holding state cells is replaced, so its cells are released with it (D12
-            // of `state-handles`).
-            let in_place = slot.cells().is_empty() && (*slot_type).drop.is_none();
+            // A value with a drop entry is replaced, and the old one released at the end of the
+            // pass, so a borrow of it handed out during the pass stays valid.
+            let in_place = (*slot_type).drop.is_none();
             if let (Some(old), true) = (slot.typed_match(slot_type), in_place) {
                 std::ptr::copy_nonoverlapping(value, old, (*slot_type).size);
+                old
             } else {
                 let old = std::mem::replace(slot, Slot::typed(slot_type, value));
+                let stored = slot.typed_match(slot_type).expect("the slot just stored");
                 state.releases.push_back(Release::Slot(old));
+                stored
             }
         }
-        None => slots.push(Slot::typed(slot_type, value)),
-    }
+        None => {
+            let slot = Slot::typed(slot_type, value);
+            let stored = slot.typed_match(slot_type).expect("the slot just stored");
+            slots.push(slot);
+            stored
+        }
+    };
     advance(state);
+    stored
 }
 
 /// Puts a word slot at the cursor of the innermost open group and moves past it.

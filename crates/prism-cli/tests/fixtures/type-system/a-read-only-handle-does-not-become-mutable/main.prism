@@ -1,2 +1,2 @@
 // expect: E4005
-fun f(s: State<Int>): MutableState<Int> = s
+fun f(s: &State<Int>): &MutableState<Int> = s

@@ -512,6 +512,16 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                         }
                     };
                 }
+                // A weak reference's word is the state object's word, viewed in place (D10 of
+                // `owned-state`).
+                Projection::View => {
+                    ty = match ty {
+                        Type::Struct { mut arguments, .. } if arguments.len() == 1 => {
+                            arguments.remove(0)
+                        }
+                        other => return Err(BackendError::new(format!("view of {}", other))),
+                    };
+                }
                 Projection::Field(index) => {
                     let layout = self.layout(&ty)?;
                     let field = match &layout.shape {
@@ -1094,6 +1104,13 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         for capture in captures {
             values.push(match capture {
                 Capture::Owned(operand) => self.operand(operand, span)?,
+                // A weak capture is the state object's word, made where the closure is built by
+                // the capture function, which copies it (D10 of `owned-state`).
+                Capture::Weak(captured) => {
+                    let ty = captured.ty(self.body, self.types());
+                    let location = self.location(captured)?;
+                    self.read_location(location, &ty)?
+                }
                 Capture::Borrowed(captured) => {
                     let ty = captured.ty(self.body, self.types());
                     Lowered::Scalar(match self.representation(&ty) {
@@ -1928,7 +1945,16 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                         self.call_runtime("prism_compose_changed", &[composer, record, value])?;
                     self.write_place(destination, Lowered::Scalar(result[0]), false)?;
                 } else {
-                    self.call_runtime("prism_compose_set_slot", &[composer, record, value])?;
+                    let stored =
+                        self.call_runtime("prism_compose_set_slot", &[composer, record, value])?[0];
+                    // `remember` lends a value that is not `Copy` from its slot (D6 of
+                    // `owned-state`).
+                    if matches!(
+                        destination.ty(self.body, self.types()),
+                        Type::Reference { .. }
+                    ) {
+                        self.write_place(destination, Lowered::Scalar(stored), false)?;
+                    }
                 }
             }
             Operation::Keep(ty) => {
@@ -2021,11 +2047,13 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
         Ok(())
     }
 
-    /// A call of a state operation (D19 of `state-handles`): a direct call of the compose
-    /// runtime's state entry point with the handle word, the slot type record of the value
-    /// type and, for a value moving in or out, its address, followed by the failure test of
-    /// D14: on a failure result, a cold block calls `prism_compose_state_error` with the
-    /// operation's location.
+    /// A call of a state operation (D19 of `state-handles`, D3 of `owned-state`): a direct call
+    /// of the compose runtime's state entry point with the state's word, loaded through the
+    /// borrow of the state object, the slot type record of the value type and, for a value
+    /// moving in or out, its address, followed by the failure test of D14: on a failure result,
+    /// a cold block calls `prism_compose_state_error` with the operation's location. A weak
+    /// reference copies the word; `get` gives its own address, viewed as the state object, or
+    /// null once the state is retired.
     fn state_call(
         &mut self,
         operation: prism_mir::StateOperation,
@@ -2039,24 +2067,44 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             .first()
             .ok_or_else(|| BackendError::new("a state operation without its value type"))?
             .clone();
-        let record = self.context.slot_type(&value_type)?;
-        let record = self.data(record);
-        // The handle word of a handle operand, in memory or in a register.
+        // The word of the state object the first operand borrows.
         let handle = |lowering: &mut Self| -> Result<Value, BackendError> {
             let operand = arguments
                 .first()
-                .ok_or_else(|| BackendError::new("a state operation without its handle"))?;
-            Ok(match lowering.operand(operand, span)? {
+                .ok_or_else(|| BackendError::new("a state operation without its state"))?;
+            let pointer = match lowering.operand(operand, span)? {
+                Lowered::Scalar(pointer) => pointer,
                 Lowered::Memory(address) => {
-                    lowering
-                        .builder
-                        .ins()
-                        .load(types::I64, aligned(), address, 0)
+                    let pointer = lowering.pointer();
+                    lowering.builder.ins().load(pointer, aligned(), address, 0)
                 }
-                Lowered::Scalar(word) => word,
-                Lowered::Empty => return Err(BackendError::new("a state handle without a word")),
-            })
+                Lowered::Empty => return Err(BackendError::new("a state borrow without a word")),
+            };
+            Ok(lowering
+                .builder
+                .ins()
+                .load(types::I64, aligned(), pointer, 0))
         };
+        if let Operation::Weak = operation {
+            let word = handle(self)?;
+            self.write_place(destination, Lowered::Scalar(word), false)?;
+            return Ok(());
+        }
+        if let Operation::Get = operation {
+            let operand = arguments
+                .first()
+                .ok_or_else(|| BackendError::new("a weak reference's get without its reference"))?;
+            let pointer = self.operand(operand, span)?.scalar()?;
+            let word = self.builder.ins().load(types::I64, aligned(), pointer, 0);
+            let live = self.call_runtime("prism_compose_state_upgrade", &[word])?[0];
+            let pointer_type = self.pointer();
+            let null = self.builder.ins().iconst(pointer_type, 0);
+            let result = self.builder.ins().select(live, pointer, null);
+            self.write_place(destination, Lowered::Scalar(result), false)?;
+            return Ok(());
+        }
+        let record = self.context.slot_type(&value_type)?;
+        let record = self.data(record);
         let fail_on_zero = |lowering: &mut Self, result: Value| -> Result<(), BackendError> {
             let failed = lowering.builder.ins().icmp_imm_s(IntCC::Equal, result, 0);
             lowering.fail_if(failed, &[], span, |lowering, _, location| {
@@ -2071,11 +2119,11 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 fail_on_zero(self, created)?;
                 self.write_place(destination, Lowered::Scalar(created), false)?;
             }
-            Operation::Read | Operation::BeginRead | Operation::BeginEdit => {
+            Operation::Read | Operation::BeginShared | Operation::BeginExclusive => {
                 let handle = handle(self)?;
                 let name = match operation {
                     Operation::Read => "prism_compose_state_read",
-                    Operation::BeginRead => "prism_compose_state_begin_read",
+                    Operation::BeginShared => "prism_compose_state_begin_read",
                     _ => "prism_compose_state_begin_edit",
                 };
                 let address = self.call_runtime(name, &[handle, record])?[0];
@@ -2101,14 +2149,15 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
                 let value = self.read_location(Location::Memory(temporary), &value_type)?;
                 self.write_place(destination, value, false)?;
             }
-            Operation::EndRead | Operation::EndEdit => {
+            Operation::EndShared | Operation::EndExclusive => {
                 let handle = handle(self)?;
                 let name = match operation {
-                    Operation::EndRead => "prism_compose_state_end_read",
+                    Operation::EndShared => "prism_compose_state_end_read",
                     _ => "prism_compose_state_end_edit",
                 };
                 self.call_runtime(name, &[handle, record])?;
             }
+            Operation::Weak | Operation::Get => unreachable!("lowered above"),
         }
         Ok(())
     }
@@ -2276,8 +2325,17 @@ impl<'a, 'm, M: Module> BodyLowering<'a, 'm, M> {
             .ins()
             .brif(address, present, &[], self.blocks[missing.0 as usize], &[]);
         self.builder.switch_to_block(present);
-        let value = self.read_location(Location::Memory(address), slot_type)?;
-        self.write_place(destination, value, false)?;
+        // A value that is not `Copy` is lent from its slot (D6 of `owned-state`).
+        let lent = matches!(
+            destination.ty(self.body, self.types()),
+            Type::Reference { inner, .. } if inner.as_ref() == slot_type
+        );
+        if lent {
+            self.write_place(destination, Lowered::Scalar(address), false)?;
+        } else {
+            let value = self.read_location(Location::Memory(address), slot_type)?;
+            self.write_place(destination, value, false)?;
+        }
         self.builder.ins().jump(self.blocks[found.0 as usize], &[]);
         Ok(())
     }

@@ -1,0 +1,8 @@
+window 400x300
+  column #1 0,0 144x60
+    row #5 0,0 28x20
+      box #6 0,0 20x20 toggleable(Checkbox on) size(20x20) background(#FF6750A4 RoundedCorner(2)) border(2 #FF6750A4 RoundedCorner(2))
+      text #7 20,0 8x20 "b"
+    box #8 0,20 144x40 contentColor #FFFFFFFF background(#FF6750A4 RoundedCorner(50%)) clickable(Button)
+      row #9 0,20 144x40 arrangement Center alignment CenterVertically defaultMinSize(58x40) padding(24,8,24,8)
+        text #10 24,30 96x20 "remove first"

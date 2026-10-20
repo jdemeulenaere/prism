@@ -197,8 +197,14 @@ impl fmt::Display for Type {
                 }
                 Ok(())
             }
-            // `(() -> Unit)?`: without parentheses the `?` would bind to the return type.
-            TypeKind::Nullable(inner) if matches!(inner.kind, TypeKind::Function { .. }) => {
+            // `(() -> Unit)?`: without parentheses the `?` would bind to the return type, and
+            // `(&T)?` would read as a reference to a `T?`.
+            TypeKind::Nullable(inner)
+                if matches!(
+                    inner.kind,
+                    TypeKind::Function { .. } | TypeKind::Reference { .. }
+                ) =>
+            {
                 write!(f, "({})?", inner)
             }
             TypeKind::Nullable(inner) => write!(f, "{}?", inner),

@@ -11,8 +11,8 @@ use crate::rewrite::{bit_position, word_count, FORCE, SAME};
 use prism_ast::Span;
 use prism_mir::{
     BasicBlock, Body, BodyId, BodyOwner, Callee, CaptureMode, ComposerOperation, Constant,
-    LocalDeclaration, LocalId, LocalKind, Operand, Place, Statement, StatementKind, Terminator,
-    TerminatorKind,
+    LocalDeclaration, LocalId, LocalKind, Operand, Place, Rvalue, Statement, StatementKind,
+    Terminator, TerminatorKind,
 };
 use prism_typed_tree::ParameterKind;
 use prism_typed_tree::{Arena, Type};
@@ -43,6 +43,7 @@ pub(crate) fn restart_body(
     function: BodyId,
     composed: &Body,
     declared: usize,
+    types: &prism_typed_tree::TypeTable,
     span: Span,
 ) -> Body {
     let BodyOwner::Function(path) = &original.owner else {
@@ -59,7 +60,13 @@ pub(crate) fn restart_body(
     let parameter_types: Vec<Type> = (1..=declared)
         .map(|index| composed.locals[LocalId(index as u32)].ty.clone())
         .collect();
-    let kept: Vec<LocalId> = parameter_types
+    // A borrowed state is kept as its weak handle, which the call borrows viewed as the state
+    // object (D13 of `owned-state`).
+    let kept_types: Vec<Type> = parameter_types
+        .iter()
+        .map(|ty| crate::stability::kept_type(ty, types))
+        .collect();
+    let kept: Vec<LocalId> = kept_types
         .iter()
         .enumerate()
         .map(|(index, ty)| {
@@ -67,17 +74,25 @@ pub(crate) fn restart_body(
             locals.alloc(local(ty.clone(), LocalKind::Temporary, name, span))
         })
         .collect();
+    let viewed: Vec<Option<LocalId>> = parameter_types
+        .iter()
+        .map(|ty| {
+            crate::stability::is_borrowed_state(ty, types)
+                .then(|| locals.alloc(local(ty.clone(), LocalKind::Temporary, None, span)))
+        })
+        .collect();
     let copy = |local: LocalId| Operand::Copy(Place::local(local), span);
     let mut blocks = Arena::new();
     let lives: Vec<Statement> = kept
         .iter()
+        .chain(viewed.iter().flatten())
         .map(|local| Statement {
             kind: StatementKind::StorageLive(*local),
             span,
         })
         .collect();
     // One block per kept argument, read in parameter order.
-    for (index, (local, ty)) in kept.iter().zip(&parameter_types).enumerate() {
+    for (index, (local, ty)) in kept.iter().zip(&kept_types).enumerate() {
         let statements = if index == 0 {
             lives.clone()
         } else {
@@ -110,11 +125,26 @@ pub(crate) fn restart_body(
         let (word, shift) = bit_position(index);
         constants[word] |= SAME << shift;
     }
+    let mut borrows = Vec::new();
     let mut arguments: Vec<Operand> = kept
         .iter()
         .zip(&parameter_types)
-        .map(|(local, ty)| {
-            if crate::stability::is_function_parameter(ty) {
+        .zip(&viewed)
+        .map(|((local, ty), viewed)| {
+            if let Some(viewed) = viewed {
+                borrows.push(Statement {
+                    kind: StatementKind::assign(
+                        Place::local(*viewed),
+                        Rvalue::Borrow {
+                            mutable: false,
+                            origin: prism_mir::BorrowOrigin::Argument,
+                            place: Place::local(*local).project(prism_mir::Projection::View),
+                        },
+                    ),
+                    span,
+                });
+                copy(*viewed)
+            } else if crate::stability::is_function_parameter(ty) {
                 Operand::Move(Place::local(*local), span)
             } else {
                 copy(*local)
@@ -143,8 +173,10 @@ pub(crate) fn restart_body(
         .map(|parameter| parameter.as_type())
         .collect();
     let call_block = blocks.len();
+    let mut statements = if declared == 0 { lives } else { Vec::new() };
+    statements.extend(borrows);
     blocks.alloc(block(
-        if declared == 0 { lives } else { Vec::new() },
+        statements,
         TerminatorKind::Call {
             callee: Callee::Function(path.clone()),
             arguments,
@@ -159,6 +191,7 @@ pub(crate) fn restart_body(
     ));
     let deads = kept
         .iter()
+        .chain(viewed.iter().flatten())
         .rev()
         .map(|local| Statement {
             kind: StatementKind::StorageDead(*local),

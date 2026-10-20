@@ -351,7 +351,10 @@ impl fmt::Display for AbiType {
                 Ok(())
             }
             // `((Int) -> Int)?`: without parentheses the `?` would bind to the return type.
-            AbiType::Nullable(inner) if matches!(**inner, AbiType::Fn { .. }) => {
+            // `(&T)?` would read as a reference to a `T?` without its parentheses.
+            AbiType::Nullable(inner)
+                if matches!(**inner, AbiType::Fn { .. } | AbiType::Ref { .. }) =>
+            {
                 write!(f, "({})?", inner)
             }
             AbiType::Nullable(inner) => write!(f, "{}?", inner),

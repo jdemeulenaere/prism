@@ -1,6 +1,0 @@
-// expect: ok
-fun f(s: MutableState<String>): Int {
-    val a = s
-    val b = s
-    return 1
-}

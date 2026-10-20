@@ -8,11 +8,14 @@
 //! marked dead. Those drops and storage ends carry the span of where control leaves the scope
 //! (D15 of `borrowck-exclusivity`): a braced block's closing brace when it falls through, the
 //! jump's span for a `return`, `break` or `continue`, and otherwise the scope's own span.
+//!
+//! A guard of a state's flag (D3 of `owned-state`) is a local of the scope it ends with: where
+//! the scope ends, on every path, the call ending the guard takes the local's place of the drop.
 
 use super::Builder;
 use crate::mir::{
-    Capture, LocalDeclaration, LocalId, LocalKind, Operand, Place, Rvalue, StatementKind,
-    TerminatorKind,
+    Capture, LocalDeclaration, LocalId, LocalKind, Operand, Place, Rvalue, StateOperation,
+    StatementKind, TerminatorKind,
 };
 use prism_ast::Span;
 use prism_typed_tree::ParameterKind;
@@ -20,13 +23,15 @@ use prism_typed_tree::Type;
 use std::collections::HashMap;
 
 /// A local owned by a scope.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ScopedLocal {
     local: LocalId,
     /// Whether the lowering moved the whole temporary out itself, so it needs no drop (D6).
     moved: bool,
     /// Whether the local has storage markers (every local but the arguments).
     marked: bool,
+    /// For the local of a guard, the operation that ends it and the state's value type.
+    guard: Option<(StateOperation, Type)>,
 }
 
 /// A scope: the locals it owns, in creation order, and the span its exit statements carry when
@@ -60,6 +65,7 @@ impl Scope {
             local,
             moved: false,
             marked: false,
+            guard: None,
         });
     }
 
@@ -127,6 +133,9 @@ impl Builder<'_> {
         let span = jump.unwrap_or(self.scopes[index].exit);
         let locals = self.scopes[index].locals.clone();
         for scoped in locals.iter().rev() {
+            if let Some((end, value)) = &scoped.guard {
+                self.end_guard(scoped.local, *end, value, span);
+            }
             if !scoped.moved {
                 let ty = self.local_type(scoped.local).clone();
                 if self.needs_drop(&ty) {
@@ -177,8 +186,42 @@ impl Builder<'_> {
             local,
             moved: false,
             marked: true,
+            guard: None,
         });
         self.push_statement(StatementKind::StorageLive(local), span);
+    }
+
+    /// A new local holding the state object borrow of a guard, owned by the scope at
+    /// `scope_index` and marked live: where that scope ends, `end` ends the guard on the
+    /// state of value type `value` (D3 of `owned-state`).
+    pub(super) fn new_guard_local(
+        &mut self,
+        ty: Type,
+        end: StateOperation,
+        value: Type,
+        scope_index: usize,
+        span: Span,
+    ) -> LocalId {
+        if self.current.is_none() {
+            return LocalId::RETURN;
+        }
+        let local = self.add_local(LocalDeclaration {
+            ty,
+            kind: LocalKind::Temporary,
+            mutable: false,
+            name: None,
+            binding: None,
+            parameter_kind: ParameterKind::Plain,
+            span,
+        });
+        self.scopes[scope_index].push(ScopedLocal {
+            local,
+            moved: false,
+            marked: true,
+            guard: Some((end, value)),
+        });
+        self.push_statement(StatementKind::StorageLive(local), span);
+        local
     }
 
     /// Adds `local` to the innermost scope without marking it live: the caller marks it live on
@@ -190,6 +233,7 @@ impl Builder<'_> {
             local,
             moved: false,
             marked: true,
+            guard: None,
         });
     }
 
@@ -297,7 +341,7 @@ impl Builder<'_> {
         let locals = std::mem::take(&mut self.scopes[index].locals);
         self.scopes[index].positions.clear();
         for scoped in locals {
-            self.scopes[index - 1].push(scoped);
+            self.scopes[index - 1].push(scoped.clone());
         }
     }
 }

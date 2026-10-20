@@ -1,6 +1,0 @@
-root
-  replaceable -8166907557552174077
-    restart -2238787470271700347
-      slot prism/compose/runtime::MutableState<Int>
-        cell Int
-nodes

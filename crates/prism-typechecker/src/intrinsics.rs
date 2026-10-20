@@ -227,7 +227,7 @@ pub const CATALOG: &[Intrinsic] = &[
         None,
         "composition",
         BuiltinFunction::Composition,
-        "public intrinsic fun composition(content: escaping compose () -> Unit): Composition",
+        "public intrinsic fun composition(content: attached compose () -> Unit): Composition",
         false,
     ),
     entry(
@@ -235,7 +235,7 @@ pub const CATALOG: &[Intrinsic] = &[
         Some("Composition"),
         "setContent",
         BuiltinFunction::SetContent,
-        "public intrinsic fun Composition.setContent(content: escaping compose () -> Unit): Unit",
+        "public intrinsic fun Composition.setContent(content: attached compose () -> Unit): Unit",
         false,
     ),
     entry(
@@ -259,7 +259,7 @@ pub const CATALOG: &[Intrinsic] = &[
         None,
         "remember",
         BuiltinFunction::Remember,
-        "public intrinsic compose fun <T : Copy> remember(calculation: () -> T): T",
+        "public intrinsic compose fun <T> remember(calculation: () -> T): T",
         true,
     ),
     entry(
@@ -286,8 +286,10 @@ pub const CATALOG: &[Intrinsic] = &[
         "public intrinsic fun RecomposeScope.invalidate(): Unit",
         false,
     ),
-    // State handles (D2 of `state-handles`). `value` is typed by its own rule: a copy for a
-    // `Copy` value type, a place otherwise, writable on `MutableState` only (D5).
+    // State objects (D2 of `state-handles`, D1 of `owned-state`). `value` is typed by its own
+    // rule: a copy for a `Copy` value type, a place otherwise, writable on `MutableState` only
+    // (D5 of `state-handles`). `weak` is the capture function of both state types (D12 of
+    // `owned-state`).
     entry(
         COMPOSE_RUNTIME,
         None,
@@ -314,14 +316,6 @@ pub const CATALOG: &[Intrinsic] = &[
     ),
     entry(
         COMPOSE_RUNTIME,
-        Some("State"),
-        "read",
-        BuiltinFunction::StateRead,
-        "public intrinsic fun <T, R> State<T>.read(reader: (&T) -> R): R",
-        false,
-    ),
-    entry(
-        COMPOSE_RUNTIME,
         Some("MutableState"),
         "update",
         BuiltinFunction::StateUpdate,
@@ -330,10 +324,26 @@ pub const CATALOG: &[Intrinsic] = &[
     ),
     entry(
         COMPOSE_RUNTIME,
+        Some("State"),
+        "weak",
+        BuiltinFunction::StateWeak,
+        "public intrinsic capture fun <T> State<T>.weak(): WeakReference<State<T>>",
+        false,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
         Some("MutableState"),
-        "edit",
-        BuiltinFunction::StateEdit,
-        "public intrinsic fun <T> MutableState<T>.edit(editor: (&mut T) -> Unit): Unit",
+        "weak",
+        BuiltinFunction::StateWeak,
+        "public intrinsic capture fun <T> MutableState<T>.weak(): WeakReference<MutableState<T>>",
+        false,
+    ),
+    entry(
+        COMPOSE_RUNTIME,
+        Some("WeakReference"),
+        "get",
+        BuiltinFunction::WeakGet,
+        "public intrinsic fun <T> WeakReference<T>.get(): (&T)?",
         false,
     ),
     entry(
@@ -341,7 +351,7 @@ pub const CATALOG: &[Intrinsic] = &[
         None,
         "SideEffect",
         BuiltinFunction::SideEffect,
-        "public intrinsic compose fun SideEffect(effect: escaping () -> Unit): Unit",
+        "public intrinsic compose fun SideEffect(effect: attached () -> Unit): Unit",
         false,
     ),
     // `/prism/compose/ui` (D3, D7 and D15 of `ui-toolkit`): the two node composables the
@@ -368,7 +378,7 @@ pub const CATALOG: &[Intrinsic] = &[
         None,
         "runApp",
         BuiltinFunction::RunApp,
-        "public intrinsic fun runApp(title: &String, width: Int, height: Int, content: escaping compose () -> Unit): Unit",
+        "public intrinsic fun runApp(title: &String, width: Int, height: Int, content: attached compose () -> Unit): Unit",
         false,
     ),
     entry(
@@ -432,6 +442,9 @@ pub fn declaration_text(f: &FunctionDecl) -> String {
     if let Some(library) = f.library {
         text.push_str(library.kind.as_str());
         text.push(' ');
+    }
+    if f.is_capture {
+        text.push_str("capture ");
     }
     if f.is_compose {
         text.push_str("compose ");

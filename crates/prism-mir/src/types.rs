@@ -60,6 +60,12 @@ pub fn projection_type(base: &Type, projection: Projection, types: &TypeTable) -
         // the built-in `get`, not stored, so a string is never indexed (D5 of
         // `runtime-strings-and-drops`).
         (Projection::Index(_), Type::List(element)) => Some(element.as_ref().clone()),
+        // A weak reference's word viewed as the state object it names (D10 of `owned-state`).
+        (Projection::View, Type::Struct { id, arguments })
+            if id.intrinsic() == Some(prism_typed_tree::IntrinsicStruct::WeakReference) =>
+        {
+            arguments.first().cloned()
+        }
         _ => None,
     }
 }

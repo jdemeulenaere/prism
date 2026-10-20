@@ -49,5 +49,5 @@ pub use functions::{compose_function, COMPOSE_FUNCTIONS};
 pub use group::GroupKind;
 pub use handle::{Arena, Handle};
 pub use slot::{Slot, SlotType};
-pub use state::{finish_report, CreationOwner, StateError, States};
+pub use state::{finish_report, StateError, States};
 pub use thread::{active_composition, active_scope, live_compositions_report, live_objects_report};

@@ -646,6 +646,11 @@ impl Codec for TypeTable {
                 }
             }
         }
+        let captured: Vec<&NominalId> = self.capture_function_types().collect();
+        encoder.length(captured.len());
+        for id in captured {
+            id.encode(encoder);
+        }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
         let length = decoder.sequence_length()?;
@@ -673,6 +678,10 @@ impl Codec for TypeTable {
                 table.insert_marker(id.clone(), marker, parameters);
             }
             previous = Some(id);
+        }
+        let captured = decoder.sequence_length()?;
+        for _ in 0..captured {
+            table.insert_capture_function(decoder.decode()?);
         }
         Some(table)
     }
@@ -775,9 +784,9 @@ impl Codec for BuiltinFunction {
             BuiltinFunction::InvalidateScope => 28,
             BuiltinFunction::MutableStateOf => 29,
             BuiltinFunction::StateValue => 30,
-            BuiltinFunction::StateRead => 31,
+            BuiltinFunction::StateWeak => 31,
             BuiltinFunction::StateUpdate => 32,
-            BuiltinFunction::StateEdit => 33,
+            BuiltinFunction::WeakGet => 33,
             BuiltinFunction::SideEffect => 34,
             BuiltinFunction::UiNode => 35,
             BuiltinFunction::UiLeafNode => 36,
@@ -819,9 +828,9 @@ impl Codec for BuiltinFunction {
             28 => BuiltinFunction::InvalidateScope,
             29 => BuiltinFunction::MutableStateOf,
             30 => BuiltinFunction::StateValue,
-            31 => BuiltinFunction::StateRead,
+            31 => BuiltinFunction::StateWeak,
             32 => BuiltinFunction::StateUpdate,
-            33 => BuiltinFunction::StateEdit,
+            33 => BuiltinFunction::WeakGet,
             34 => BuiltinFunction::SideEffect,
             35 => BuiltinFunction::UiNode,
             36 => BuiltinFunction::UiLeafNode,
@@ -997,6 +1006,7 @@ impl Codec for CaptureMode {
             CaptureMode::Shared => 0,
             CaptureMode::Mutable => 1,
             CaptureMode::Owned => 2,
+            CaptureMode::Weak => 3,
         });
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1004,6 +1014,7 @@ impl Codec for CaptureMode {
             0 => CaptureMode::Shared,
             1 => CaptureMode::Mutable,
             2 => CaptureMode::Owned,
+            3 => CaptureMode::Weak,
             _ => return None,
         })
     }
@@ -1083,6 +1094,7 @@ impl Codec for Projection {
                 encoder.u8(4);
                 local.encode(encoder);
             }
+            Projection::View => encoder.u8(5),
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
@@ -1095,6 +1107,7 @@ impl Codec for Projection {
                 field: decoder.decode()?,
             },
             4 => Projection::Index(decoder.decode()?),
+            5 => Projection::View,
             _ => return None,
         })
     }
@@ -1269,12 +1282,17 @@ impl Codec for Capture {
                 encoder.u8(1);
                 operand.encode(encoder);
             }
+            Capture::Weak(place) => {
+                encoder.u8(2);
+                place.encode(encoder);
+            }
         }
     }
     fn decode(decoder: &mut Decoder) -> Option<Self> {
         Some(match decoder.u8()? {
             0 => Capture::Borrowed(decoder.decode()?),
             1 => Capture::Owned(decoder.decode()?),
+            2 => Capture::Weak(decoder.decode()?),
             _ => return None,
         })
     }

@@ -329,6 +329,9 @@ pub enum CaptureMode {
     /// The closure owns the binding's value, moved or copied into it when it was built (D2 of
     /// `escaping-closures`).
     Owned,
+    /// The closure holds a weak handle of the state object at the place (D10 of
+    /// `owned-state`).
+    Weak,
 }
 
 /// A local of a body.
@@ -581,6 +584,10 @@ pub enum Projection {
     /// out of (D16 of `collections`). A string is never indexed: its character is computed by
     /// the built-in `get` (D5 of `runtime-strings-and-drops`).
     Index(LocalId),
+    /// The word of a `WeakReference<S>` viewed as the state object `S` it names, in place (D10
+    /// and D11 of `owned-state`): a weak capture's uses and what `get()` lends. It is read and
+    /// borrowed shared like the referent of a shared reference, never moved out of or dropped.
+    View,
 }
 
 /// A value read by an rvalue or a terminator. An operand that reads a place records the span of
@@ -678,21 +685,27 @@ pub enum Capture {
     Borrowed(Place),
     /// A move or a copy of a binding the closure owns.
     Owned(Operand),
+    /// The place of a state object the closure holds a weak handle of, made by its type's
+    /// capture function where the closure is built (D10 of `owned-state`): the closure owns
+    /// the handle, a `Copy` word, and the borrow checker sees a shared borrow of the place
+    /// held by the closure value (D24).
+    Weak(Place),
 }
 
 impl Capture {
     /// The captured binding's place.
     pub fn place(&self) -> Option<&Place> {
         match self {
-            Capture::Borrowed(place) => Some(place),
+            Capture::Borrowed(place) | Capture::Weak(place) => Some(place),
             Capture::Owned(Operand::Copy(place, _) | Operand::Move(place, _)) => Some(place),
             Capture::Owned(Operand::Constant(_)) => None,
         }
     }
 
-    /// Whether the closure owns the captured value.
+    /// Whether the closure owns the captured value: a value moved or copied in, or a weak
+    /// handle.
     pub fn is_owned(&self) -> bool {
-        matches!(self, Capture::Owned(_))
+        matches!(self, Capture::Owned(_) | Capture::Weak(_))
     }
 }
 
@@ -781,50 +794,63 @@ pub enum Callee {
     /// An operation of the composition protocol, a call of a compose runtime entry point (D19
     /// of `compose-transform`). Only in composed MIR.
     Composer(ComposerOperation),
-    /// An operation of a state cell, a call of a compose runtime entry point (D17 of
-    /// `state-handles`), with the value type as its one type argument. The handle is a plain
-    /// operand, copied.
+    /// An operation of a state, a call of a compose runtime entry point (D17 of
+    /// `state-handles`), with the value type as its one type argument (the state object's type
+    /// for [`StateOperation::Get`]). The state object is passed by shared borrow (D3 of
+    /// `owned-state`).
     State(StateOperation),
 }
 
-/// An operation of a state cell (D6 and D17 of `state-handles`). Each is called with the value
-/// type `T` as its type argument; its declared parameters and result mention `T` as the type
-/// parameter of index 0 ([`StateOperation::value_parameter`]).
+/// An operation of a state (D6 and D17 of `state-handles`, D3, D7 and D11 of `owned-state`).
+/// Each is called with the value type `T` as its type argument (the state object's type for
+/// [`StateOperation::Get`]); its declared parameters and result mention it as the type
+/// parameter of index 0 ([`StateOperation::value_parameter`]). `S` below is the state object,
+/// `State<T>` or `MutableState<T>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StateOperation {
-    /// `(value: T moved) -> MutableState<T>`: creates a cell.
+    /// `(value: T moved) -> MutableState<T>`: creates a state.
     Create,
-    /// `(handle) -> &T`: a shared reference to the cell's value, which a read copies out of
-    /// or a composable context borrows.
+    /// `(&S) -> &T`: a shared reference to the state's value, which a read copies out of or a
+    /// composable context borrows, checking that no exclusive guard holds it.
     Read,
-    /// `(handle: MutableState<T>, value: T moved)`: replaces the value.
+    /// `(&MutableState<T>, value: T moved)`: replaces the value.
     Write,
-    /// `(handle) -> &T`: borrows the cell shared for a `read` closure.
-    BeginRead,
-    /// `(handle)`: ends the borrow of [`StateOperation::BeginRead`].
-    EndRead,
-    /// `(handle: MutableState<T>) -> T`: moves the value out for an `update` closure.
+    /// `(&S, &&S) -> &T`: takes the state's flag shared, a guard ended by
+    /// [`StateOperation::EndShared`]; the result is tied to both borrows, the second of the
+    /// guard's local.
+    BeginShared,
+    /// `(&S)`: ends a shared guard.
+    EndShared,
+    /// `(&MutableState<T>, &&MutableState<T>) -> &mut T`: takes the state's flag exclusively, a
+    /// guard ended by [`StateOperation::EndExclusive`].
+    BeginExclusive,
+    /// `(&MutableState<T>)`: ends an exclusive guard, invalidating the readers.
+    EndExclusive,
+    /// `(&MutableState<T>) -> T`: moves the value out for `update`'s transform.
     Take,
-    /// `(handle: MutableState<T>, value: T moved)`: moves the result of `update` back in.
+    /// `(&MutableState<T>, value: T moved)`: moves the result of `update` back in.
     Put,
-    /// `(handle: MutableState<T>) -> &mut T`: borrows the cell mutably for an `edit` closure.
-    BeginEdit,
-    /// `(handle: MutableState<T>)`: ends the borrow of [`StateOperation::BeginEdit`].
-    EndEdit,
+    /// `(&S) -> WeakReference<S>`: a weak reference, a copy of the state's word.
+    Weak,
+    /// `(&WeakReference<T>) -> (&T)?`, with the state object type as its type argument: `null`
+    /// once the state is retired, else the reference's own word viewed as the state object.
+    Get,
 }
 
 impl StateOperation {
     /// Every operation, in code order.
-    pub const ALL: [StateOperation; 9] = [
+    pub const ALL: [StateOperation; 11] = [
         StateOperation::Create,
         StateOperation::Read,
         StateOperation::Write,
-        StateOperation::BeginRead,
-        StateOperation::EndRead,
+        StateOperation::BeginShared,
+        StateOperation::EndShared,
+        StateOperation::BeginExclusive,
+        StateOperation::EndExclusive,
         StateOperation::Take,
         StateOperation::Put,
-        StateOperation::BeginEdit,
-        StateOperation::EndEdit,
+        StateOperation::Weak,
+        StateOperation::Get,
     ];
 
     /// The operation's name in dumps: `state read<Int>`.
@@ -833,12 +859,14 @@ impl StateOperation {
             StateOperation::Create => "create",
             StateOperation::Read => "read",
             StateOperation::Write => "write",
-            StateOperation::BeginRead => "begin_read",
-            StateOperation::EndRead => "end_read",
+            StateOperation::BeginShared => "begin shared",
+            StateOperation::EndShared => "end shared",
+            StateOperation::BeginExclusive => "begin exclusive",
+            StateOperation::EndExclusive => "end exclusive",
             StateOperation::Take => "take",
             StateOperation::Put => "put",
-            StateOperation::BeginEdit => "begin_edit",
-            StateOperation::EndEdit => "end_edit",
+            StateOperation::Weak => "weak",
+            StateOperation::Get => "get",
         }
     }
 
@@ -851,53 +879,101 @@ impl StateOperation {
         })
     }
 
-    /// Whether the operation needs a `MutableState<T>` handle; the reads take either kind.
+    /// Whether the operation needs a `MutableState<T>`; the reads take either kind.
     pub fn writes(self) -> bool {
-        !matches!(
+        matches!(
             self,
-            StateOperation::Create
-                | StateOperation::Read
-                | StateOperation::BeginRead
-                | StateOperation::EndRead
+            StateOperation::Write
+                | StateOperation::BeginExclusive
+                | StateOperation::EndExclusive
+                | StateOperation::Take
+                | StateOperation::Put
         )
     }
 
-    /// The declared parameter types, with a handle of kind `handle` (`State` or
-    /// `MutableState`).
-    pub fn parameters(self, handle: prism_typed_tree::IntrinsicStruct) -> Vec<Type> {
-        let value = Self::value_parameter();
-        let handle = Type::Struct {
-            id: handle.id(),
-            arguments: vec![value.clone()],
-        };
-        match self {
-            StateOperation::Create => vec![value],
-            StateOperation::Write | StateOperation::Put => vec![handle, value],
-            _ => vec![handle],
+    /// The kind of state object the declared `parameters` of a call take, `MutableState` when
+    /// they name none.
+    pub fn kind_of(parameters: &[Type]) -> prism_typed_tree::IntrinsicStruct {
+        match parameters.first() {
+            Some(Type::Reference { inner, .. }) => match inner.as_ref() {
+                Type::Struct { id, .. } => id
+                    .intrinsic()
+                    .filter(|kind| kind.is_state_handle())
+                    .unwrap_or(prism_typed_tree::IntrinsicStruct::MutableState),
+                _ => prism_typed_tree::IntrinsicStruct::MutableState,
+            },
+            _ => prism_typed_tree::IntrinsicStruct::MutableState,
         }
     }
 
-    /// The declared result type.
-    pub fn result(self) -> Type {
+    /// The end of the guard a begin operation takes.
+    pub fn guard_end(self) -> Option<StateOperation> {
+        match self {
+            StateOperation::BeginShared => Some(StateOperation::EndShared),
+            StateOperation::BeginExclusive => Some(StateOperation::EndExclusive),
+            _ => None,
+        }
+    }
+
+    /// The declared parameter types, with a state object of kind `handle` (`State` or
+    /// `MutableState`).
+    pub fn parameters(self, handle: prism_typed_tree::IntrinsicStruct) -> Vec<Type> {
+        let value = Self::value_parameter();
+        let shared = |ty: Type| Type::Reference {
+            mutable: false,
+            inner: Box::new(ty),
+        };
+        let object = shared(Type::Struct {
+            id: handle.id(),
+            arguments: vec![value.clone()],
+        });
+        match self {
+            StateOperation::Create => vec![value],
+            StateOperation::Write | StateOperation::Put => vec![object, value],
+            StateOperation::BeginShared | StateOperation::BeginExclusive => {
+                vec![object.clone(), shared(object)]
+            }
+            StateOperation::Get => vec![shared(Type::Struct {
+                id: prism_typed_tree::IntrinsicStruct::WeakReference.id(),
+                arguments: vec![value],
+            })],
+            _ => vec![object],
+        }
+    }
+
+    /// The declared result type, with a state object of kind `handle`.
+    pub fn result(self, handle: prism_typed_tree::IntrinsicStruct) -> Type {
         let value = Self::value_parameter();
         match self {
             StateOperation::Create => Type::Struct {
                 id: prism_typed_tree::IntrinsicStruct::MutableState.id(),
                 arguments: vec![value],
             },
-            StateOperation::Read | StateOperation::BeginRead => Type::Reference {
+            StateOperation::Read | StateOperation::BeginShared => Type::Reference {
                 mutable: false,
                 inner: Box::new(value),
             },
-            StateOperation::BeginEdit => Type::Reference {
+            StateOperation::BeginExclusive => Type::Reference {
                 mutable: true,
                 inner: Box::new(value),
             },
             StateOperation::Take => value,
+            StateOperation::Weak => Type::Struct {
+                id: prism_typed_tree::IntrinsicStruct::WeakReference.id(),
+                arguments: vec![Type::Struct {
+                    id: handle.id(),
+                    arguments: vec![value],
+                }],
+            },
+            StateOperation::Get => Type::Reference {
+                mutable: false,
+                inner: Box::new(value),
+            }
+            .nullable(),
             StateOperation::Write
-            | StateOperation::EndRead
+            | StateOperation::EndShared
             | StateOperation::Put
-            | StateOperation::EndEdit => Type::Unit,
+            | StateOperation::EndExclusive => Type::Unit,
         }
     }
 }

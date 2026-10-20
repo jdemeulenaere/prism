@@ -4,5 +4,5 @@ struct Todo(val title: String)
 
 fun main() {
     val todos = mutableStateOf(listOf(Todo("a")))
-    println(todos.read { list -> list.size })
+    println(todos.value.size)
 }

@@ -10,16 +10,22 @@ public compose fun CounterTitle(n: Int): Unit {
     println("counter $n")
 }
 
-// The label of a counter: it reads `count`, so writing the state recomposes it.
-public compose fun CounterLabel(count: State<Int>): Unit {
+// The label of a counter: it reads `count`, so writing the state recomposes it. A borrowed
+// state is compared by identity, so it is skippable too.
+public compose fun CounterLabel(count: &State<Int>): Unit {
     println("count ${count.value}")
 }
 
 // A counter of clicks.
-public compose fun Counter(count: State<Int>): Unit {
+public compose fun Counter(count: &State<Int>): Unit {
     CounterTitle(1)
     CounterLabel(count)
 }
 
-// The click handler of a counter: it adds one to the count, outside composition.
-public fun clicker(count: MutableState<Int>): () -> Unit = { count.value += 1 }
+// The click handler of a counter: it adds one to the count, outside composition. A handler
+// kept outside the composition reaches the state through a weak reference, which finds
+// nothing once the state is gone.
+public fun clicker(count: &MutableState<Int>): () -> Unit {
+    val ref = count.weak()
+    return { ref.get()?.update { it + 1 } }
+}

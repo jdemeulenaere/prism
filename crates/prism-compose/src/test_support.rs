@@ -175,6 +175,7 @@ pub fn leak_cell() {
             value: std::ptr::null_mut(),
             flag: crate::state::Flag::Free,
             readers: Default::default(),
+            retired: false,
             released: false,
         });
     });

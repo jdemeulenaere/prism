@@ -567,29 +567,31 @@ impl Validator<'_> {
             }
             ExpressionKind::StatePlace { handle } => {
                 self.expression(*handle);
+                // The state object is passed by shared borrow (D3 of `owned-state`).
                 match self.type_of(*handle).cloned() {
-                    Some(Type::Struct {
-                        id: handle_id,
-                        arguments,
-                    }) if handle_id.intrinsic().is_some_and(|i| i.is_state_handle()) => {
-                        if let [value] = &arguments[..] {
-                            self.expect_type_of_node(id, value, "state place");
+                    Some(Type::Reference {
+                        mutable: false,
+                        inner,
+                    }) => match *inner {
+                        Type::Struct {
+                            id: handle_id,
+                            arguments,
+                        } if handle_id.intrinsic().is_some_and(|i| i.is_state_handle()) => {
+                            if let [value] = &arguments[..] {
+                                self.expect_type_of_node(id, value, "state place");
+                            }
                         }
-                    }
+                        Type::Error => {}
+                        other => self.report(format!(
+                            "state place {} over a &{}, which is not a state object",
+                            id.0, other
+                        )),
+                    },
                     Some(Type::Error) | None => {}
                     Some(other) => self.report(format!(
-                        "state place {} over a {}, which is not a state handle",
+                        "state place {} over a {}, which is not a shared borrow of a state object",
                         id.0, other
                     )),
-                }
-                // Outside composable contexts a state's value is only assigned (D5 of
-                // `state-handles`).
-                let composable = self.composable.last().copied().unwrap_or(false);
-                if self.error_free && !composable && !self.state_targets.contains(&id) {
-                    self.report(format!(
-                        "state place {} outside a composable context is not an assignment target",
-                        id.0
-                    ));
                 }
             }
             ExpressionKind::Move { place } | ExpressionKind::Copy { place } => {
@@ -989,7 +991,27 @@ impl Validator<'_> {
                             format!("closure {} moves the path '{}' out alone", id.0, path);
                         self.report(message);
                     }
-                    let widens = capture.mode.is_owned() && capture.projections.is_empty();
+                    // A weak capture is of a state object, by a closure the composition keeps
+                    // (D10 of `owned-state`).
+                    if capture.mode == CaptureMode::Weak {
+                        let attached = matches!(
+                            ownership_reason,
+                            Some(crate::tree::OwnershipReason {
+                                kind: crate::tree::OwnershipReasonKind::PassedToAttachedParameter,
+                                ..
+                            })
+                        );
+                        if !matches!(path_type, Type::Struct { .. } | Type::Error) || !attached {
+                            let message = format!(
+                                "closure {} captures '{}' weakly, but it is not a state object captured by an attached closure",
+                                id.0, path
+                            );
+                            self.report(message);
+                        }
+                    }
+                    let widens = capture.mode.is_owned()
+                        && capture.mode != CaptureMode::Weak
+                        && capture.projections.is_empty();
                     if capture.widened.is_some() && !widens {
                         let message = format!(
                             "closure {} records a widening for '{}', which is not an owned binding",

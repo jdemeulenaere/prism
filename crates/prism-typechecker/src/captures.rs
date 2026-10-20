@@ -20,6 +20,14 @@
 //! The pass also reports `CannotCaptureByValue` (`E4028`) for a capture by value of a `var`, or
 //! of a non-`Copy` binding the closure's builder does not own, and records such a capture as
 //! borrowed.
+//!
+//! A closure whose owning roots are all arguments for `attached` parameters is *attached-owned*
+//! (D10 of `owned-state`): the roots of that kind are searched after the others, so the nodes
+//! the second search marks escape only through them. Such a closure captures each path whose
+//! type has a capture function (a state object, by the type table's record of the library's
+//! `capture` functions, never by name) through a weak handle, when its binding is a `val`, it
+//! dereferences no `&mut` reference and every field it reads after a reference is a `val`
+//! field: one more test per captured path.
 
 use crate::error::{CaptureRefusal, TypeError};
 use prism_ast::{ParameterKind, Span};
@@ -120,6 +128,12 @@ struct Graph<'a> {
     paths: Vec<Vec<PathEntry>>,
     /// A buffer for the nodes of a place chain.
     chain: Vec<ExpressionId>,
+    /// Per closure and binding, the number of whole uses of the binding in the closure's own
+    /// body, and the copies of it among them: a reference to a state object copied only is
+    /// captured weakly through its referent, the copies becoming reborrows (D10 of
+    /// `owned-state`).
+    whole_counts: std::collections::HashMap<(usize, LocalId), usize>,
+    reference_copies: std::collections::HashMap<(usize, LocalId), Vec<ExpressionId>>,
 }
 
 /// A captured path, as recorded or as decided (D1 to D3 of `path-captures`).
@@ -139,6 +153,9 @@ struct PathEntry {
     widened: Option<Widening>,
     /// How the closure takes the path, once decided.
     mode: CaptureMode,
+    /// Whether the path is a reference binding's referent, captured weakly, whose copies in the
+    /// closure become reborrows of it (D10 of `owned-state`).
+    reborrowed: bool,
 }
 
 /// Decides the captures of every closure of `body`, recording each capture's mode and each
@@ -157,6 +174,26 @@ pub(crate) fn decide_captures(
     let mut errors = Vec::new();
     for decision in decisions {
         errors.extend(decision.errors);
+        // `count` copied in the closure is `&*count`, whose referent it captures weakly.
+        for copy in decision.reborrows {
+            let ExpressionKind::Copy { place } = body.expressions[copy].kind else {
+                continue;
+            };
+            let Type::Reference { inner, .. } = body.expressions[place].ty.clone() else {
+                continue;
+            };
+            let span = body.expressions[place].span;
+            let referent = body.expressions.alloc(prism_typed_tree::Expression {
+                kind: ExpressionKind::Deref { pointer: place },
+                ty: *inner,
+                span,
+            });
+            body.expressions[copy].kind = ExpressionKind::Borrow {
+                mutable: false,
+                origin: prism_typed_tree::BorrowOrigin::Argument,
+                place: referent,
+            };
+        }
         if let ExpressionKind::Closure {
             captures,
             ownership_reason,
@@ -175,6 +212,9 @@ struct Decision {
     captures: Vec<Capture>,
     reason: Option<OwnershipReason>,
     errors: Vec<TypeError>,
+    /// The copies of reference bindings captured weakly through their referent, which become
+    /// reborrows of it.
+    reborrows: Vec<ExpressionId>,
 }
 
 fn reason(span: Span, kind: OwnershipReasonKind) -> OwnershipReason {
@@ -205,6 +245,8 @@ impl<'a> Graph<'a> {
             whole_use: vec![(NONE, NONE); local_count],
             paths: Vec::new(),
             chain: Vec::new(),
+            whole_counts: std::collections::HashMap::new(),
+            reference_copies: std::collections::HashMap::new(),
         }
     }
 
@@ -250,6 +292,7 @@ impl<'a> Graph<'a> {
             variable_field: false,
             widened: None,
             mode: CaptureMode::Borrowed,
+            reborrowed: false,
         };
         let mut through_reference = false;
         for &node in chain.iter().rev() {
@@ -299,6 +342,12 @@ impl<'a> Graph<'a> {
         };
         if !self.captures(closure, local) {
             return;
+        }
+        if matches!(
+            self.body.locals[local].ty,
+            Type::Reference { mutable: false, .. }
+        ) {
+            *self.whole_counts.entry((closure, local)).or_default() += 1;
         }
         let (owner, last) = self.whole_use[local.0 as usize];
         if owner == closure as u32 {
@@ -513,6 +562,27 @@ impl<'a> Graph<'a> {
             ExpressionKind::Local(local) => {
                 let span = body.expressions[id].span;
                 self.record_whole(*local, span);
+            }
+            // A copy of a shared reference a closure captures, which it may take weakly through
+            // its referent (D10 of `owned-state`).
+            ExpressionKind::Copy { place }
+                if matches!(
+                    &body.expressions[*place].kind,
+                    ExpressionKind::Local(local)
+                        if matches!(body.locals[*local].ty, Type::Reference { mutable: false, .. })
+                ) =>
+            {
+                if let (Some(&closure), ExpressionKind::Local(local)) =
+                    (self.closure_stack.last(), &body.expressions[*place].kind)
+                {
+                    if self.captures(closure, *local) {
+                        self.reference_copies
+                            .entry((closure, *local))
+                            .or_default()
+                            .push(id);
+                    }
+                }
+                self.expression(*place);
             }
             ExpressionKind::Field { .. } | ExpressionKind::Deref { .. }
                 if self.record_chain(id) => {}
@@ -810,7 +880,10 @@ impl<'a> Graph<'a> {
         // Escaping nodes, each with the reason of the first root in source order reaching it, as
         // an index into `reasons`.
         let mut escaping: Vec<u32> = vec![NONE; node_count];
-        let mut roots = std::mem::take(&mut self.roots);
+        let roots = std::mem::take(&mut self.roots);
+        let (mut attached_roots, mut roots): (Vec<_>, Vec<_>) = roots
+            .into_iter()
+            .partition(|(_, reason)| reason.kind == OwnershipReasonKind::PassedToAttachedParameter);
         let mut reasons: Vec<OwnershipReason> = Vec::new();
         self.search(
             &mut roots,
@@ -819,6 +892,25 @@ impl<'a> Graph<'a> {
             &sources_start,
             &sources,
         );
+        // The roots of `attached` arguments last: a closure they alone mark is attached-owned
+        // (D10 of `owned-state`).
+        let before_attached = escaping.clone();
+        self.search(
+            &mut attached_roots,
+            &mut escaping,
+            &mut reasons,
+            &sources_start,
+            &sources,
+        );
+        let attached_owned: Vec<bool> = (0..self.closures.len())
+            .map(|index| {
+                let node = self.local_count + index;
+                before_attached[node] == NONE
+                    && escaping[node] != NONE
+                    && reasons[escaping[node] as usize].kind
+                        == OwnershipReasonKind::PassedToAttachedParameter
+            })
+            .collect();
 
         // Closures that outlive a captured binding own it.
         let extents = self.extents(node_count, &targets_start, &targets);
@@ -885,6 +977,7 @@ impl<'a> Graph<'a> {
             merge_paths(closure.captures, &mut entries, &mut merged, &mut position);
             let mut captures = Vec::with_capacity(merged.len());
             let mut errors = Vec::new();
+            let mut reborrows = Vec::new();
             let mut start = 0;
             // The k-th run of `merged` holds the paths of the k-th capture of the checker.
             for (ordinal, _) in closure.captures.iter().enumerate() {
@@ -903,13 +996,23 @@ impl<'a> Graph<'a> {
                     }
                     None
                 } else {
-                    self.decide_owned(index, local_id, group, &reason, &mut errors)
+                    let attached = owns_all && attached_owned[index];
+                    self.decide_owned(index, local_id, group, attached, &reason, &mut errors)
                 };
                 let finals: &[PathEntry] = match &decided {
                     Some(whole) => std::slice::from_ref(whole),
                     None => group,
                 };
                 for entry in finals {
+                    if entry.reborrowed {
+                        reborrows.extend(
+                            self.reference_copies
+                                .get(&(index, entry.local))
+                                .into_iter()
+                                .flatten()
+                                .copied(),
+                        );
+                    }
                     captures.push(entry.capture());
                     if let Some(parent) = closure.parent {
                         if self.captures(parent, entry.local) {
@@ -928,30 +1031,78 @@ impl<'a> Graph<'a> {
                 captures,
                 reason,
                 errors,
+                reborrows,
             });
         }
         decisions
     }
 
     /// Decides how closure `index`, which owns the binding `local_id`, takes the paths `group`
-    /// of it: copies each one, setting its mode, when it can (D3 of `path-captures`) and
-    /// returns `None`, or returns the whole binding, by today's rules, reporting `E4028` into
-    /// `errors` when it cannot take it.
+    /// of it: when the closure is `attached`-owned, each path of a type with a capture function
+    /// it may take weakly through a weak handle (D10 of `owned-state`); copies each other one,
+    /// setting its mode, when it can (D3 of `path-captures`) and returns `None`, or returns the
+    /// whole binding, by today's rules, reporting `E4028` into `errors` when it cannot take it.
     fn decide_owned(
         &self,
         index: usize,
         local_id: LocalId,
         group: &mut [PathEntry],
+        attached: bool,
         reason: &Option<OwnershipReason>,
         errors: &mut Vec<TypeError>,
     ) -> Option<PathEntry> {
         let types = self.types;
         let closure = &self.closures[index];
         let local = &self.body.locals[local_id];
+        // Weak captures first: a state object read through `val`s only. A `val` reference to
+        // one that the closure only copies is captured through its referent, `*count`, each
+        // copy becoming a reborrow of it.
+        if attached && group.len() == 1 && group[0].projections.is_empty() && !local.mutable {
+            if let Type::Reference {
+                mutable: false,
+                inner,
+            } = &local.ty
+            {
+                let copies = self
+                    .reference_copies
+                    .get(&(index, local_id))
+                    .map_or(0, Vec::len);
+                let wholes = self
+                    .whole_counts
+                    .get(&(index, local_id))
+                    .copied()
+                    .unwrap_or(0);
+                if types.has_capture_function(inner) && copies > 0 && copies == wholes {
+                    group[0].projections = vec![CaptureProjection::Deref];
+                    group[0].mode = CaptureMode::Weak;
+                    group[0].reborrowed = true;
+                    return None;
+                }
+            }
+        }
+        if attached {
+            for entry in group.iter_mut() {
+                let ty = match entry.node {
+                    Some(node) => &self.body.expressions[node].ty,
+                    None => &local.ty,
+                };
+                if types.has_capture_function(ty)
+                    && !local.mutable
+                    && !entry.mutable_reference
+                    && !entry.variable_field
+                {
+                    entry.mode = CaptureMode::Weak;
+                }
+            }
+            if group.iter().all(|entry| entry.mode == CaptureMode::Weak) {
+                return None;
+            }
+        }
+        let weak = |entry: &PathEntry| entry.mode == CaptureMode::Weak;
         let widening = if group.len() == 1 && group[0].projections.is_empty() {
             None
         } else {
-            group.iter().find_map(|entry| {
+            group.iter().filter(|entry| !weak(entry)).find_map(|entry| {
                 entry
                     .refusal(local.mutable, self.body, types)
                     .map(|reason| Widening {
@@ -962,7 +1113,9 @@ impl<'a> Graph<'a> {
         };
         if !group[0].projections.is_empty() && widening.is_none() {
             for entry in group.iter_mut() {
-                entry.mode = CaptureMode::Copied;
+                if !weak(entry) {
+                    entry.mode = CaptureMode::Copied;
+                }
             }
             return None;
         }
@@ -1212,6 +1365,7 @@ impl PathEntry {
             variable_field: false,
             widened: None,
             mode: CaptureMode::Borrowed,
+            reborrowed: false,
         }
     }
 
@@ -1419,6 +1573,52 @@ mod tests {
         let (file, codes) = check(&format!("{}{}", PRELUDE, body));
         assert!(codes.is_empty(), "{:?} for {}", codes, body);
         file
+    }
+
+    /// `owned-state` D10: a closure given to an attached parameter captures a state path whose
+    /// fields are `val`s weakly, through a reference too, and a state behind a `var` field or a
+    /// `&mut` dereference widens to the binding.
+    #[test]
+    fn attached_closures_capture_state_paths_weakly() {
+        let file = checked(
+            "struct Todo { val id: Int, val done: MutableState<Bool> }\n\
+             struct Holder { var s: MutableState<Int> }\n\
+             fun attach(f: attached () -> Unit) {}\n\
+             fun a(todo: &Todo) { attach { todo.done.value = true } }\n\
+             fun b(count: &MutableState<Int>) { attach { count.value += 1 } }\n\
+             fun c() { val s = mutableStateOf(0); attach { s.value = 1 } }\n\
+             fun d(h: &Holder) { attach { h.s.value = 1 } }\n\
+             fun e(todo: &mut Todo) { attach { todo.done.value = true } }\n",
+        );
+        for (name, captured) in [("a", "todo"), ("b", "count"), ("c", "s")] {
+            let found = closures(&file, name);
+            assert_eq!(found.len(), 1, "{}", name);
+            let (captures, reason) = &found[0];
+            assert_eq!(
+                captures,
+                &vec![(captured.to_string(), CaptureMode::Weak)],
+                "{}",
+                name
+            );
+            assert_eq!(
+                reason,
+                &Some(OwnershipReasonKind::PassedToAttachedParameter),
+                "{}",
+                name
+            );
+        }
+        for name in ["d", "e"] {
+            let found = closures(&file, name);
+            assert!(
+                found[0]
+                    .0
+                    .iter()
+                    .all(|(_, mode)| *mode != CaptureMode::Weak),
+                "{}: {:?}",
+                name,
+                found
+            );
+        }
     }
 
     #[test]
@@ -1773,7 +1973,8 @@ mod tests {
 /// The cost of deciding captures (D2 of `escaping-closures`) on generated bodies of growing
 /// size: thousands of closures, locals and reassigned `var`s in one function, some escaping,
 /// some kept past a block, some reassigned in cycles, and field paths through references and
-/// boxes, borrowed, copied and taken from nested closures (`path-captures`). It reports the pass's time against the
+/// boxes, borrowed, copied and taken from nested closures (`path-captures`), and handlers given
+/// to an attached parameter capturing state paths weakly (`owned-state`). It reports the pass's time against the
 /// whole check of the file and the growth from one size to the next. It is ignored by default;
 /// run it on a release build with
 ///
@@ -1809,6 +2010,13 @@ mod timing {
             writeln!(body, "    val p{i} = P({i}, {i}, Heap(R({i})))").unwrap();
             writeln!(body, "    run {{ p{i}.x + p{i}.inner.z + t.id }}").unwrap();
             writeln!(body, "    store {{ p{i}.y + t.id + r + run {{ p{i}.x }} }}").unwrap();
+            // Handlers given to an attached parameter, capturing state paths through references
+            // weakly (`owned-state`).
+            writeln!(
+                body,
+                "    keep {{ t.done.value = true; st.value += {i}; println(r) }}"
+            )
+            .unwrap();
             if i % 2 == 0 {
                 writeln!(body, "    val k{i} = {{ greet(s{i}) }}").unwrap();
                 writeln!(body, "    var a{i}: () -> Int = k{i}").unwrap();
@@ -1819,7 +2027,7 @@ mod timing {
             }
         }
         format!(
-            "struct R {{ val z: Int }}\nstruct P {{ val x: Int, val y: Int, val inner: Heap<R> }}\nstruct Todo {{ val id: Int }}\nfun greet(s: &String): Int = 1\nfun store(f: escaping () -> Int): Int = 1\nfun run(f: () -> Int): Int = f()\nfun f(c: Bool, t: &Todo, r: &Int) {{\n{body}}}\n"
+            "struct R {{ val z: Int }}\nstruct P {{ val x: Int, val y: Int, val inner: Heap<R> }}\nstruct Todo {{ val id: Int, val done: MutableState<Bool> }}\nfun greet(s: &String): Int = 1\nfun store(f: escaping () -> Int): Int = 1\nfun keep(f: attached () -> Unit) {{}}\nfun run(f: () -> Int): Int = f()\nfun f(c: Bool, t: &Todo, r: &Int, st: &MutableState<Int>) {{\n{body}}}\n"
         )
     }
 

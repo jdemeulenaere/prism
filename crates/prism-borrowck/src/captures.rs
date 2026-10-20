@@ -7,14 +7,14 @@
 //! nested closure that captures a place rooted at it mutably; otherwise it is shared. Closures
 //! are visited innermost first, so a nested closure's mode is known when its parent is decided.
 //! A capture that the closure value moves or copies, as the type checker decided (D2 of
-//! `escaping-closures`), is `Owned`: it is a `val`, which the body never writes.
+//! `escaping-closures`), is `Owned`: it is a `val`, which the body never writes. A weak capture
+//! of a state object is `Weak` (D10 of `owned-state`).
 
 use prism_ast::Span;
 use prism_mir::{
     BodyId, BodyOwner, CaptureMode, LocalId, MirFile, Rvalue, StatementKind, TerminatorKind,
 };
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 /// The inferred capture modes of the closure bodies of a file.
 #[derive(Debug, Clone, Default)]
@@ -63,8 +63,8 @@ pub fn infer_capture_modes(file: &MirFile) -> CaptureModes {
         let mut modes = Vec::with_capacity(body.capture_count);
         let mut deciding_uses = Vec::with_capacity(body.capture_count);
         for (index, first_use) in first_uses.into_iter().enumerate() {
-            if owned.contains(&(id, index)) {
-                modes.push(CaptureMode::Owned);
+            if let Some(&mode) = owned.get(&(id, index)) {
+                modes.push(mode);
                 let capture = LocalId((body.argument_count + 1 + index) as u32);
                 deciding_uses.push(body.locals[capture].span);
                 continue;
@@ -88,9 +88,10 @@ pub fn infer_capture_modes(file: &MirFile) -> CaptureModes {
     result
 }
 
-/// The captures, by closure body and index, that the closure values of `file` move or copy.
-fn owned_captures(file: &MirFile) -> HashSet<(BodyId, usize)> {
-    let mut owned = HashSet::new();
+/// The captures, by closure body and index, that the closure values of `file` move or copy
+/// (`Owned`) or hold weak handles of (`Weak`).
+fn owned_captures(file: &MirFile) -> HashMap<(BodyId, usize), CaptureMode> {
+    let mut owned = HashMap::new();
     for (_, body) in file.bodies.iter() {
         for (_, block) in body.blocks.iter() {
             for statement in &block.statements {
@@ -101,8 +102,14 @@ fn owned_captures(file: &MirFile) -> HashSet<(BodyId, usize)> {
                     } = rvalue.as_ref()
                     {
                         for (index, capture) in captures.iter().enumerate() {
-                            if capture.is_owned() {
-                                owned.insert((*closure, index));
+                            match capture {
+                                prism_mir::Capture::Weak(_) => {
+                                    owned.insert((*closure, index), CaptureMode::Weak);
+                                }
+                                prism_mir::Capture::Owned(_) => {
+                                    owned.insert((*closure, index), CaptureMode::Owned);
+                                }
+                                prism_mir::Capture::Borrowed(_) => {}
                             }
                         }
                     }

@@ -1,0 +1,23 @@
+module main
+struct main::Todo @2:1
+  field 0 val id: Int
+  field 1 val done: MutableState<Bool>
+fun main::keep(f: attached (Bool) -> Unit): Unit @3:1
+  local %0 f: (Bool) -> Unit (attached parameter)
+  block: Unit @3:38
+fun main::row(todo: &Todo): Unit @4:1
+  local %0 todo: &Todo (parameter)
+  local %1 it: Bool (implicit closure parameter)
+  block: Unit @4:22
+    expression @4:24
+      call main::keep: Unit @4:24
+        argument f: closure (%1 it) captures [weak %0 todo.done] (owning: passed to an attached parameter here @4:29): (Bool) -> Unit @4:29
+          block: Unit @4:31
+            assign @4:31
+              target: state place: Bool @4:31
+                handle: borrow (receiver): &MutableState<Bool> @4:31
+                  field 1 done: MutableState<Bool> @4:31
+                    deref: Todo @4:31
+                      local %0 todo: &Todo @4:31
+              value: copy: Bool @4:49
+                local %1 it: Bool @4:49

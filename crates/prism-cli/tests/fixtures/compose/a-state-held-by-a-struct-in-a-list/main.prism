@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+struct Todo { val title: String, val done: MutableState<Bool> }
+fun main() {
+    val todos = listOf(Todo("a" + "b", mutableStateOf(false)), Todo("c" + "d", mutableStateOf(false)))
+    todos[1].done.value = true
+    println(todos[0].done.value)
+    println(todos[1].done.value)
+}

@@ -4,7 +4,7 @@ compose fun Column(content: compose () -> Unit) {
     content()
 }
 
-compose fun Counter(c: State<Int>) {
+compose fun Counter(c: &State<Int>) {
     println("counter")
     Column { println("count ${c.value}") }
 }

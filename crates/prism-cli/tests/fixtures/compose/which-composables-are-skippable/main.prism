@@ -1,0 +1,13 @@
+// expect: ok
+struct Point : Copy { val x: Int }
+compose fun A(n: Int, p: Point) { }
+compose fun B(s: String) { }
+compose fun C(r: &Int) { }
+compose fun D(content: compose () -> Unit) { }
+compose fun <T> E(x: T) { }
+compose fun <T : Copy> F(x: T) { }
+compose fun G(onClick: escaping () -> Unit) { }
+compose fun H(): Int = 1
+compose fun I(s: &State<Int>, m: &MutableState<String>) { }
+compose fun J(onClick: attached () -> Unit) { }
+compose fun K(s: MutableState<Int>) { }

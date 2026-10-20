@@ -1,4 +1,4 @@
 // expect: ok
-fun f(s: MutableState<Int>) {
+fun f(s: &MutableState<Int>) {
     s.value += 1
 }

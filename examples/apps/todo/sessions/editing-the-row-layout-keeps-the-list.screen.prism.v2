@@ -9,43 +9,52 @@ import /prism/compose/material3
 
 // The app over an empty list.
 package compose fun TodoApp(): Unit {
-    val state = remember { todoState(listOf()) }
-    TodoScreen(state)
+    val todos = remember { mutableStateOf<List<Todo>>(listOf()) }
+    TodoScreen(todos)
 }
 
-// The whole screen of `state`.
-package compose fun TodoScreen(state: TodoState): Unit {
+// The whole screen of the items `todos`: the draft, the filter and the next identifier are
+// remembered here, and each row's handlers capture the states they write.
+package compose fun TodoScreen(todos: &MutableState<List<Todo>>): Unit {
+    val draft = remember { mutableStateOf("") }
+    val filter = remember { mutableStateOf(Filter.All) }
+    val nextId = remember { mutableStateOf(todos.value.size + 1) }
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextField(
-                value = state.draft.value,
-                onValueChange = { state.draft.value = it },
+                value = draft.value,
+                onValueChange = { draft.value = it },
                 modifier = Modifier.weight(1.0),
             )
             Spacer(Modifier.width(8.dp))
-            Button(onClick = { state.add() }) {
+            Button(onClick = { addTodo(todos, draft, nextId) }) {
                 Text("Add")
             }
         }
-        FilterRow(state.filter)
-        for (todo in state.todos.value) {
+        FilterRow(filter)
+        for (todo in todos.value) {
             // The key is outermost in the loop's body, so an item's row keeps its groups and
             // nodes when the items before it are removed or filtered out.
             key(todo.id) {
-                if (state.filter.value.shows(todo)) {
-                    TodoRow(todo, state)
+                if (filter.value.shows(todo)) {
+                    TodoRow(todo, todos)
                 }
             }
         }
-        Text("${state.activeCount()} left")
+        LeftCount(todos)
     }
 }
 
+// The number of items left: a restart scope of its own, which a toggle recomposes alone.
+package compose fun LeftCount(todos: &State<List<Todo>>): Unit {
+    Text("${activeCount(todos)} left")
+}
+
 // The three filters, the selected one disabled. Compose would pass `selected: Filter` and
-// `onSelect: (Filter) -> Unit`, but a handler owns its captures and a function value can be
-// neither copied nor cloned, so three buttons cannot share one `onSelect`: the composables
-// take state handles instead (a follow-up of `reactive-app-verification` in `ROADMAP.md`).
-package compose fun FilterRow(filter: MutableState<Filter>): Unit {
+// `onSelect: (Filter) -> Unit`, but a function value can be neither copied nor cloned, so three
+// buttons cannot share one `onSelect`: the composable takes the filter's state instead (a
+// follow-up of `reactive-app-verification` in `ROADMAP.md`).
+package compose fun FilterRow(filter: &MutableState<Filter>): Unit {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = { filter.value = Filter.All }, enabled = filter.value != Filter.All) {
             Text("All")
@@ -62,9 +71,9 @@ package compose fun FilterRow(filter: MutableState<Filter>): Unit {
     }
 }
 
-// One item: its title, grey once it is done, a checkbox showing whether it is done and a
-// button removing it.
-package compose fun TodoRow(todo: &Todo, state: TodoState): Unit {
+// One item of `todos`: its title, grey once it is done, a checkbox showing whether it is done
+// and a button removing it.
+package compose fun TodoRow(todo: &Todo, todos: &MutableState<List<Todo>>): Unit {
     Row(
         modifier = Modifier.padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -72,12 +81,18 @@ package compose fun TodoRow(todo: &Todo, state: TodoState): Unit {
         Text(
             todo.title,
             modifier = Modifier.weight(1.0),
-            color = if (todo.done) Color.Gray else Color.Unspecified,
+            color = if (todo.done.value) Color.Gray else Color.Unspecified,
         )
-        Checkbox(checked = todo.done, onCheckedChange = { state.setDone(todo.id, it) })
+        DoneBox(todo.done)
         Spacer(Modifier.width(8.dp))
-        Button(onClick = { state.remove(todo.id) }) {
+        Button(onClick = { removeTodo(todos, todo.id) }) {
             Text("Remove")
         }
     }
+}
+
+// An item's checkbox: it alone reads the item's done state, a restart scope that a toggle
+// recomposes without the list.
+package compose fun DoneBox(done: &MutableState<Bool>): Unit {
+    Checkbox(checked = done.value, onCheckedChange = { done.value = it })
 }

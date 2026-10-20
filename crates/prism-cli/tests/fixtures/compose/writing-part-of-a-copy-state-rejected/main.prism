@@ -1,8 +1,0 @@
-// expect: E4033
-struct Point : Copy {
-    var x: Int
-}
-
-fun f(p: MutableState<Point>) {
-    p.value.x = 1
-}

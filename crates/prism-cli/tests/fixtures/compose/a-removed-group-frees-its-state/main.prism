@@ -5,7 +5,7 @@ compose fun Child() {
     println(s.value)
 }
 
-compose fun Parent(show: State<Bool>) {
+compose fun Parent(show: &State<Bool>) {
     if (show.value) {
         Child()
     }

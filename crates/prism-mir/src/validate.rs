@@ -1,6 +1,7 @@
 //! The structural invariants of a file's MIR (D16 of `mir-lowering`), checked over every passing
 //! fixture and example.
 
+use crate::mir::StateOperation;
 use crate::mir::{
     AggregateKind, BasicBlock, BlockId, Body, BodyId, Callee, Capture, CaptureMode, Constant,
     LocalId, LocalKind, MirFile, MirPhase, Operand, Place, Projection, Rvalue, StatementKind,
@@ -486,7 +487,11 @@ impl Validator<'_> {
                 }
                 let found = self.operand_type(composer, &at);
                 self.expect(found, &Type::Int, &format!("{} composer", at));
-                let destination = self.place_type(destination, &at);
+                // A value that is not `Copy` is lent from its slot (D6 of `owned-state`).
+                let destination = self.place_type(destination, &at).map(|ty| match ty {
+                    Type::Reference { inner, .. } if inner.as_ref() == slot_type => *inner,
+                    other => other,
+                });
                 self.expect(destination, slot_type, &format!("{} destination", at));
             }
             TerminatorKind::SwitchInt { value, .. } => {
@@ -631,7 +636,8 @@ impl Validator<'_> {
                                 type_arguments.len()
                             ));
                         } else {
-                            let result = operation.result().substitute(type_arguments);
+                            let kind = StateOperation::kind_of(parameters);
+                            let result = operation.result(kind).substitute(type_arguments);
                             self.expect(Some(ty.clone()), &result, &format!("{} destination", at));
                         }
                     }
@@ -971,6 +977,14 @@ impl Validator<'_> {
                     .map(|capture| match capture {
                         Capture::Borrowed(place) => self.place_type(place, at),
                         Capture::Owned(operand) => self.operand_type(operand, at),
+                        // A weak capture's local holds the weak reference (D10 of
+                        // `owned-state`).
+                        Capture::Weak(place) => {
+                            self.place_type(place, at).map(|state| Type::Struct {
+                                id: prism_typed_tree::IntrinsicStruct::WeakReference.id(),
+                                arguments: vec![state],
+                            })
+                        }
                     })
                     .collect();
                 match self.file.bodies.get(*body) {
@@ -990,9 +1004,20 @@ impl Validator<'_> {
                                 }
                             }
                             if self.file.phase == MirPhase::Elaborated {
-                                let owned =
-                                    closure.capture_modes.get(index) == Some(&CaptureMode::Owned);
-                                if owned != capture.is_owned() {
+                                // A weak capture's mode is `Weak` (D10 of `owned-state`).
+                                let expected = match capture {
+                                    Capture::Weak(_) => CaptureMode::Weak,
+                                    _ if capture.is_owned() => CaptureMode::Owned,
+                                    _ => CaptureMode::Shared,
+                                };
+                                let owned = closure.capture_modes.get(index).is_some_and(|mode| {
+                                    matches!(mode, CaptureMode::Owned | CaptureMode::Weak)
+                                });
+                                let matches = match expected {
+                                    CaptureMode::Shared => !owned,
+                                    mode => closure.capture_modes.get(index) == Some(&mode),
+                                };
+                                if !matches {
                                     self.report(format!(
                                         "{} capture {} is {} but its mode says otherwise",
                                         at,
@@ -1225,7 +1250,7 @@ fn used_by_rvalue(rvalue: &Rvalue, used: &mut Vec<LocalId>) {
         Rvalue::Closure { captures, .. } => {
             for capture in captures {
                 match capture {
-                    Capture::Borrowed(place) => used_by_place(place, used),
+                    Capture::Borrowed(place) | Capture::Weak(place) => used_by_place(place, used),
                     Capture::Owned(operand) => used_by_operand(operand, used),
                 }
             }
@@ -1363,15 +1388,16 @@ mod tests {
     }
 
     /// A body by hand that reads a state: `_2 = call state read<Int>(copy _1)` for a
-    /// `MutableState<Int>` argument, with `_2` of type `destination`, then returns.
+    /// `&MutableState<Int>` argument, with `_2` of type `destination`, then returns.
     fn state_read_file(destination: Type) -> MirFile {
         let mut file = small_file();
         let id = prism_typed_tree::IntrinsicStruct::MutableState.id();
-        file.types
-            .insert_marker(id.clone(), Some(prism_ast::TypeMarker::Copy), Vec::new());
-        let handle = Type::Struct {
-            id,
-            arguments: vec![Type::Int],
+        let handle = Type::Reference {
+            mutable: false,
+            inner: Box::new(Type::Struct {
+                id,
+                arguments: vec![Type::Int],
+            }),
         };
         let body = body(&mut file);
         let mut locals = prism_typed_tree::Arena::new();

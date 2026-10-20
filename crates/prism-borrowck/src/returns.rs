@@ -42,14 +42,25 @@ pub(crate) fn check_returns(
     borrows: &BorrowSet,
     flow: &Results<LoanFlow>,
 ) -> Vec<BorrowError> {
-    if !places::is_input_borrow(body.return_type()) {
+    let keeper = places::contains_keeper(body.return_type());
+    if !places::is_input_borrow(body.return_type()) && !keeper {
         return Vec::new();
     }
     let parameters: Vec<Type> = body
         .arguments()
         .map(|local| body.locals[local].ty.clone())
         .collect();
-    let (rule, tied) = elision::tied_inputs(Signature::of_body(body), &parameters);
+    let (rule, mut tied) = elision::tied_inputs(Signature::of_body(body), &parameters);
+    // A returned keeper is tied to the `attached` parameters too, whose values it keeps (D24
+    // of `owned-state`).
+    if keeper {
+        for (position, local) in body.arguments().enumerate() {
+            if body.locals[local].parameter_kind.is_attached() && !tied.contains(&position) {
+                tied.push(position);
+            }
+        }
+        tied.sort_unstable();
+    }
     let checker = Returns {
         file,
         body,
@@ -84,6 +95,7 @@ pub(crate) fn check_returns(
                     callee,
                     arguments,
                     parameters,
+                    parameter_kinds,
                     destination,
                     ..
                 } = &block.terminator.kind
@@ -94,9 +106,17 @@ pub(crate) fn check_returns(
                     continue;
                 }
                 let state = cursor.seek(location);
-                let items = flow
+                let mut items = flow
                     .analysis
                     .call_items(state, callee, arguments, parameters);
+                if keeper {
+                    items.extend(
+                        flow.analysis
+                            .attached_items(state, arguments, parameter_kinds),
+                    );
+                    items.sort_unstable();
+                    items.dedup();
+                }
                 (items, block.terminator.span)
             }
         };

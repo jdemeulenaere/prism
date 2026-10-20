@@ -159,12 +159,13 @@ fn dumping_a_file_s_ir() {
     assert_eq!(stderr(&first), "");
 }
 
-/// code-generation: "A read in the IR dump" (`state-handles`): a read of a state calls its
-/// entry with the handle and the record of `Int`, tests the result for null, and on null calls
-/// `prism_compose_state_error` with the location of `s.value` from a cold block.
+/// code-generation: "A read in the IR dump" (`state-handles`, `owned-state`): a read of a state
+/// loads its word through the borrow of the state object, calls its entry with the word and the
+/// record of `Int`, tests the result for null, and on null calls `prism_compose_state_error`
+/// with the location of `s.value` from a cold block.
 #[test]
 fn a_read_in_the_ir_dump() {
-    let directory = single_file("state_read", "fun f(s: State<Int>): Int = s.value\n");
+    let directory = single_file("state_read", "fun f(s: &State<Int>): Int = s.value\n");
     let output = prism(&["dump-clif", "main.prism"], &directory);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let dump = stdout(&output);
@@ -187,11 +188,67 @@ fn a_read_in_the_ir_dump() {
         .skip(1)
         .find(|block| block.contains(&format!("call {}(", error)))
         .unwrap_or_else(|| panic!("no cold block calling the error in\n{}", ir));
-    // The location of `s.value`: line 1, column 29.
+    // The location of `s.value`: line 1, column 30.
     assert!(
-        cold.contains("iconst.i32 1\n") && cold.contains("iconst.i32 29\n"),
+        cold.contains("iconst.i32 1\n") && cold.contains("iconst.i32 30\n"),
         "{}",
         cold
+    );
+}
+
+/// code-generation: "Retiring the states of a list of items" (`owned-state`, D7): a state's
+/// drop glue retires it, and the glue of a struct and of a list of them reach it.
+#[test]
+fn retiring_the_states_of_a_list_of_items() {
+    let dump = clif_of(
+        "retiring_list",
+        &[],
+        "struct Todo { val title: String, val done: MutableState<Bool> }\nfun f(todos: List<Todo>) { }\n",
+    );
+    let state_glue = "main#drop(prism/compose/runtime::MutableState<Bool>)";
+    assert!(
+        calls_directly(function_ir(&dump, "main::f"), "main#drop(List<main::Todo>)"),
+        "{}",
+        dump
+    );
+    assert!(
+        calls_directly(
+            function_ir(&dump, "main#drop(List<main::Todo>)"),
+            "main#drop(main::Todo)"
+        ),
+        "{}",
+        dump
+    );
+    assert!(
+        calls_directly(function_ir(&dump, "main#drop(main::Todo)"), state_glue),
+        "{}",
+        dump
+    );
+    let glue = function_ir(&dump, state_glue);
+    assert!(
+        calls_directly(glue, "prism_compose_state_retire"),
+        "{}",
+        glue
+    );
+    // The state's word, loaded from the state object's address.
+    assert!(glue.contains("= load.i64 notrap aligned v0\n"), "{}", glue);
+}
+
+/// code-generation: "A handler with one weak capture allocates nothing" (`owned-state`, D10):
+/// the weak handle is the environment word, and the closure has environment equality.
+#[test]
+fn a_handler_with_one_weak_capture_allocates_nothing() {
+    let dump = clif_of(
+        "weak_inline_environment",
+        &[],
+        "fun keep(f: attached () -> Unit) {}\nfun f(count: &MutableState<Int>) { keep { count.value += 1 } }\n",
+    );
+    assert!(!dump.contains("prism_rt_allocate"), "{}", dump);
+    assert!(!dump.contains("drop-environment"), "{}", dump);
+    assert!(
+        function_headers(&dump).contains(&"main::f#closure0#equals-environment"),
+        "{}",
+        dump
     );
 }
 

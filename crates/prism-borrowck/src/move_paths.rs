@@ -223,7 +223,9 @@ impl MoveData {
                 Projection::Payload | Projection::VariantField { .. } | Projection::Index(_) => {
                     return (path, false)
                 }
-                Projection::Deref => return (path, true),
+                // A weak reference viewed as its state object is never moved out of, like the
+                // referent of a shared reference (D10 of `owned-state`).
+                Projection::Deref | Projection::View => return (path, true),
             }
         }
         (path, false)

@@ -21,6 +21,11 @@
 //! passes and checks that each scope is registered once. Under `PRISM_ASSERT_TIMING=1` it fails
 //! when that time grows by a factor of 2 or more from the smallest composition to the largest.
 //!
+//! `retiring_many_states` (`owned-state`, compose: "Retiring many states") retires 1,000, 10,000
+//! and 100,000 cells between two passes of a composition and frees them at the end of the next
+//! pass: under `PRISM_ASSERT_TIMING=1` it fails when the time per cell of either grows by a
+//! factor of 2 or more from the smallest count to the largest.
+//!
 //! `invalidating_after_a_reload` (`compose-hot-reload`, compose: "Invalidating after a reload
 //! in a large composition") applies reloads naming one affected body, the root's key, to the
 //! compositions of `runtime_timing`: it reports the median time per live group of finding and
@@ -109,7 +114,7 @@ fn measure_readers(size: u64) -> (Duration, usize) {
         state.cells.get(handle).unwrap().readers.scopes().len()
     });
     Composition::dispose(composition).unwrap();
-    States::release(&[handle]);
+    States::retire(handle);
     (median(samples), readers)
 }
 
@@ -326,5 +331,73 @@ fn invalidating_after_a_reload() {
         let growth = results[2].1.as_secs_f64() / results[0].1.as_secs_f64();
         println!("time per group growth x{:.2}", growth);
         assert!(growth < 2.0, "the time per group grows x{:.2}", growth);
+    }
+}
+
+/// The time per cell of retiring `size` cells between two passes of a composition, and of
+/// freeing them at the end of the next pass (`owned-state`, compose: "Retiring many states").
+fn measure_retirement(size: u64) -> (Duration, Duration) {
+    let record = slot_type::<i64>("Int");
+    let composition = Composition::start(
+        Box::new(NodeTree::new()),
+        prism_compose::test_support::content(|_| {}),
+    )
+    .unwrap();
+    let root = Composition::root_scope(composition).unwrap();
+    let mut retiring = Vec::new();
+    let mut freeing = Vec::new();
+    for _ in 0..5 {
+        let handles: Vec<Handle> = (0..size as i64)
+            .map(|mut value| unsafe {
+                States::create(record, (&mut value as *mut i64).cast()).unwrap()
+            })
+            .collect();
+        let started = Instant::now();
+        for handle in &handles {
+            States::retire(*handle);
+        }
+        retiring.push(started.elapsed() / size as u32);
+        invalidate(root);
+        let started = Instant::now();
+        assert!(Composition::recompose(composition).unwrap());
+        freeing.push(started.elapsed() / size as u32);
+        assert_eq!(States::live_cells(), 0, "every retired cell was freed");
+    }
+    Composition::dispose(composition).unwrap();
+    (median(retiring), median(freeing))
+}
+
+#[test]
+#[ignore]
+fn retiring_many_states() {
+    let results: Vec<(u64, Duration, Duration)> = [1_000, 10_000, 100_000]
+        .into_iter()
+        .map(|size| {
+            let (retire, free) = measure_retirement(size);
+            (size, retire, free)
+        })
+        .collect();
+    println!(
+        "{:>8} {:>16} {:>16}",
+        "cells", "retire per cell", "free per cell"
+    );
+    for (size, retire, free) in &results {
+        println!("{:>8} {:>16?} {:>16?}", size, retire, free);
+    }
+    if std::env::var("PRISM_ASSERT_TIMING").as_deref() == Ok("1") {
+        for (what, index) in [("retire", 1), ("free", 2)] {
+            let time = |result: &(u64, Duration, Duration)| match index {
+                1 => result.1.as_secs_f64(),
+                _ => result.2.as_secs_f64(),
+            };
+            let growth = time(&results[2]) / time(&results[0]);
+            println!("time per cell to {} grows x{:.2}", what, growth);
+            assert!(
+                growth < 2.0,
+                "the time per cell to {} grows x{:.2}",
+                what,
+                growth
+            );
+        }
     }
 }

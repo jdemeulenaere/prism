@@ -123,7 +123,7 @@ public compose fun Text(
 // A filled button calling `onClick`, its content in a row centred in at least 58 × 40 pixels
 // with 24 pixels of padding on the sides and 8 above and below.
 public compose fun Button(
-    onClick: escaping () -> Unit,
+    onClick: attached () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Bool = true,
     shape: Shape = ButtonDefaults.shape,
@@ -150,7 +150,7 @@ public compose fun Button(
 // changes when the program passes it back.
 public compose fun Checkbox(
     checked: Bool,
-    onCheckedChange: escaping (Bool) -> Unit,
+    onCheckedChange: attached (Bool) -> Unit,
     modifier: Modifier = Modifier,
     enabled: Bool = true,
 ): Unit {
@@ -175,7 +175,7 @@ public compose fun Checkbox(
 // pixels inside the frame.
 public compose fun TextField(
     value: &String,
-    onValueChange: escaping (String) -> Unit,
+    onValueChange: attached (String) -> Unit,
     modifier: Modifier = Modifier,
     enabled: Bool = true,
     textStyle: TextStyle = MaterialTheme.typography.bodyLarge,

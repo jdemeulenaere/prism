@@ -1,0 +1,51 @@
+module main
+fun main::g(_1: &MutableState<List<Int>>): Int @2:1
+  local _0: Int (return)
+  local _1 s: &MutableState<List<Int>> (argument)
+  local _2 items: &List<Int> (user)
+  local _3: &MutableState<List<Int>> (temporary)
+  local _4: &MutableState<List<Int>> (temporary)
+  local _5: &List<Int> (temporary)
+  local _6: &MutableState<List<Int>> (temporary)
+  local _7: &&MutableState<List<Int>> (temporary)
+  local _8: Int (temporary)
+  local _9: &List<Int> (temporary)
+  local _10: Unit (temporary)
+  local _11: Unit (temporary)
+  bb0:
+    storage_live _2 @3:5
+    storage_live _3 @3:18
+    _3 = &(*_1) (receiver) @3:18
+    storage_live _4 @3:18
+    _4 = move _3 @3:18
+    storage_live _5 @3:18
+    storage_live _6 @3:18
+    _6 = copy _4 @3:18
+    storage_live _7 @3:18
+    _7 = &_6 (argument) @3:18
+    _5 = call state begin shared<List<Int>>(copy _6, move _7) -> bb1 @3:18
+  bb1:
+    _2 = &(*_5) (written) @3:17
+    storage_dead _7 @3:5
+    storage_dead _5 @3:5
+    storage_dead _4 @3:5
+    storage_dead _3 @3:5
+    storage_live _8 @4:13
+    storage_live _9 @4:13
+    _9 = &(*_2) (receiver) @4:13
+    _8 = call builtin size<Int>(move _9) -> bb2 @4:13
+  bb2:
+    storage_live _10 @4:5
+    _10 = call builtin println(move _8) -> bb3 @4:5
+  bb3:
+    storage_dead _10 @4:5
+    storage_dead _9 @4:5
+    storage_dead _8 @4:5
+    _0 = const 1 @5:12
+    storage_live _11 @5:5
+    _11 = call state end shared<List<Int>>(copy _6) -> bb4 @5:5
+  bb4:
+    storage_dead _11 @5:5
+    storage_dead _6 @5:5
+    storage_dead _2 @5:5
+    return @2:1

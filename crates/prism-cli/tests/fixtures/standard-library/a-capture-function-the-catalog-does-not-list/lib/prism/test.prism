@@ -1,0 +1,3 @@
+package prism
+
+public intrinsic capture fun String.weak(): WeakReference<String>

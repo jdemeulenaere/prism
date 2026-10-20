@@ -408,6 +408,7 @@ impl Printer<'_> {
                                 CaptureMode::Borrowed => "borrow",
                                 CaptureMode::Moved => "move",
                                 CaptureMode::Copied => "copy",
+                                CaptureMode::Weak => "weak",
                             };
                             let path = match self.body.locals.get(c.local) {
                                 Some(local) => format!(

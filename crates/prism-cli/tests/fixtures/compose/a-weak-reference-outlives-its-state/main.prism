@@ -1,0 +1,15 @@
+// expect: ok
+// run: 0
+struct Clicker { val onClick: () -> Unit }
+fun clicker(count: &MutableState<Int>): Clicker {
+    val ref = count.weak()
+    return Clicker({ ref.get()?.update { it + 1 } })
+}
+fun consume(s: MutableState<Int>) {}
+fun main() {
+    val count = mutableStateOf(0)
+    val c = clicker(count)
+    consume(count)
+    c.onClick()
+    println("done")
+}

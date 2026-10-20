@@ -6,7 +6,7 @@ compose fun Plus(onClick: escaping () -> Unit) {
     println("plus")
 }
 
-compose fun ItemRow(item: &Item, tick: State<Int>) {
+compose fun ItemRow(item: &Item, tick: &State<Int>) {
     println("row ${tick.value}")
     Plus(onClick = { println(item.id) })
 }

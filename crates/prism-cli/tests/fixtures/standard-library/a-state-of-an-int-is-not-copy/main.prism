@@ -1,0 +1,6 @@
+// expect: E5001
+fun g(s: MutableState<Int>): Int {
+    val a = s
+    val b = s
+    return 1
+}

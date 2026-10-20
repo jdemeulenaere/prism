@@ -9,8 +9,8 @@ import /prism/compose/ui
 
 // The screen over 1,000 items.
 compose fun LargeTodoApp() {
-    val state = remember { todoState(sampleTodos(1000)) }
-    TodoScreen(state)
+    val todos = remember { mutableStateOf(sampleTodos(1000)) }
+    TodoScreen(todos)
 }
 
 fun main() {

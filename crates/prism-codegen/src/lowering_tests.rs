@@ -1138,13 +1138,13 @@ fn state_operations_run() {
              s.value += 4\n\
              s.update { it * 2 }\n\
              s.value = 14\n\
-             return s.read { it + 1 }\n\
+             return s.value + 1\n\
          }\n\
          fun list(): Int {\n\
              val l = mutableStateOf(listOf(1, 2))\n\
-             l.edit { it.add(3) }\n\
+             l.value.add(3)\n\
              l.value = listOf(4, 5, 6, 7)\n\
-             return l.read { it.size * 10 + it[0] }\n\
+             return l.value.size * 10 + l.value[0]\n\
          }\n",
     );
     let counter: extern "C" fn() -> i64 = function(&program, "main::counter");
@@ -1155,8 +1155,8 @@ fn state_operations_run() {
     assert_eq!(counter(), 15);
     let list: extern "C" fn() -> i64 = function(&program, "main::list");
     assert_eq!(list(), 44);
-    // The cells belong to this thread's program until its finish report frees them.
-    assert!(prism_compose::States::live_cells() >= 2);
+    // Each state object retired its state when its function returned; with no composition
+    // live, the cells are freed at once (D7 of `owned-state`).
     prism_compose::finish_report();
     assert_eq!(prism_compose::States::live_cells(), 0);
 }

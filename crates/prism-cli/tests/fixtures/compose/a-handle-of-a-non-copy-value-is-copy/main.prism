@@ -1,9 +1,0 @@
-// expect: ok
-// run: 0
-fun twice(s: State<String>): Int = 2
-
-fun main() {
-    val s = mutableStateOf("a" + "b")
-    val t = s
-    println(twice(s) + twice(t))
-}

@@ -1,0 +1,17 @@
+// expect: ok
+// run: 0
+compose fun Label(s: &State<Int>) { println("label ${s.value}") }
+compose fun Screen(a: &State<Int>, b: &State<Int>, pick: &State<Int>) {
+    println("screen ${pick.value}")
+    Label(if (pick.value > 1) b else a)
+}
+fun main() {
+    val a = mutableStateOf(1)
+    val b = mutableStateOf(2)
+    val pick = mutableStateOf(0)
+    val c = composition { Screen(a, b, pick) }
+    pick.value = 1
+    println(c.recompose())
+    pick.value = 2
+    println(c.recompose())
+}

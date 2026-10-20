@@ -453,9 +453,6 @@ pub fn format_type_error(path: &Path, source: Option<&str>, err: &TypeError) -> 
                 remembered
             ));
         }
-        TypeError::StateValueOutsideComposable { help, .. } => {
-            out.push_str(&format!("   = help: {}\n", help));
-        }
         TypeError::MissingContext { .. } => {
             if let Some(help) = err.missing_context_help() {
                 out.push_str(&format!("   = help: {}\n", help));

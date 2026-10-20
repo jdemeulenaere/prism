@@ -162,5 +162,5 @@ fn steady_state_reads_allocate_nothing() {
         counts
     );
     Composition::dispose(composition).unwrap();
-    States::release(&[handle]);
+    States::retire(handle);
 }

@@ -5,7 +5,7 @@ The drop glue of `State<T>` and `MutableState<T>` MUST call the compose runtime'
 
 #### Scenario: Retiring the states of a list of items
 - **WHEN** `prism dump-clif` runs on `struct Todo { val title: String, val done: MutableState<Bool> }` and `fun f(todos: List<Todo>) { }`
-- **THEN** the drop glue of `Todo` calls `prism_compose_state_retire` with the word of `done`, and `f` drops `todos` through the list's drop glue, which calls `Todo`'s for each element
+- **THEN** the drop glue of `Todo` calls that of `MutableState<Bool>` for `done`, which calls `prism_compose_state_retire` with the word it loads from the state, and `f` drops `todos` through the list's drop glue, which calls `Todo`'s for each element
 
 ### Requirement: Weak Captures Are Copied Words
 A weak capture MUST be held in a closure's environment as one word that owns nothing, so a closure holding only weak handles and `Copy` captures has environment equality and duplicate entries, and one holding a single weak handle keeps it inline in the environment word, allocating nothing.

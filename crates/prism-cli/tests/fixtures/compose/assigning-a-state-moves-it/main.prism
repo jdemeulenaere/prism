@@ -1,0 +1,6 @@
+// expect: E5001
+fun main() {
+    val s = mutableStateOf(1)
+    val t = s
+    println(s.value)
+}

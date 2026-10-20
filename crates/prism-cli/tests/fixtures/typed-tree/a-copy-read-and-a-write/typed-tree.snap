@@ -1,16 +1,18 @@
 module main
-fun main::f(s: MutableState<Int>): Unit @2:1
-  local %0 s: MutableState<Int> (parameter)
+fun main::f(s: &MutableState<Int>): Unit @2:1
+  local %0 s: &MutableState<Int> (parameter)
   local %1 n: Int (val)
-  block: Unit @2:29
+  block: Unit @2:30
     let %1 n @3:5
       call builtin value<Int>: Int @3:13
-        receiver: copy: MutableState<Int> @3:13
-          local %0 s: MutableState<Int> @3:13
+        receiver: borrow (receiver): &MutableState<Int> @3:13
+          deref: MutableState<Int> @3:13
+            local %0 s: &MutableState<Int> @3:13
     assign @4:5
       target: state place: Int @4:5
-        handle: copy: MutableState<Int> @4:5
-          local %0 s: MutableState<Int> @4:5
+        handle: borrow (receiver): &MutableState<Int> @4:5
+          deref: MutableState<Int> @4:5
+            local %0 s: &MutableState<Int> @4:5
       value: binary +: Int @4:15
         local %1 n: Int @4:15
         literal 1: Int @4:19

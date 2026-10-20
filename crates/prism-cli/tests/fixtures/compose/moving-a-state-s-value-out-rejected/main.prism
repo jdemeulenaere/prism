@@ -1,4 +1,4 @@
 // expect: E4017
-compose fun C(s: State<String>) {
+compose fun C(s: &State<String>) {
     val t = s.value
 }

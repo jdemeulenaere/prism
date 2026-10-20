@@ -1,0 +1,9 @@
+error[E5007]: a closure that captures the reference 'h' cannot escape
+  --> main.prism:5:28
+    5 | fun row(h: &Holder) { keep({ h.s.value += 1 }) }
+      |                            ^^^^^^^^^^^^^^^^^^ passed to an attached parameter here
+  --> main.prism:5:30
+    5 | fun row(h: &Holder) { keep({ h.s.value += 1 }) }
+      |                              ^^^ 'h' is captured here
+   = note: a closure that escapes owns what it captures, and a reference cannot be owned
+   = help: make a weak reference before the closure, 'val sRef = h.s.weak()', and use 'sRef.get()' inside it

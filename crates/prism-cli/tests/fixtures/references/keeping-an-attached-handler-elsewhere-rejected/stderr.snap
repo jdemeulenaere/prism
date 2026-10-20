@@ -1,0 +1,18 @@
+error[E5010]: the attached parameter 'onClick' cannot escape: an attached function value is kept only by the composition
+  --> main.prism:5:54
+    5 | fun a(onClick: attached () -> Unit): Button = Button(onClick)
+      |                                                      ^^^^^^^ stored in a field here
+  --> main.prism:5:7
+    5 | fun a(onClick: attached () -> Unit): Button = Button(onClick)
+      |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 'onClick' is an attached parameter here
+   = note: an attached function value is kept only by the composition, which releases it with the group that passed it
+   = help: declare the receiving parameter 'attached', or call the function value here
+error[E5010]: the attached parameter 'onClick' cannot escape: an attached function value is kept only by the composition
+  --> main.prism:6:45
+    6 | fun b(onClick: attached () -> Unit) { store(onClick) }
+      |                                             ^^^^^^^ passed to an escaping parameter here
+  --> main.prism:6:7
+    6 | fun b(onClick: attached () -> Unit) { store(onClick) }
+      |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 'onClick' is an attached parameter here
+   = note: an attached function value is kept only by the composition, which releases it with the group that passed it
+   = help: declare the receiving parameter 'attached', or call the function value here

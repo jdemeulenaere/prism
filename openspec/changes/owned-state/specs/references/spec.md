@@ -13,7 +13,7 @@ A closure that owns its captures because its value reaches an `attached` paramet
 
 #### Scenario: A state behind a var field is not captured weakly
 - **WHEN** `struct Holder { var s: MutableState<Int> }` and `fun keep(f: attached () -> Unit) {}` are declared and `fun row(h: &Holder) { keep({ h.s.value += 1 }) }` is checked
-- **THEN** the borrow checker emits `E5007`, saying that a closure that captures the reference `h` cannot escape, with a note that a closure captures a state read through a reference weakly only when every field on the way is a `val`
+- **THEN** the borrow checker emits `E5007`, saying that a closure that captures the reference `h` cannot escape, with help suggesting `val sRef = h.s.weak()` before the closure and `sRef.get()` inside it: a closure captures a state read through a reference weakly only when every field on the way is a `val`
 
 ### Requirement: Attached Function Values Stay Attached
 A value of an `attached` parameter, and a closure holding weak handles, MAY be called, borrowed, captured by a closure that is itself given to an `attached` parameter or does not escape, and passed to an `attached` parameter. Any other escape (returned, stored in a struct, state, list or top-level value, or passed to an `escaping` or generic parameter) MUST be rejected with `AttachedFunctionEscapes` (`E5010`).
@@ -56,7 +56,7 @@ A weak capture MUST be a shared borrow of the captured path's place, held by the
 - **THEN** stdout is `1`, `2` and `true`, one per line, and the exit status is 0
 
 #### Scenario: An app keeps nothing past its call
-- **WHEN** `fun consume(s: MutableState<Int>) {}` is declared and `fun main() { val s = mutableStateOf(0); runApp { Text("${s.value}") }; consume(s) }` is checked with `import /prism/compose/material3`
+- **WHEN** `fun consume(s: MutableState<Int>) {}` is declared and `fun main() { val s = mutableStateOf(0); runApp { Text("${s.value}") }; consume(s) }` is checked with `import /prism/compose/ui` and `import /prism/compose/material3`
 - **THEN** the file passes `prism check`: `runApp` returns once its app has ended, so its content keeps `s` borrowed only during the call
 
 ### Requirement: Compositions Holding Weak Captures Stay Tracked

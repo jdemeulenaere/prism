@@ -1,15 +1,10 @@
 package app
 
-// A handle whose cell its composition freed: reading it is a
-// runtime error at the read.
+// A borrow a weak reference lent, whose state was dropped, then freed by a pass.
+fun consume(s: MutableState<Int>) {}
 
 fun main() {
-    val holder = mutableStateOf(mutableStateOf(0))
-    val kept = session(holder)
+    val s = mutableStateOf(5)
+    val ref = s.weak(); val c = composition { }; val kept = ref.get() ?: return; consume(s); c.setContent { }
     println(kept.value)
-}
-
-fun session(holder: MutableState<MutableState<Int>>): MutableState<Int> {
-    val c = composition { SideEffect { holder.value = mutableStateOf(1) } }
-    return holder.value
 }

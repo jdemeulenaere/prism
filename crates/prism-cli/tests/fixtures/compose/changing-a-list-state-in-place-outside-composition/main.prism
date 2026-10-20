@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+fun add(todos: &MutableState<List<Int>>) { todos.value.add(todos.value.size + 1) }
+fun main() {
+    val todos = mutableStateOf(listOf(1))
+    add(todos)
+    add(todos)
+    println(todos.value.size)
+    println(todos.value[2])
+}

@@ -14,7 +14,7 @@ use crate::composer::{
 use crate::group::{Group, GroupKind};
 use crate::handle::Handle;
 use crate::slot::Slot;
-use crate::state::{CreationOwner, States};
+use crate::state::States;
 use crate::thread::{
     with_state, ActivePass, CompositionRecord, Frame, FrameKind, OrderEntry, Release, ReleaseWork,
     State,
@@ -38,7 +38,6 @@ impl Composition {
                 applier,
                 queue: Vec::new(),
                 disposed: false,
-                cells: Vec::new(),
                 effects: Vec::new(),
                 reloaded: false,
             });
@@ -91,16 +90,11 @@ impl Composition {
             Ok(())
         })?;
         process_releases();
-        // Then the cells its handlers and side effects created, and the effects no pass ran
-        // (D12 and D13 of `state-handles`).
-        let (cells, effects) = with_state(|state| {
+        // Then the effects no pass ran (D13 of `state-handles`).
+        let effects = with_state(|state| {
             let record = state.compositions.get_mut(composition).unwrap();
-            (
-                std::mem::take(&mut record.cells),
-                std::mem::take(&mut record.effects),
-            )
+            std::mem::take(&mut record.effects)
         });
-        States::release(&cells);
         for effect in effects {
             // SAFETY: a queued effect is a live function value the composition owns.
             unsafe { effect.release() };
@@ -108,17 +102,20 @@ impl Composition {
         // The applier is dropped outside the state.
         let record = with_state(|state| state.compositions.remove(composition));
         drop(record);
+        // With no composition left on the thread, no node or handler can name a retired cell
+        // any more, so the retired cells are freed (D7 of `owned-state`).
+        if with_state(|state| state.live_compositions) == 0 {
+            States::free_all_retired();
+        }
         Ok(())
     }
 
-    /// Runs `f` as a handler of `composition` (D12 of `state-handles`): the state cells it
-    /// creates belong to the composition and are freed when it is disposed. What `ui-toolkit`
-    /// dispatches events through, and how side effects run.
+    /// Runs `f` as a handler of `composition`, outside any pass: what `ui-toolkit` dispatches
+    /// events through, and how side effects run. A state it creates belongs to whatever holds
+    /// its state object (D16 of `owned-state`).
     pub fn run_handler<R>(composition: Handle, f: impl FnOnce() -> R) -> R {
-        States::push_owner(CreationOwner::Composition(composition));
-        let result = f();
-        States::pop_owner();
-        result
+        let _ = composition;
+        f()
     }
 
     /// The root scope of the composition.
@@ -202,7 +199,12 @@ fn run_pass(composition: Handle) -> ComposeResult<bool> {
         })?;
     }
     with_state(end_pass);
+    with_state(|state| state.releasing_pass = identifier);
     process_releases();
+    with_state(|state| state.releasing_pass = 0);
+    // The cells retired before the pass started, whose readers and holders it recomposed or
+    // removed, are freed after its releases and before its side effects (D7 of `owned-state`).
+    States::free_retired_before(identifier);
     // Reloads applied during the pass invalidate their scopes for the next one (D3 of
     // `compose-hot-reload`).
     crate::reload::handle_queued_reloads();
@@ -413,10 +415,6 @@ pub(crate) fn process_releases() {
                     drop(value);
                 }
                 slot.free_block();
-                // A slot's state cells are released after its value (D12 of `state-handles`).
-                if !slot.cells().is_empty() {
-                    States::release(slot.cells());
-                }
             },
             ReleaseStep::Function(function) => unsafe { function.release() },
         }
@@ -424,8 +422,8 @@ pub(crate) fn process_releases() {
 }
 
 /// The next step of the releases: the walk of a removed subtree first (children last first,
-/// then the group's slots last first, its restart function and its node), then the release
-/// list in order.
+/// then the group's node with the handlers it owns, its restart function and its slots last
+/// first: D8 of `owned-state`), then the release list in order.
 fn next_release(state: &mut State) -> ReleaseStep {
     if let Some(work) = state.release_work.pop() {
         match work {
@@ -448,23 +446,29 @@ fn next_release(state: &mut State) -> ReleaseStep {
                 let Some(record) = state.groups.get_mut(group) else {
                     return ReleaseStep::Continue;
                 };
-                if let Some(slot) = record.slots.pop() {
+                // The node first, so no node or handler names a value its slots own once they
+                // are dropped (R1 of `owned-state`).
+                if let Some(node) = record.node.take() {
+                    let parent_node = record.parent_node;
+                    let composition = record.composition;
+                    if let Some(composition) = state.compositions.get_mut(composition) {
+                        if let (true, Some(parent)) = (top, parent_node) {
+                            composition.applier.remove(parent, node);
+                        }
+                        composition.applier.release(node);
+                    }
                     state.release_work.push(work);
-                    return ReleaseStep::Slot(slot);
+                    return ReleaseStep::Continue;
                 }
                 if let Some(function) = record.restart.take() {
                     state.release_work.push(work);
                     return ReleaseStep::Function(function);
                 }
-                let record = state.groups.remove(group).unwrap();
-                if let Some(node) = record.node {
-                    if let Some(composition) = state.compositions.get_mut(record.composition) {
-                        if let (true, Some(parent)) = (top, record.parent_node) {
-                            composition.applier.remove(parent, node);
-                        }
-                        composition.applier.release(node);
-                    }
+                if let Some(slot) = record.slots.pop() {
+                    state.release_work.push(work);
+                    return ReleaseStep::Slot(slot);
                 }
+                state.groups.remove(group);
                 return ReleaseStep::Continue;
             }
         }

@@ -1,10 +1,12 @@
 //! Stable parameters and skippable composables (D7 of `compose-transform`).
 //!
 //! A parameter is stable when its type is `Copy` and holds no borrow, by its declared markers
-//! alone (a type parameter only by its `Copy` bound), or when it is an `escaping` function type
-//! that is not composable, or a nullable of one: such a value is kept when it is *keepable*,
-//! which only its descriptor says, at run time (D9). A composable returning `Unit` whose
-//! parameters are all stable is skippable. Deciding it costs one marker lookup per parameter
+//! alone (a type parameter only by its `Copy` bound), when it is a shared borrow of a type with
+//! a capture function (a state object, kept as its weak handle and compared by identity, D13 of
+//! `owned-state`), or when it is an `escaping` or `attached` function type that is not
+//! composable, or a nullable of one: such a value is kept when it is *keepable*, which only its
+//! descriptor says, at run time (D9). A composable returning `Unit` whose parameters are all
+//! stable is skippable. Deciding it costs one marker or capture-function lookup per parameter
 //! type, and nothing reads fields, bodies or other files.
 
 use prism_mir::{Body, BodyOwner, LocalId};
@@ -16,7 +18,34 @@ pub fn is_stable(ty: &Type, kind: ParameterKind, types: &TypeTable) -> bool {
     if is_function_parameter(ty) {
         return kind.keeps() && !is_composable_function(ty);
     }
+    if is_borrowed_state(ty, types) {
+        return true;
+    }
     types.is_copy(ty) && ty.reference_outside_functions().is_none() && !is_reference(ty)
+}
+
+/// Whether `ty` is a shared borrow of a type with a capture function (`&State<T>`,
+/// `&MutableState<T>`): a parameter kept as its weak handle (D13 of `owned-state`).
+pub fn is_borrowed_state(ty: &Type, types: &TypeTable) -> bool {
+    match ty {
+        Type::Reference {
+            mutable: false,
+            inner,
+        } => types.has_capture_function(inner),
+        _ => false,
+    }
+}
+
+/// The type a stable parameter of type `ty` is kept as: a borrowed state's weak reference, else
+/// `ty` itself.
+pub fn kept_type(ty: &Type, types: &TypeTable) -> Type {
+    match ty {
+        Type::Reference { inner, .. } if is_borrowed_state(ty, types) => Type::Struct {
+            id: prism_typed_tree::IntrinsicStruct::WeakReference.id(),
+            arguments: vec![inner.as_ref().clone()],
+        },
+        _ => ty.clone(),
+    }
 }
 
 /// Whether `ty` is a function type or a nullable of one: a parameter kept as a function value.

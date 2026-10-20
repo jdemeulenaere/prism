@@ -176,8 +176,12 @@ impl Driver {
             key,
             text: text.map(Into::into),
         });
+        // A key that closes the window (Cmd+W) may leave no window to release the modifiers in,
+        // so their release is delivered only if one is still open.
         if !modifiers.is_empty() {
-            self.deliver(WindowInput::ModifiersChanged(ModifiersState::empty()));
+            let _ = self
+                .windows
+                .deliver(WindowInput::ModifiersChanged(ModifiersState::empty()));
         }
     }
 

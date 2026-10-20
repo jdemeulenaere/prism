@@ -1,6 +1,6 @@
 // expect: ok
 // run: 0
-compose fun Label(count: State<Int>) {
+compose fun Label(count: &State<Int>) {
     println("label ${count.value}")
 }
 
@@ -8,7 +8,7 @@ compose fun Title(n: Int) {
     println("title $n")
 }
 
-compose fun Screen(count: State<Int>) {
+compose fun Screen(count: &State<Int>) {
     println("screen")
     Title(1)
     Label(count)

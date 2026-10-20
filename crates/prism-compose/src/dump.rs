@@ -8,7 +8,6 @@ use crate::composition::Composition;
 use crate::group::GroupKind;
 use crate::handle::Handle;
 use crate::slot::Slot;
-use crate::state::States;
 use crate::thread::with_state;
 use std::fmt::Write;
 
@@ -56,19 +55,8 @@ impl Composition {
                             writeln!(out, "{}word {} = {}", inner, tag, value)
                         }
                         // SAFETY: a slot's record is valid while the slot lives.
-                        Slot::Typed {
-                            slot_type, cells, ..
-                        } => {
-                            let line =
-                                writeln!(out, "{}slot {}", inner, unsafe { (**slot_type).name() });
-                            // Its state cells, one level deeper, in creation order (D20 of
-                            // `state-handles`).
-                            for cell in cells {
-                                if let Some(name) = States::type_name(state, *cell) {
-                                    let _ = writeln!(out, "{}  cell {}", inner, name);
-                                }
-                            }
-                            line
+                        Slot::Typed { slot_type, .. } => {
+                            writeln!(out, "{}slot {}", inner, unsafe { (**slot_type).name() })
                         }
                     };
                 }

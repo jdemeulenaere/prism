@@ -1,0 +1,7 @@
+// expect: E5010
+// run: 1
+struct App { val c: Composition }
+fun main() {
+    val s = mutableStateOf(0)
+    val app = App(composition { println(s.value) })
+}

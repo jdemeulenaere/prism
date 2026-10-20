@@ -1,0 +1,7 @@
+// expect: ok
+fun f(s: &MutableState<String>): Int {
+    val r = s.weak()
+    val a = r
+    val b = r
+    return 1
+}

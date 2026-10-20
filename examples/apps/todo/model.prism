@@ -1,12 +1,13 @@
-// The todo app's model: its items, its filters, and a state holder of four state handles with
-// the operations the screen's handlers call, as Compose hoists state into a remembered holder.
+// The todo app's model: its items, each holding its own done state, its filters, and the
+// operations the screen's handlers call over the states they use, as Compose hoists state.
 package apps.todo
 
-// One item: its identifier, which keys its row, its title and whether it is done.
+// One item: its identifier, which keys its row, its title and whether it is done, a state of
+// its own, so that checking it off writes only this item's state.
 package struct Todo {
     val id: Int
     val title: String
-    var done: Bool
+    val done: MutableState<Bool>
 }
 
 // Which items the list shows.
@@ -19,73 +20,43 @@ package enum Filter : Copy {
 // Whether this filter shows `todo`.
 package fun Filter.shows(todo: &Todo): Bool = when (this) {
     Filter.All -> true
-    Filter.Active -> !todo.done
-    Filter.Done -> todo.done
+    Filter.Active -> !todo.done.value
+    Filter.Done -> todo.done.value
 }
 
-// The app's state: the items, the text field's draft, the selected filter and the next
-// identifier. It holds handles only, so it is `Copy` and every composable and handler can take
-// it by value.
-package struct TodoState : Copy {
-    val todos: MutableState<List<Todo>>
-    val draft: MutableState<String>
-    val filter: MutableState<Filter>
-    val nextId: MutableState<Int>
-}
-
-// A state holding `items`, the next identifier after theirs, an empty draft and every item
-// shown.
-package fun todoState(items: List<Todo>): TodoState {
-    val nextId = items.size + 1
-    return TodoState(
-        todos = mutableStateOf(items),
-        draft = mutableStateOf(""),
-        filter = mutableStateOf(Filter.All),
-        nextId = mutableStateOf(nextId),
-    )
-}
-
-// Adds an item, not done, titled by the draft, and clears the draft; an empty draft adds
-// nothing.
-package fun TodoState.add(): Unit {
-    val title = draft.read { it.clone() }
+// Adds an item, not done, titled by `draft`, numbered by `nextId`, and clears the draft; an
+// empty draft adds nothing.
+package fun addTodo(
+    todos: &MutableState<List<Todo>>,
+    draft: &MutableState<String>,
+    nextId: &MutableState<Int>,
+): Unit {
+    val title = draft.value.clone()
     if (title.length == 0) {
         return
     }
     val id = nextId.value
     nextId.value = id + 1
-    todos.edit { it.add(Todo(id, title.clone(), false)) }
+    todos.value.add(Todo(id, title, mutableStateOf(false)))
     draft.value = ""
 }
 
-// Marks the item `id` done or not.
-package fun TodoState.setDone(id: Int, done: Bool): Unit {
-    todos.edit { list ->
-        val index = list.indexOfFirst { it.id == id }
-        if (index >= 0) {
-            list[index].done = done
-        }
-    }
-}
-
-// Removes the item `id`, keeping the others in order.
-package fun TodoState.remove(id: Int): Unit {
-    todos.edit { list ->
-        val index = list.indexOfFirst { it.id == id }
-        if (index >= 0) {
-            list.removeAt(index)
-        }
+// Removes the item `id`, keeping the others in order; its state goes with it.
+package fun removeTodo(todos: &MutableState<List<Todo>>, id: Int): Unit {
+    val index = todos.value.indexOfFirst { it.id == id }
+    if (index >= 0) {
+        todos.value.removeAt(index)
     }
 }
 
 // How many items are not done.
-package fun TodoState.activeCount(): Int = todos.read { list -> list.count { !it.done } }
+package fun activeCount(todos: &State<List<Todo>>): Int = todos.value.count { !it.done.value }
 
 // `count` items titled `Item 1` to `Item <count>`, every third one done.
 package fun sampleTodos(count: Int): List<Todo> {
     var todos: List<Todo> = listOf()
     for (n in 1..count) {
-        todos.add(Todo(n, "Item $n", n % 3 == 0))
+        todos.add(Todo(n, "Item $n", mutableStateOf(n % 3 == 0)))
     }
     return todos
 }

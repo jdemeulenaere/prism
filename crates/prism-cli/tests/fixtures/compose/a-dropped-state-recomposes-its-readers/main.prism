@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+fun consume(s: MutableState<Int>) {}
+fun main() {
+    val s = mutableStateOf(5)
+    val ref = s.weak()
+    val c = composition { println("read ${ref.get()?.value ?: -1}") }
+    consume(s)
+    println(c.recompose())
+}

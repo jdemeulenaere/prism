@@ -28,8 +28,14 @@ define_id!(
 pub enum LoanKind {
     /// An `Rvalue::Borrow`, with its origin.
     Borrow(BorrowOrigin),
-    /// Capture `index` of a value of the closure `closure`.
-    Capture { closure: BodyId, index: usize },
+    /// Capture `index` of a value of the closure `closure`: a borrowed capture, or, when
+    /// `weak`, a weak capture of a state object, a shared borrow the closure value holds until
+    /// what keeps it is no longer used (D24 of `owned-state`).
+    Capture {
+        closure: BodyId,
+        index: usize,
+        weak: bool,
+    },
 }
 
 /// One borrow made in a body.
@@ -138,14 +144,17 @@ impl BorrowSet {
                         body: closure,
                         captures,
                     } => {
-                        // Only borrowed captures are loans; an owned one is an operand (D2 of
-                        // `escaping-closures`).
+                        // Only borrowed and weak captures are loans; an owned one is an operand
+                        // (D2 of `escaping-closures`).
                         let modes = &file.bodies[*closure].capture_modes;
                         for (capture, place) in captures.iter().enumerate() {
-                            let prism_mir::Capture::Borrowed(place) = place else {
-                                continue;
+                            let (place, weak) = match place {
+                                prism_mir::Capture::Borrowed(place) => (place, false),
+                                prism_mir::Capture::Weak(place) => (place, true),
+                                prism_mir::Capture::Owned(_) => continue,
                             };
-                            let mutable = modes.get(capture) == Some(&CaptureMode::Mutable);
+                            let mutable =
+                                !weak && modes.get(capture) == Some(&CaptureMode::Mutable);
                             let id = loans.alloc(Loan {
                                 place: place.clone(),
                                 mutable,
@@ -154,6 +163,7 @@ impl BorrowSet {
                                 kind: LoanKind::Capture {
                                     closure: *closure,
                                     index: capture,
+                                    weak,
                                 },
                                 of_reference: is_reference(place),
                             });
@@ -312,10 +322,22 @@ fun run(f: () -> Int): Int = f()
         let (found, set) =
             loans("fun f(g: () -> Int) { var u = User(\"a\"); run { u.name = \"z\"; 1 } }\n");
         let closure = match found[0].0 {
-            LoanKind::Capture { closure, index: 0 } => closure,
+            LoanKind::Capture {
+                closure, index: 0, ..
+            } => closure,
             other => panic!("not a capture: {:?}", other),
         };
-        assert_eq!(found, vec![(LoanKind::Capture { closure, index: 0 }, true)]);
+        assert_eq!(
+            found,
+            vec![(
+                LoanKind::Capture {
+                    closure,
+                    index: 0,
+                    weak: false
+                },
+                true
+            )]
+        );
         assert_eq!(set.inputs, vec![LocalId(1)]);
         assert_eq!(set.item_count(), 2);
         assert_eq!(set.item(1), Item::Input(LocalId(1)));

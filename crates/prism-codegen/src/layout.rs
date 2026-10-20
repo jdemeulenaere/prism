@@ -316,7 +316,11 @@ impl<'t> LayoutTable<'t> {
         for index in 0..closure.capture_count {
             let local = prism_mir::LocalId((closure.argument_count + 1 + index) as u32);
             let ty = closure.locals[local].ty.clone();
-            let is_owned = closure.capture_modes.get(index) == Some(&CaptureMode::Owned);
+            // A weak capture is an owned `Copy` word (D10 of `owned-state`).
+            let is_owned = matches!(
+                closure.capture_modes.get(index),
+                Some(CaptureMode::Owned | CaptureMode::Weak)
+            );
             if is_owned {
                 needs_drop |= crate::glue::owns_storage(&ty, self.types);
                 members.push((String::new(), ty));

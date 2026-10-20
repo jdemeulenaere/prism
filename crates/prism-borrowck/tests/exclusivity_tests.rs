@@ -294,3 +294,50 @@ E5003 cannot borrow 's' as mutable because it is also borrowed as shared @2:43 m
     // Parts are never moved: the string stays usable after the template.
     passes("fun f(s: String): String { val t = \"$s$s\"; return s + t }\n");
 }
+
+/// `owned-state` D24: a composition keeps the states its content captures weakly borrowed while
+/// it is used, through `setContent` too, and storing it is `E5010`; a keeper returned from a
+/// function is tied to the arguments of its attached parameters.
+#[test]
+fn compositions_keep_their_weak_captures_borrowed() {
+    let moved = rendered(
+        "fun consume(s: MutableState<Int>) {}\n\
+         fun main() { val s = mutableStateOf(0); val c = composition { println(s.value) }; consume(s); println(c.recompose()) }\n",
+    );
+    assert!(moved.starts_with("E5005 "), "{}", moved);
+    assert!(
+        moved.contains("the closure captures 's' weakly here"),
+        "{}",
+        moved
+    );
+    let replaced = rendered(
+        "fun consume(s: MutableState<Int>) {}\n\
+         fun main() { val c = composition { }; val s = mutableStateOf(0); c.setContent { println(s.value) }; consume(s); println(c.recompose()) }\n",
+    );
+    assert!(replaced.starts_with("E5005 "), "{}", replaced);
+    let stored = rendered(
+        "struct App { val c: Composition }\n\
+         fun main() { val s = mutableStateOf(0); val app = App(composition { println(s.value) }) }\n",
+    );
+    assert!(stored.starts_with("E5010 "), "{}", stored);
+    passes(
+        "fun wrap(content: attached compose () -> Unit): Composition = composition(content)\n\
+         fun main() { val s = mutableStateOf(1); val c = wrap { println(s.value) }; s.value = 2; println(c.recompose()) }\n",
+    );
+    // Without a later use of the composition, the state is free to move.
+    passes(
+        "fun consume(s: MutableState<Int>) {}\n\
+         fun main() { val s = mutableStateOf(0); val c = composition { println(s.value) }; consume(s) }\n",
+    );
+}
+
+/// `owned-state` D3: a borrow of a state's value is a borrow of the state object.
+#[test]
+fn a_borrowed_state_value_keeps_its_state_borrowed() {
+    let moved = rendered(
+        "fun take(s: MutableState<List<Int>>) {}\n\
+         fun f() { val s = mutableStateOf(listOf(1)); val items = &s.value; take(s); println(items.size) }\n",
+    );
+    assert!(moved.starts_with("E5005 "), "{}", moved);
+    passes("compose fun items(s: &State<List<Int>>): &List<Int> = &s.value\n");
+}

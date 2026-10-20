@@ -1,0 +1,4 @@
+click checkbox 1
+click "remove first"
+click checkbox 1
+dump

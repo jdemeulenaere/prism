@@ -1,0 +1,10 @@
+// expect: ok
+// run: 0
+fun consume(s: MutableState<Int>) {}
+fun main() {
+    val s = mutableStateOf(1)
+    val ref = s.weak()
+    println(ref.get()?.value ?: -1)
+    consume(s)
+    println(ref.get()?.value ?: -1)
+}

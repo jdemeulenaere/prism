@@ -188,6 +188,7 @@ impl Instance<'_> {
                     .map(|capture| match capture {
                         Capture::Borrowed(place) => Capture::Borrowed(self.place(place)),
                         Capture::Owned(operand) => Capture::Owned(self.operand(operand)),
+                        Capture::Weak(place) => Capture::Weak(self.place(place)),
                     })
                     .collect(),
             },

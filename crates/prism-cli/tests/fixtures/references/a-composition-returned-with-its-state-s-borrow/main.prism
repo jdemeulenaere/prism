@@ -1,0 +1,9 @@
+// expect: ok
+// run: 0
+fun show(s: &MutableState<Int>): Composition = composition { println(s.value) }
+fun main() {
+    val s = mutableStateOf(1)
+    val c = show(s)
+    s.value = 2
+    println(c.recompose())
+}

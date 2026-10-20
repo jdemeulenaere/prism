@@ -5,7 +5,7 @@ Calls of `mutableStateOf`, `update`, `weak`, `get` and `SideEffect` MUST be call
 
 #### Scenario: An update call
 - **WHEN** `fun f(s: &MutableState<List<Int>>) { s.update { v -> v } }` is checked and its typed tree dumped
-- **THEN** the call is a call of the built-in `update` with type argument `List<Int>`, a copy of `s` as its receiver and the closure as its argument
+- **THEN** the call is a call of the built-in `update` with type argument `List<Int>`, a shared receiver borrow of `*s` as its receiver and the closure as its argument
 
 ### Requirement: Weak Captures Are Recorded
 A capture that a closure takes through a weak handle MUST be recorded with the mode weak, and the closure MUST record as its reason the `attached` parameter its value is given to. `prism dump-typed-tree` MUST print such a capture as `weak` followed by its path.
@@ -21,15 +21,15 @@ A read of a `Copy` `s.value` MUST be a call of the built-in state read with a sh
 
 #### Scenario: A Copy read and a write
 - **WHEN** `fun f(s: &MutableState<Int>) { val n = s.value; s.value = n + 1 }` is checked and its typed tree dumped
-- **THEN** the initializer of `n` is a call of the built-in `value` with a copy of the reference `s` as its receiver, and the assignment's target is a state place over a copy of `s`
+- **THEN** the initializer of `n` is a call of the built-in `value` with a shared receiver borrow of `*s` as its receiver, and the assignment's target is a state place over a shared receiver borrow of `*s`
 
 #### Scenario: A borrowed list state
 - **WHEN** `compose fun C(s: &State<List<Int>>) { for (x in s.value) { } }` is checked and its typed tree dumped
-- **THEN** the loop's iterable is an iteration borrow of a state place over a copy of `s`
+- **THEN** the loop's iterable is an iteration borrow of a state place over a shared receiver borrow of `*s`
 
 #### Scenario: A list state changed in place
 - **WHEN** `fun g(s: &MutableState<List<Int>>) { s.value.add(1) }` is checked and its typed tree dumped
-- **THEN** the receiver of `add` is a mutable receiver borrow of a state place over a copy of `s`
+- **THEN** the receiver of `add` is a mutable receiver borrow of a state place over a shared receiver borrow of `*s`
 
 ## REMOVED Requirements
 

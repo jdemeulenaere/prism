@@ -1,0 +1,48 @@
+module main
+fun main::keep(_1: (Bool) -> Unit): Unit @3:1
+  local _0: Unit (return)
+  local _1 f: (Bool) -> Unit (argument)
+  bb0:
+    _0 = const () @3:38
+    drop _1 -> bb1 @3:1
+  bb1:
+    return @3:1
+fun main::row(_1: &Todo): Unit @4:1
+  local _0: Unit (return)
+  local _1 todo: &Todo (argument)
+  local _2: (Bool) -> Unit (temporary)
+  local _3: Unit (temporary)
+  bb0:
+    storage_live _2 @4:29
+    _2 = closure main::row#closure0 [weak (*_1).done] @4:29
+    storage_live _3 @4:24
+    _3 = call main::keep(move _2) -> bb1 @4:24
+  bb1:
+    storage_dead _3 @4:24
+    storage_dead _2 @4:24
+    _0 = const () @4:22
+    return @4:1
+closure main::row#closure0(_1: Bool): Unit @4:29
+  local _0: Unit (return)
+  local _1 it: Bool (argument)
+  local _2 todo.done: WeakReference<MutableState<Bool>> (capture)
+  local _3: &MutableState<Bool> (temporary)
+  local _4: &MutableState<Bool> (temporary)
+  local _5: Bool (temporary)
+  local _6: Unit (temporary)
+  bb0:
+    storage_live _3 @4:31
+    _3 = &view(_2) (receiver) @4:31
+    storage_live _4 @4:31
+    _4 = move _3 @4:31
+    storage_live _5 @4:49
+    _5 = copy _1 @4:49
+    storage_live _6 @4:31
+    _6 = call state write<Bool>(copy _4, move _5) -> bb1 @4:31
+  bb1:
+    storage_dead _6 @4:31
+    storage_dead _5 @4:31
+    storage_dead _4 @4:31
+    storage_dead _3 @4:31
+    _0 = const () @4:31
+    return @4:29

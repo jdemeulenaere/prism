@@ -123,12 +123,12 @@ import struct prism/compose/ui::TextUnit : Copy
 import struct prism/compose/ui::TextUnits : Copy
   field 0 val Unspecified: TextUnit
 compose fun main::Counter(): Unit @8:1
-  local %0 c: MutableState<Int> (val)
+  local %0 c: &MutableState<Int> (val)
   local %1 this: &ColumnScope (closure receiver)
   local %2 this: &RowScope (closure receiver)
   block: Unit @8:23
     let %0 c @9:5
-      call compose builtin remember<MutableState<Int>>: MutableState<Int> @9:13
+      call compose builtin remember<MutableState<Int>>: &MutableState<Int> @9:13
         argument calculation: closure (): () -> MutableState<Int> @9:22
           block: MutableState<Int> @9:24
             tail: call builtin mutableStateOf<Int>: MutableState<Int> @9:24
@@ -152,7 +152,7 @@ compose fun main::Counter(): Unit @8:1
           argument space: call builtin dp: Dp @10:91
             receiver: literal 8: Int @10:91
         argument horizontalAlignment: default
-        argument content: closure compose (%1 this) captures [borrow %0 c]: compose ColumnScope.() -> Unit @10:98
+        argument content: closure compose (%1 this) captures [borrow %0 *c]: compose ColumnScope.() -> Unit @10:98
           block: Unit @11:9
             expression @11:9
               call compose prism/compose/material3::Text: Unit @11:9
@@ -161,20 +161,22 @@ compose fun main::Counter(): Unit @8:1
                     template: String @11:14
                       text "Count: "
                       call builtin value<Int>: Int @11:24
-                        receiver: copy: MutableState<Int> @11:24
-                          local %0 c: MutableState<Int> @11:24
+                        receiver: borrow (receiver): &MutableState<Int> @11:24
+                          deref: MutableState<Int> @11:24
+                            local %0 c: &MutableState<Int> @11:24
                 argument modifier: default
                 argument color: default
                 argument fontSize: default
                 argument style: default
             expression @12:9
               call compose prism/compose/material3::Button: Unit @12:9
-                argument onClick: closure () captures [copy %0 c] (owning: passed to an escaping parameter here @12:26): () -> Unit @12:26
+                argument onClick: closure () captures [weak %0 *c] (owning: passed to an attached parameter here @12:26): () -> Unit @12:26
                   block: Unit @12:28
                     compound-assign + @12:28
                       target: state place: Int @12:28
-                        handle: copy: MutableState<Int> @12:28
-                          local %0 c: MutableState<Int> @12:28
+                        handle: borrow (receiver): &MutableState<Int> @12:28
+                          deref: MutableState<Int> @12:28
+                            local %0 c: &MutableState<Int> @12:28
                       value: literal 1: Int @12:39
                 argument modifier: default
                 argument enabled: default

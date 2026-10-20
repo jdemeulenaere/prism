@@ -1,10 +1,10 @@
 // expect: ok
 // run: 101
-fun reset(s: MutableState<Int>) {
+fun reset(s: &MutableState<Int>) {
     s.value = 0
 }
 
-compose fun Bad(s: MutableState<Int>) {
+compose fun Bad(s: &MutableState<Int>) {
     reset(s)
 }
 

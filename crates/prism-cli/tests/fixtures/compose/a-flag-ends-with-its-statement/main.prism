@@ -1,0 +1,11 @@
+// expect: ok
+// run: 0
+fun g(a: &MutableState<List<Int>>, b: &MutableState<List<Int>>) {
+    println(a.value.size)
+    b.value.add(2)
+    println(a.value.size)
+}
+fun main() {
+    val s = mutableStateOf(listOf(1))
+    g(s, s)
+}
