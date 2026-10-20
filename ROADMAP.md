@@ -191,7 +191,7 @@ Follow-ups of `payload-patterns`:
 - [ ] Report the binary arithmetic operators' mismatches (`1 + "a"`) as `OperatorMismatch`, naming the operator and both operand types, as compound assignment does, instead of `TypeMismatch` (from `compound-assignment`, D7).
 - [ ] User-defined operators (`plus`, `plusAssign`) for user types, once traits exist (non-goal of `compound-assignment`).
 - [x] Generics: type parameter checking and monomorphization (deferred by `type-checker-core`). Until `Copy` and `Clone` bounds exist, type parameters are neither `Copy` nor `Clone` (from `value-semantics`). Checking, `Copy`/`Clone` bounds and polymorphic MIR are done in `generics`; monomorphization is done in `monomorphization` (item 20 of the road to Milestone 2).
-- [ ] Reject unknown type names in annotations (`E4001`). This needs a builtin type list, including sized integers like `UInt64`, plus generic scoping; until then undeclared names are accepted as opaque nominal types (deferred by `resolve-nominal-type-annotations`). Generic scoping now exists (`generics`), so only the builtin list and the migration of the opaque-name fixtures remain.
+- [ ] Reject unknown type names in annotations (`E4001`). This needs a builtin type list, including sized integers like `UInt64`, plus generic scoping; until then undeclared names are accepted as opaque nominal types (deferred by `resolve-nominal-type-annotations`). Generic scoping now exists (`generics`), so only the builtin list and the migration of the opaque-name fixtures remain. Since `explicit-library` (D15) a library type named without its import is already `E4001` (`UnresolvedTypeName`), and the checker records every other unknown name, so the check itself is a few lines; what remains is a decision for `code-generation`, whose `E6001` scenarios reach the backend only through unknown types (`Widget`, `Gadget`), and `examples/demo/models/models.prism`'s `UInt64`.
 - [ ] Qualified type paths such as `models.User`; imports currently bring symbols in by bare name (deferred by `resolve-nominal-type-annotations`).
 - [ ] Fix: calling a struct-typed value (`p()` where `p: Point`) goes through the constructor branch of `infer_call_expr` (noted in `resolve-nominal-type-annotations`).
 - [x] Fix: `?:` whose left side is not nullable (`a ?: c` for `a: Int`, accepted by the type checker) lowers to a discriminant read of a non-nullable value, which the MIR validator rejects (found while implementing `compound-assignment`). Done as a plain fix: it lowers to its left side alone.
@@ -438,6 +438,13 @@ Follow-ups of `strong-skipping`:
 - [ ] Fusing `state version` into `state read` when both are emitted (one runtime call instead of two), once `app_frame_timing` shows the second call matters (open question of the change).
 - [ ] A call site whose borrowed argument alternates between having an identity and none (`Show(if (c) &a.value else &local)`) switches between a restart and a replaceable group and recreates its group each time, as an alternating handler does (D8, risk of the change).
 
+Follow-ups of `explicit-library`:
+- [ ] The user's review of explicit imports after seeing the result (user, "to be revisited"): re-exports or an umbrella import, or a small prelude after all. The examples gained 14 library imports over 8 of their 15 files, a UI file up to five (D1, open question of the change).
+- [ ] Checking `library/` in place for library authors (`prism check --library library/`, or a `PRISM_LIBRARY_DIR`), once `library-in-prism` makes library edits frequent; today a library edit takes a rebuild of `prism-library`, and `prism check library/prism/core.prism` is `E1008` (D5, D6).
+- [ ] A build script copying `library/` into `prism-library` if the crate is ever published: `cargo publish` refuses `include_str!` paths outside the package (D5).
+- [ ] Workspace-wide import suggestions in the LSP, which holds the workspace anyway; the import help names library modules only (D8).
+- [ ] Sharing the converted form of an imported ABI between the files that import it, as the prelude's shared scope did: a file importing `/prism/collections` ingests its thirty helpers in about 35 us, per file (D14 measurement; a property of every import).
+
 Follow-ups of `ui-toolkit`:
 - [ ] A public `Layout` with measure policies in Prism and a `ModifierNodeElement`-style API for custom modifiers, which would make `NodeId` public (D3, D11, D25, non-goals of the change).
 - [ ] `LazyColumn`, scrolling, `Modifier.clip` and `BoxScope.matchParentSize` (non-goals of the change).
@@ -514,7 +521,7 @@ Agreed with the user in the post–Milestone 2 review ([`docs/milestone-2-review
 3. [x] `path-captures` (A2b): closures capture paths such as `todo.done`, not whole bindings.
 4. [x] `owned-state` (A2′, A2‴, L5): `MutableState<T>` as an owning state object; `remember` keeps owned values; closures capture state through automatic generational handles only where the composition owns them, and through explicit nullable weak references elsewhere; deferred free and release order; system invariant 6 amended; the todo app's `Todo` holds `done: MutableState<Boolean>`.
 5. [x] `strong-skipping` (A1): every restartable composable can skip; `Copy` parameters compare by value, borrowed ones by provenance identity; no inference, no deep comparison.
-6. [ ] `explicit-library` (A4): the library's sources move to a top-level `library/` directory, still imported as `/prism/...` from any workspace; no prelude, every function imported explicitly; built-in type names and their members stay in scope.
+6. [x] `explicit-library` (A4): the library's sources move to a top-level `library/` directory, still imported as `/prism/...` from any workspace; no prelude, every function imported explicitly; built-in type names and their members stay in scope. Follow-ups under "Follow-ups of `explicit-library`" above.
 7. [ ] `operator-conventions` (A4, L1): Kotlin-style `operator fun` (`get`, `set`, `iterator`, `plus`, `compareTo`, `equals`, `contains`, `invoke`).
 8. [ ] `drop-and-clone-hooks` (A4, L2): custom drop and clone for owning library types.
 9. [ ] `vararg` (A4, L4): variadic parameters, so `listOf` is ordinary code.

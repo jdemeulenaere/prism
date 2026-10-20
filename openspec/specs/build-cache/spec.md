@@ -29,7 +29,7 @@ The cache MUST live in the directory named by the `PRISM_CACHE` environment vari
 - **THEN** the second check reuses every file and the second run loads every unit and instance from the cache, because no cache key contains an absolute path
 
 ### Requirement: Cache Keys Cover Exactly the Compilation Inputs
-The key of a file's check entry MUST be a BLAKE3 hash of the cache format version, the compiler's identity, the file's module path, its exact source text, and the ABI hashes of its direct imports in import order, then, for a workspace file, those of the prelude modules in prelude order. A library module MUST be keyed by the same inputs. The compiler's identity MUST cover the compiler version and the content of the compiler executable. No other input MUST affect a check key.
+The key of a file's check entry MUST be a BLAKE3 hash of the cache format version, the compiler's identity, the file's module path, its exact source text, and the ABI hashes of its direct imports in import order, then, for a workspace file, those of the member modules `/prism/core` and `/prism/collections`, in that order. A library module MUST be keyed by the same inputs. The compiler's identity MUST cover the compiler version and the executable's content. No other input MUST affect a check key.
 
 #### Scenario: Unchanged workspace reuses every file
 - **WHEN** `prism check` runs twice on an unchanged workspace with the same compiler
@@ -44,8 +44,12 @@ The key of a file's check entry MUST be a BLAKE3 hash of the cache format versio
 - **THEN** no entry of the first is reused
 
 #### Scenario: Library entries are shared between workspaces
-- **WHEN** two workspaces that both use the prelude are checked one after the other with the same compiler and cache
-- **THEN** the second check reuses the entries of `prism/core.prism` and `prism/collections.prism` that the first wrote
+- **WHEN** two workspaces whose files import `/prism/compose/runtime` are checked one after the other with the same compiler and cache
+- **THEN** the second check reuses the entries of `prism/core.prism`, `prism/collections.prism` and `prism/compose/runtime.prism` that the first wrote
+
+#### Scenario: Reordering imports changes only the key
+- **WHEN** a file's two imports are swapped and the workspace is checked again
+- **THEN** that file is checked again, its importers are reused, and its diagnostics and ABI hash are unchanged
 
 ### Requirement: The Executable's Hash Is Recorded by Its Metadata
 The compiler MAY read the hash of its executable's content from an entry under the cache's `executables` directory, keyed by the executable's path, size, modification and status-change times and file identity. It MUST write such an entry only for an executable whose metadata did not change while it was hashed and that is at least two seconds old, and MUST NOT count these entries among the entries a check or run writes.
@@ -182,4 +186,4 @@ Decisions from `instance-cache` (planned autonomously on 2026-10-17, implemented
 
 Decisions from `standard-library` (2026-10-18):
 
-- **Library modules are keyed like workspace files** (R2, D3 of `standard-library`). A library module's check entry is keyed by its module path, source text, imports' ABI hashes and the compiler identity, so its entries are shared by every workspace checked with one compiler and cache, and an injected test module never collides with the bundled one. A workspace file's key appends the prelude modules' ABI hashes after its explicit imports', since its Phase 2 sees them. The identity already covers the executable that embeds the library, which is redundant and cheap. `--explain-cache` lists library modules first, by module path, while the report counts workspace files only, so `Total units` keeps meaning the user's program.
+- **Library modules are keyed like workspace files** (R2, D3 of `standard-library`). A library module's check entry is keyed by its module path, source text, imports' ABI hashes and the compiler identity, so its entries are shared by every workspace checked with one compiler and cache, and an injected test module never collides with the bundled one. A workspace file's key appends the prelude modules' ABI hashes after its explicit imports', since its Phase 2 sees them; since `explicit-library` it appends the member modules' (`/prism/core`, `/prism/collections`), which give it the built-in types' members, so a change of `/prism/compose/runtime` no longer reaches files that do not import it, and reordering a file's imports changes only its own key (`explicit-library` D9, D14). The identity already covers the executable that embeds the library, which is redundant and cheap. `--explain-cache` lists library modules first, by module path, while the report counts workspace files only, so `Total units` keeps meaning the user's program.

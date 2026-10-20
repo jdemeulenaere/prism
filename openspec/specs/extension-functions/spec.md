@@ -36,41 +36,6 @@ A method MUST be declared as an extension function `fun T.name(...)` on a struct
 - **WHEN** `fun User.greet(): String` is declared and `fun f(u: User) { val g = u.greet }` is checked
 - **THEN** the type checker emits `E4006`, with help suggesting the call `u.greet()`
 
-### Requirement: Extension Calls Resolve Through the File and Its Imports
-A call `value.name(...)` MUST resolve to an extension `name` on the value's type after `&`, `&mut` and `Heap<T>` layers, declared in the file, exported by a direct import or, in a workspace file, by a prelude module (`standard-library`). The file's own match MUST shadow imported ones, which shadow a prelude one. Several imported matches MUST be `E4012` at use, naming their modules, and none `E4006`. Calling an imported extension MUST NOT need an import of its receiver type's module.
-
-#### Scenario: Extension declared in another package
-- **WHEN** `models` exports `public struct User { val name: String }`, package `ui` imports `/models` and declares `public fun User.shout(): String`, and `app` imports `/models` and `/ui` and calls `u.shout()` for `u: User`
-- **THEN** the declaration and the call typecheck successfully, while the same call in a file that imports only `/models` reports `E4006`
-
-#### Scenario: Calling an imported extension without importing the receiver's module
-- **WHEN** `ui` also exports `public fun first(): User`, and a file that imports only `/ui` declares `fun f(): String = first().shout()`
-- **THEN** the file typechecks successfully, without `E4014`, while reading `first().name` in that file reports `E4014`
-
-#### Scenario: Ambiguous imported extension
-- **WHEN** `a/lib` and `b/lib` each import `/models` and export `public fun User.tag(): String`, and a file importing `/models`, `/a/lib` and `/b/lib` calls `u.tag()`
-- **THEN** the type checker emits `E4012` naming `a/lib` and `b/lib`, and the file typechecks successfully when `tag` is never called or when `b/lib`'s extension is declared on another receiver type instead
-
-#### Scenario: Own extension shadows an imported one
-- **WHEN** a file imports `/models` and `/a/lib`, declares its own `fun User.tag(): Int`, and runs `val t: Int = u.tag()`
-- **THEN** the file typechecks successfully, the call resolving to the file's own extension
-
-#### Scenario: Package extension across packages rejected
-- **WHEN** `ui` declares `package fun User.internal(): Int` and a file in another package that imports `/ui` calls `u.internal()`
-- **THEN** the type checker emits `E4007`
-
-#### Scenario: Private extension invisible to importers
-- **WHEN** `ui` declares `fun User.secret(): Int` without a visibility modifier and a file that imports `/ui` calls `u.secret()`
-- **THEN** the type checker emits `E4006`
-
-#### Scenario: Unknown method
-- **WHEN** `struct User { val name: String }` is declared and `fun f(u: User) { u.fly() }` is checked
-- **THEN** the type checker emits `E4006` naming `fly` and `User`
-
-#### Scenario: Prelude extensions need no import
-- **WHEN** a file without imports declares `fun f(xs: &List<Int>): Bool = xs.any { x -> x > 2 }`
-- **THEN** the file typechecks, the call resolving to the extension `any` of `/prism/collections`
-
 ### Requirement: Members Take Precedence Over Extensions
 A call `value.name(...)` MUST invoke a field `name` of the receiver's struct, else the built-in `clone()` of a `Clone` receiver or `unbox()` of a `Heap<T>` behind its references, else an intrinsic extension `name` on its type (`standard-library`), such as a scalar's `toString()` or a `List<T>` member, whatever extensions are visible; an intrinsic property (`length`, `size`, `indices`) counts as a field. Then it MUST call a receiver function value `name`, and only then an extension.
 
@@ -233,7 +198,7 @@ Extensions of one receiver type constructor and name MAY coexist when their cont
 - **THEN** the type checker emits `E4010` for the second `weight` and for the second `divider`
 
 ### Requirement: Context Extensions Resolve Layer by Layer
-A call MUST resolve in the first layer (the file's own extensions, then the imports', then the prelude's) that declares an extension of its receiver and name, by the rule of "Extensions Differing Only by Context", and MUST be rejected with `E4034` when that layer has no match, naming the contexts it declares. Several imports exporting a matching extension of one receiver, name and context MUST be `E4012`.
+A call MUST resolve in the first layer (the file's own extensions, then the imports') that declares an extension of its receiver and name, by the rule of "Extensions Differing Only by Context", and MUST be rejected with `E4034` when that layer has no match, naming the contexts it declares. Several imports exporting a matching extension of one receiver, name and context MUST be `E4012`.
 
 #### Scenario: The file's own extension shadows an imported context extension
 - **WHEN** `layout/scope.prism` exports `public struct Modifier : Copy { val fraction: Double }`, `public struct RowScope : Copy {}`, `public fun row(f: RowScope.() -> Unit): Unit { f(RowScope()) }` and `context(scope: RowScope) public fun Modifier.weight(w: Double): Modifier = Modifier(w)`, and a file importing `/layout/scope` declares `fun Modifier.weight(w: Double): Bool = true` and `fun f() { row { val b: Bool = Modifier(0.0).weight(1.0) } }`
@@ -247,11 +212,46 @@ A call MUST resolve in the first layer (the file's own extensions, then the impo
 - **WHEN** `ui/scope.prism` exports `public struct Modifier : Copy { val fraction: Double }`, `public struct RowScope : Copy {}`, `public struct ColumnScope : Copy {}` and `public fun row(f: RowScope.() -> Unit): Unit { f(RowScope()) }`, `a/lib` and `b/lib` each import `/ui/scope` and export `context(scope: RowScope) public fun Modifier.weight(w: Double): Modifier = Modifier(w)`, and a file importing `/ui/scope`, `/a/lib` and `/b/lib` declares `fun f() { row { val m = Modifier(0.0).weight(1.0) } }`
 - **THEN** the type checker emits `E4012` naming `a/lib` and `b/lib`, and the file typechecks successfully when `b/lib`'s extension is declared for the context `ColumnScope` instead
 
+### Requirement: Extensions Resolve Through the File and Its Imports
+A call `value.name(...)` MUST resolve to an extension `name` on the value's type after `&`, `&mut` and `Heap<T>` layers, declared in the file or exported by a direct import, a library module's included (`standard-library`, "Library Names Are Imported"). The file's own match MUST shadow imported ones. Several imported matches MUST be `E4012` at use, naming their modules, and none `E4006`. Calling an imported extension MUST NOT need an import of its receiver type's module.
+
+#### Scenario: Extension declared in another package
+- **WHEN** `models` exports `public struct User { val name: String }`, package `ui` imports `/models` and declares `public fun User.shout(): String`, and `app` imports `/models` and `/ui` and calls `u.shout()` for `u: User`
+- **THEN** the declaration and the call typecheck successfully, while the same call in a file that imports only `/models` reports `E4006`
+
+#### Scenario: Calling an imported extension without importing the receiver's module
+- **WHEN** `ui` also exports `public fun first(): User`, and a file that imports only `/ui` declares `fun f(): String = first().shout()`
+- **THEN** the file typechecks successfully, without `E4014`, while reading `first().name` in that file reports `E4014`
+
+#### Scenario: Ambiguous imported extension
+- **WHEN** `a/lib` and `b/lib` each import `/models` and export `public fun User.tag(): String`, and a file importing `/models`, `/a/lib` and `/b/lib` calls `u.tag()`
+- **THEN** the type checker emits `E4012` naming `a/lib` and `b/lib`, and the file typechecks successfully when `tag` is never called or when `b/lib`'s extension is declared on another receiver type instead
+
+#### Scenario: Own extension shadows an imported one
+- **WHEN** a file imports `/models` and `/a/lib`, declares its own `fun User.tag(): Int`, and runs `val t: Int = u.tag()`
+- **THEN** the file typechecks successfully, the call resolving to the file's own extension
+
+#### Scenario: Package extension across packages rejected
+- **WHEN** `ui` declares `package fun User.internal(): Int` and a file in another package that imports `/ui` calls `u.internal()`
+- **THEN** the type checker emits `E4007`
+
+#### Scenario: Private extension invisible to importers
+- **WHEN** `ui` declares `fun User.secret(): Int` without a visibility modifier and a file that imports `/ui` calls `u.secret()`
+- **THEN** the type checker emits `E4006`
+
+#### Scenario: Unknown method
+- **WHEN** `struct User { val name: String }` is declared and `fun f(u: User) { u.fly() }` is checked
+- **THEN** the type checker emits `E4006` naming `fly` and `User`
+
+#### Scenario: Library extensions are imported
+- **WHEN** a file declaring `import /prism/collections` declares `fun f(xs: &List<Int>): Bool = xs.any { x -> x > 2 }`, and the same declaration is checked in a file without imports
+- **THEN** the first typechecks, the call resolving to the extension `any` of `/prism/collections`, and the second is rejected with `E4006` for `any`, with help naming `import /prism/collections`
+
 ## Design Rationale
 Decisions from `extension-methods` (the core agreed with the user in the borrow-checker roadmap exploration, 2026-10-17; the rest decided while proposing the change and logged in `docs/decisions-for-review.md`):
 
 - **Extensions are the only methods, declarable in any file** (user). One mechanism instead of Kotlin's member-versus-extension precedence; built-in and user types gain methods the same way; and a struct's ABI stays its layout and markers, so adding a method in another file never changes the struct's ABI hash. Dispatch is static, from the receiver's static type. Rejected: member functions in struct bodies, which put methods into the struct's ABI, and Go's rule that methods live in the type's package, which mainly protects trait coherence and can be added for conformances when traits exist. Costs: no encapsulation boundary until field visibility exists, and trait conformances will need their own block.
-- **Members first, then the file's own extensions, then imports** (user for shadowing and `E4012`). A field wins over an extension, as a field named `clone` does over the built-in, and the built-in `clone()` of a `Clone` type wins over an extension (members before extensions, as in Kotlin). Extensions live in their own table keyed by receiver type and name, apart from the name scopes, so `fun greet()` and `fun User.greet()` coexist, extensions on different receivers never collide, and ambiguity is per receiver type and name. Since `standard-library`, a workspace file's lookup ends with the prelude's extensions, after its own and its imports', so either shadows a library helper without `E4012`.
+- **Members first, then the file's own extensions, then imports** (user for shadowing and `E4012`). A field wins over an extension, as a field named `clone` does over the built-in, and the built-in `clone()` of a `Clone` type wins over an extension (members before extensions, as in Kotlin). Extensions live in their own table keyed by receiver type and name, apart from the name scopes, so `fun greet()` and `fun User.greet()` coexist, extensions on different receivers never collide, and ambiguity is per receiver type and name. Since `standard-library`, a workspace file's lookup ended with the prelude's extensions, after its own and its imports', so either shadowed a library helper without `E4012`. Since `explicit-library` there is no prelude layer: a library extension is found only through an import of its module, like any imported extension, so a workspace module's extension of the same receiver and name beside that import is `E4012` at use, and the file's own extension shadows both (`explicit-library` D1, D4).
 - **Implicit `this`: locals, then receiver fields, then receiver extensions, then the module** (user for fields; extensions autonomous). A bare name is rewritten to the explicit `this.name` before it is checked, so reads, writes, borrows, moves, method calls and their diagnostics all go through the ordinary member rules. Calling a sibling extension without `this.` follows Kotlin and Swift. Rejected: fields only, and module declarations before receiver members, which would make a field unreachable by its bare name whenever a top-level declaration shares it.
 - **Uncallable extensions are rejected with `E4010`.** An extension named like a field of its receiver, or named `clone` on a `Clone` type, could never be called. Rejecting it at the declaration was preferred to accepting it silently (Kotlin warns, and Prism has no warnings channel): a struct that gains a field would otherwise silently redirect every call to the field. Reusing `E4010` follows Swift, which reports such a clash as an invalid redeclaration.
 - **`?.` calls give `R?`, and `?.` chains of fields over a place are optional places for receivers.** `t?.lead?.greet()` borrows `lead` where it lives rather than moving it into a temporary, which would reject the most common Kotlin method-call idiom. This is safe for receivers because the call borrows the payload `&User`, never a `User?`. Nullable receiver types (`fun String?.orEmpty()`) were deferred, since they need a rule for which of `T` and `T?` a call picks.
@@ -269,5 +269,5 @@ Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-to
 - **Implicit `this` resolves against the innermost receiver only** (D4). Inside a receiver lambda, bare names resolve through the lambda's `this` exactly as in an extension body; an enclosing extension's or lambda's receiver is not consulted. This is Compose's `@LayoutScopeMarker` behaviour applied to every receiver, at constant cost per name, where Kotlin's chain of implicit receivers costs time in the nesting depth per unresolved name and needs a marker annotation. A name found only on an outer receiver is `E4001` (`OuterReceiverName`), whose help, computed only on that error path, names the receiver and suggests `val user = this` before the lambda. Rejected: Kotlin's receiver chain with a `@DslMarker`-like modifier, the chain without markers (outer layout scopes would leak into inner ones), and labelled `this@name` for now (a follow-up).
 - **A call's context is the innermost receiver lambda's `this`, or the enclosing function's receiver and context parameter** (D7). The checker keeps the current context as the bindings of at most two candidates, replaced on entering a receiver lambda or a function body, so a context call costs at most two type comparisons and a local shadowing a context parameter's name never becomes the context argument. Closures without a receiver keep the enclosing context. Rejected: searching every enclosing receiver (D4), and explicit `with(scope) { ... }` blocks (not Compose's surface).
 - **Context parameters are not receivers** (D6). Inside the body and the defaults the parameter is a `val` of type `&T`, passed as the function's first parameter, before the receiver, as a shared borrow (a scope may one day hold state, and a shared borrow is what a `fun` receiver gets). Rejected: Kotlin's withdrawn context receivers, which put two implicit receivers at every position, and passing the context by value.
-- **Extensions may differ only by context, resolved layer by layer** (D8). Each extension table key (receiver constructor and name) holds at most one context-free extension and one per context type, indexed by that type, so resolving among many contexts is a lookup, not a scan. A call picks, within the first layer (own, imports, prelude) that has the key, the extension whose context matches a candidate, else the context-free one, else `E4034` naming the contexts that layer declares. Rejected: choosing across layers (the file's own declaration would no longer shadow imports), preferring the context-free extension (a scoped `weight` could never be called beside a plain one), and overloading plain functions by context (the name scopes hold one value per name; a follow-up).
+- **Extensions may differ only by context, resolved layer by layer** (D8). Each extension table key (receiver constructor and name) holds at most one context-free extension and one per context type, indexed by that type, so resolving among many contexts is a lookup, not a scan. A call picks, within the first layer (own, imports; a prelude layer until `explicit-library`) that has the key, the extension whose context matches a candidate, else the context-free one, else `E4034` naming the contexts that layer declares. Rejected: choosing across layers (the file's own declaration would no longer shadow imports), preferring the context-free extension (a scoped `weight` could never be called beside a plain one), and overloading plain functions by context (the name scopes hold one value per name; a follow-up).
 - **A missing context is its own error, `E4034`** (D10). It names the context the function needs, the one the call has (the innermost receiver lambda's `this`, the enclosing extension's receiver, or none) and, when there are several, the contexts the extension is declared for, with help to call it inside a matching receiver lambda or declare the enclosing function `context(...)`. Naming a plain context function as a value is `E4034` too, since its value would need its context. Rejected: `E4006`, which hides that the extension exists and what it needs. The code follows those `compose-transform` and `state-handles` reserve (`E4030` to `E4033`), so the packets keep their codes in any order.

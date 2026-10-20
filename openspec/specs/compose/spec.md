@@ -281,7 +281,7 @@ A composition's dump MUST end with its applier's own dump. The node tree applier
 - **THEN** the dump ends with the lines `nodes`, `  #1 kind 1`, `    #2 kind 2` and `    #3 kind 3`
 
 ### Requirement: The Composer Protocol Module
-The bundled library module `/prism/composer`, outside the prelude, MUST declare the composer protocol for code written by hand in the form composables are lowered to. Composers, compositions and scopes MUST be `Int` words there. Each public function MUST behave as the requirement it names describes, through a private external of the compose runtime.
+The bundled library module `/prism/composer` MUST declare the composer protocol for code written by hand in the form composables are lowered to. Composers, compositions and scopes MUST be `Int` words there. Each public function MUST behave as the requirement it names describes, through a private external of the compose runtime.
 
 #### Scenario: The protocol module is imported
 - **WHEN** a file without imports declares `fun main() { val c = startComposition { k -> } }`
@@ -375,21 +375,6 @@ Calling `composition`, `setContent` or `recompose` in a composable context MUST 
 #### Scenario: A handler may start a composition
 - **WHEN** `fun later(f: () -> Unit) { f() }` and `compose fun Screen() { later { val d = composition { } } }` are checked
 - **THEN** the file typechecks
-
-### Requirement: The Compose Prelude
-The bundled module `/prism/compose/runtime` MUST be a prelude module. It MUST declare `Composition`, `composition`, `setContent`, `recompose` and `dump`, `remember`, `key`, `RecomposeScope`, `currentRecomposeScope` and `invalidate`, and the state declarations `State`, `MutableState`, `mutableStateOf`, `value`, `update`, `WeakReference`, `weak`, `get` and `SideEffect`, and a file's own declaration or import of one of those names MUST shadow it.
-
-#### Scenario: Compose primitives need no import
-- **WHEN** a file without imports declares `compose fun Counter() { val id = remember { 7 }; val s = currentRecomposeScope() }` and `fun main() { val c = composition { Counter() } }`
-- **THEN** it typechecks, `remember` and `currentRecomposeScope` resolve to `/prism/compose/runtime`, and `prism run` exits with status 0
-
-#### Scenario: A file's own `key`
-- **WHEN** a file declares `fun key(n: Int): Int = n` and `fun f(): Int = key(3)`
-- **THEN** it typechecks, and the call resolves to the file's own `key`
-
-#### Scenario: A file's own mutableStateOf
-- **WHEN** a file declares `fun mutableStateOf(n: Int): Int = n + 1` and `fun main() { println(mutableStateOf(1)) }`
-- **THEN** it runs and prints `2`: the call resolves to the file's own `mutableStateOf`
 
 ### Requirement: A Composable Body Runs in One Group
 Each call of a composable MUST run its body in one group of the current composition: a restart group when the composable is skippable ("Every Restartable Composable Can Skip"), and a replaceable group otherwise. A call MUST NOT add a group of its own, so calls of one composable among the same siblings match their groups in order.
@@ -1017,6 +1002,21 @@ A restart scope recomposed alone MUST be called with the addresses and versions 
 - **WHEN** `compose fun Show(s: &String, n: &State<Int>) { println("show $s ${n.value}") }` and `compose fun Screen(on: &State<Bool>, n: &State<Int>) { println("screen"); if (on.value) { val s = remember { "a" + "b" }; Show(s, n) } }` are declared and `fun main() { val on = mutableStateOf(true); val n = mutableStateOf(0); val c = composition { Screen(on, n) }; on.value = false; n.value = 1; println(c.recompose()) }` runs with `--check-allocations`
 - **THEN** stdout is `screen`, `show ab 0`, `screen` and `true`, one per line, and the exit status is 0: `Screen` recomposes first and removes the branch, whose slot is freed after the pass
 
+### Requirement: The Compose Runtime Module
+The bundled module `/prism/compose/runtime` MUST declare `Composition`, `composition`, `setContent`, `recompose` and `dump`, `remember`, `key`, `RecomposeScope`, `currentRecomposeScope` and `invalidate`, and the state declarations `State`, `MutableState`, `mutableStateOf`, `value`, `update`, `WeakReference`, `weak`, `get` and `SideEffect`. A file MUST use them only after importing the module, and a file that does not import it MAY declare any of those names as its own.
+
+#### Scenario: Compose primitives are imported
+- **WHEN** a file declaring `import /prism/compose/runtime` declares `compose fun Counter() { val id = remember { 7 }; val s = currentRecomposeScope() }` and `fun main() { val c = composition { Counter() } }`, and the same declarations are checked without the import
+- **THEN** the first typechecks, `remember` and `currentRecomposeScope` resolve to `/prism/compose/runtime`, and `prism run` exits with status 0; the second is rejected with `E4001` for `remember`, `currentRecomposeScope` and `composition`, each with help naming `import /prism/compose/runtime`
+
+#### Scenario: A file's own `key`
+- **WHEN** a file declares `fun key(n: Int): Int = n` and `fun f(): Int = key(3)`
+- **THEN** it typechecks, and the call resolves to the file's own `key`
+
+#### Scenario: A file's own mutableStateOf
+- **WHEN** a file declares `fun mutableStateOf(n: Int): Int = n + 1` and `fun main() { println(mutableStateOf(1)) }`
+- **THEN** it runs and prints `2`: the call resolves to the file's own `mutableStateOf`
+
 ## Design Rationale
 
 Decisions from `compose-runtime` (planned autonomously on 2026-10-18, implemented and reviewed on 2026-10-18 and 2026-10-19, and logged in `docs/decisions-for-review.md`). It implements the runtime side of the compose plan of `docs/architecture.md` §5 (`compose-architecture` D1, D6, D7, D10, D11 and D23).
@@ -1030,7 +1030,7 @@ Decisions from `compose-runtime` (planned autonomously on 2026-10-18, implemente
 - **Removals deferred to the end of the pass** (D7). Removed groups, forgotten slots and replaced restart functions and contents are released after the pass's last body returns, in the order they were removed, a removed subtree by an iterative post-order walk: children last first, then slots last first, the restart function and the node. Releasing a replaced restart function at once would free the environment of the code that is running.
 - **Restart scopes and their order** (D8). A restart group keeps the owned `(Int) -> Unit` function its last end passed; recomposing a scope calls it in a window of exactly its group within its parent, so a matching start reuses the group and a different one replaces it. A pass sorts its invalid scopes by their paths of positions from the root (O(k log k · d)) and skips a scope that its parent's recomposition already composed or that lies below a group the pass removed, found by walking up from the scope. A parent that skips keeps its children, and a scope below it that recomposes alone in the same pass still matches its own group (both from the review). Rejected: recomposing from the root on every invalidation, ordering by depth only, and building the restart function only once (a reloaded body would keep old captures).
 - **Node groups through an applier** (D9, implementing `compose-architecture` D7, refined at apply time). The `Applier` creates, places relative to the previous sibling, removes at the end of the pass and releases nodes, and numbers them for dumps; placement is relative because removals are deferred, so indexes would be ambiguous during a pass. A node context stays *in order* while matches only skip unvisited siblings, so a reused node is not placed again; after a reorder, a kind change or a skip behind a placed node, every node is placed again. A kind change creates a new node and releases the old one. `NodeTree` is the built-in applier for compositions started through the entry points. A model-checked randomized test edits whole trees and compares the node tree after every pass. Rejected: index-based placement, no node groups before `ui-toolkit`, and compositions without an applier.
-- **`/prism/composer`, a protocol module outside the prelude** (D10). Private externals and public wrappers over `Int` words, exactly the machine form generated code passes, so executable fixtures write composables as the transform will lower them and pin the runtime from real `.prism` source before the transform exists. Rejected: library test modules in executable fixtures (`standard-library` D13), testing from Rust only, creating `/prism/compose/runtime` here, and wrapper structs (passed by address).
+- **`/prism/composer`, a protocol module imported explicitly** (D10; outside the prelude while there was one). Private externals and public wrappers over `Int` words, exactly the machine form generated code passes, so executable fixtures write composables as the transform will lower them and pin the runtime from real `.prism` source before the transform exists. Rejected: library test modules in executable fixtures (`standard-library` D13), testing from Rust only, creating `/prism/compose/runtime` here, and wrapper structs (passed by address).
 - **Compositions are `Copy` handles disposed explicitly** (D11); the owned `Composition` with drop glue is `compose-transform`'s. **Misuse is one runtime error kind** (D12), `composition misuse: <detail>` without a location, since an entry point has none; invalidating a stale scope is not misuse, because a state's readers may have left the composition. **The allocation check counts undisposed compositions** (D13) through a finish report that `prism-runtime` calls before its leak report. **Dumps** (D14) show keys, kinds, tags, values and node numbers, never addresses or generations.
 - **Hot reload interplay** (D15). Keys only decide which slots a group may reuse; slot types and node kinds are checked on every read and start. The runtime holds no code address, so a restart function reaches reloaded code through its descriptor's slot. `Composition::invalidate_where` and `Composition::recompose_forced`, a pass in which nothing skips, were planned for reloads and removed by `compose-hot-reload` (its D6): a reload finds its scopes by body keys and reruns them through the force bit.
 - **Costs** (D16). Protocol operations are amortized O(1), a pass costs its bodies, the groups and slots it visits and releases, and the ordering; the runtime's buffers belong to the thread and are reused, so a steady-state pass allocates nothing (`tests/allocations.rs`). The benchmark `tests/runtime_timing.rs` measured about 54 ns per group for a first composition and 83 ns for one invalid leaf scope, flat from 1,000 to 100,000 groups. Startup is unchanged for programs that do not use the runtime. No compiler stage is added.

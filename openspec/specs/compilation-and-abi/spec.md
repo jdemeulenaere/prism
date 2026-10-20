@@ -376,13 +376,6 @@ Phase 1 MUST extract and hash a library module's ABI as a workspace file's, from
 - **WHEN** the ABI of `/prism/collections` is extracted
 - **THEN** it holds `public intrinsic mut fun <T> List<T>.add(element: T): Unit`, `public intrinsic val <T> List<T>.size: Int` and the ordinary `public fun <T, R> List<T>.map(transform: (&T) -> R): List<R>`, and changing an entry from intrinsic to ordinary changes the module's ABI hash
 
-### Requirement: Prelude Modules Are Inputs of Every Workspace File
-Phase 2 of a workspace file MUST see the ABIs of the prelude modules as well as those of its direct imports, after them, and nothing else of the library. Instance planning MUST treat a call of a prelude generic as a call of a direct import's generic. Phase 2 of a library file MUST see only the ABIs of its direct imports.
-
-#### Scenario: Instances of prelude generics
-- **WHEN** `fun main() { println(listOf(1, 2).map { x -> x + 1 }.size) }` is run, in a file without imports
-- **THEN** the program's instances include `prism/collections::List.map<Int, Int>`, compiled into its own unit, and the program prints `2`
-
 ### Requirement: Receivers and Contexts in the ABI
 Phase 1 MUST record whether a function type in an exported signature has a receiver, and whether that receiver is mutable, as part of its structured type, and MUST record an exported function's context type, bound like any signature type. The ABI hash MUST cover both, and the order of exported symbols MUST take the context into account, so that reordering declarations never changes the hash.
 
@@ -403,7 +396,7 @@ An exported intrinsic struct MUST be an ABI entry with its name, type parameters
 
 #### Scenario: The ABI of the compose module
 - **WHEN** the ABI of `/prism/compose/runtime` is extracted
-- **THEN** it holds `public intrinsic struct Composition`, `public intrinsic struct RecomposeScope : Copy` and `public intrinsic compose fun <T : Copy> remember(calculation: () -> T): T`, and removing the `Copy` marker of `RecomposeScope` changes the module's ABI hash
+- **THEN** it holds `public intrinsic struct Composition`, `public intrinsic struct RecomposeScope : Copy` and `public intrinsic compose fun <T> remember(calculation: () -> T): T`, and removing the `Copy` marker of `RecomposeScope` changes the module's ABI hash
 
 ### Requirement: Companion Values in the ABI
 A public struct and its public companion value MUST both be exported, as two symbols with one name: the struct with its definition and the value with its declared type. Adding, removing or retyping the companion value MUST change the file's ABI hash.
@@ -426,6 +419,17 @@ Phase 1 MUST record whether each parameter of an exported function, and each par
 #### Scenario: Marking a parameter attached changes the hashes
 - **WHEN** an exported `public fun store(f: escaping () -> Unit): Int` becomes `public fun store(f: attached () -> Unit): Int`
 - **THEN** the file's ABI hash changes, and an importing file is checked again
+
+### Requirement: Member Modules Are Inputs of Every Workspace File
+Phase 2 of a workspace file MUST see the ABIs of its direct imports and, after them, the members of the built-in types that the member modules `/prism/core` and `/prism/collections` declare (`standard-library`, "Built-In Types and Their Members Need No Import"), and nothing else of the library. Phase 2 of a library file MUST see only the ABIs of its direct imports.
+
+#### Scenario: Instances of imported library generics
+- **WHEN** `import /prism/collections`, `import /prism/core` and `fun main() { println(listOf(1, 2).map { x -> x + 1 }.size) }` are run
+- **THEN** the program's instances include `prism/collections::List.map<Int, Int>`, compiled into its own unit, and the program prints `2`
+
+#### Scenario: Member modules give members only
+- **WHEN** a file without imports declares `fun f(xs: &List<Int>): Int = xs.size` and `fun g(): Int = listOf(1).size`
+- **THEN** `f` typechecks, and `g` is rejected with `E4001` for `listOf`, although `/prism/collections` is an input of the file
 
 ## Design Rationale
 - **The ABI comes from the AST and the direct imports' exported type names, never from bodies.** Explicit types on exported declarations let Phase 1 run before any body is checked (`type-checker-core`). Phase 1a reads each file's exported struct and enum names from its AST alone. Phase 1b then binds each nominal name in an exported signature to the file's own declarations or to the one direct import exporting it, reading only those 1a outputs, so import cycles still work and no body is read (`typechecker-soundness`, D4).
@@ -492,3 +496,7 @@ Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by 
 
 - **A struct and its companion value are two symbols of one name** (D4). `FileAbi::symbols` already held a list, so both are exported, sorted by kind before name, and the order of the two declarations does not change the hash; an import brings both.
 - **Default inputs ride on the default's hash** (D26, review). Each parameter with a default also records which of the context, the receiver and the earlier parameters its default may read, computed from the default's syntax in Phase 1, so a caller in another file borrows exactly what the generator takes (`mir`). It follows from the syntax the ABI hash already covers, so it is not hashed again, and editing a default still recompiles exactly the files that a changed default recompiled before.
+
+Decisions from `explicit-library` (review item A4, agreed with the user on 2026-10-20; the mechanism decided while proposing and implementing, and logged in `docs/decisions-for-review.md`):
+
+- **Member modules replace the prelude modules as implicit inputs** (D2, D14). With no prelude, a workspace file's Phase 2 sees its direct imports and, after them, only the members of the built-in types that `/prism/core` and `/prism/collections` declare, through one `MemberScope` per graph shared by every checker (one `Arc` copy per file and one lookup per member the file's own and imported members miss). The two member modules are still parsed for every program and counted by check keys, after the direct imports; `/prism/compose/runtime` is an input only of the files that import it. Instances of library generics are planned from imports, as any import's. Library files see neither. Rejected: members typed from the catalog with no module loaded, and a per-file member scope from imports only (`s.length` would need an import).

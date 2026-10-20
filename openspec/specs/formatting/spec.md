@@ -53,11 +53,11 @@ A file that does not parse MUST NOT be formatted or rewritten. `prism fmt` MUST 
 - **THEN** it reports `error[E2001]`, writes nothing to standard output, and exits with a non-zero status
 
 ### Requirement: Formatting Preserves Meaning
-The formatted source MUST parse to the same syntax tree as the input, ignoring source positions, and MUST contain the same comments, with the same text and in the same order. The formatter MUST verify both on every run by parsing its own output; on any difference it MUST leave the file untouched, report an internal error (a formatter bug, which carries no catalog code), and exit with a non-zero status.
+The formatted source MUST parse to the same syntax tree as the input, ignoring source positions and the order of imports ("Imports Are Sorted"), and MUST contain the same comments, with the same text and in the same order. The formatter MUST verify both on every run by parsing its own output; on any difference it MUST leave the file untouched, report an internal error (a formatter bug, which carries no catalog code), and exit with a non-zero status.
 
 #### Scenario: Every fixture and example keeps its meaning
 - **WHEN** formatting every `.prism` file under `crates/prism-cli/tests/fixtures/` and `examples/` that parses
-- **THEN** each output parses to the input's syntax tree, ignoring positions, and holds the input's comments in order
+- **THEN** each output parses to the input's syntax tree, ignoring positions and the order of imports, and holds the input's comments in order
 
 #### Scenario: Line breaks are only added where they keep the parse
 - **WHEN** formatting a statement whose expression is too long for one line, inside a block where a line break ends an expression
@@ -291,6 +291,17 @@ The formatter MUST print `attached` before each parameter type that has it, in d
 - **WHEN** formatting `fun b(o:attached ()->Unit,c:attached compose ()->Unit,r:(attached ()->Unit)->Unit){}` and `public  intrinsic capture fun<T>MutableState<T>.weak():WeakReference<MutableState<T>>`
 - **THEN** the results are `fun b(o: attached () -> Unit, c: attached compose () -> Unit, r: (attached () -> Unit) -> Unit) {}` and `public intrinsic capture fun <T> MutableState<T>.weak(): WeakReference<MutableState<T>>`
 
+### Requirement: Imports Are Sorted
+The formatter MUST print a file's imports sorted by path, a root-anchored path (`/a/b`) comparing as its text with the leading `/`, so root-anchored imports come before sibling ones, and imports of the same path keeping their order. When a comment lies between the first and the last import, the formatter MUST keep the imports in their written order.
+
+#### Scenario: Imports sorted by path
+- **WHEN** formatting `package app\nimport widgets\nimport /prism/core\nimport /app/model\nimport /prism/collections\nfun main() {}`
+- **THEN** the result is `package app\n\nimport /app/model\nimport /prism/collections\nimport /prism/core\nimport widgets\n\nfun main() {}\n`
+
+#### Scenario: Imports with comments among them are kept in order
+- **WHEN** formatting `import widgets\n// The core.\nimport /prism/core\nfun main() {}`
+- **THEN** the result is `import widgets\n// The core.\nimport /prism/core\n\nfun main() {}\n`
+
 ## Design Rationale
 
 Decisions from `prism-fmt` (planned autonomously on 2026-10-17, reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):
@@ -328,3 +339,7 @@ Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconcil
 Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
 
 - **`intrinsic var` prints as `intrinsic val` does** (D4), with `var` in place of `val`.
+
+Decisions from `explicit-library` (planned and implemented on 2026-10-20, and logged in `docs/decisions-for-review.md`):
+
+- **Imports are sorted** (D9). Explicit imports multiply (a UI file imports up to five library modules), and an order that depends on who added which import first churns diffs, so the formatter sorts a file's imports by path text, a root-anchored path with its leading `/`, which puts root-anchored imports before sibling ones and library imports among the root-anchored ones; a stable sort keeps duplicates in order. Imports have no order to preserve: `E4012` and the Phase 1 binder treat them as a set, and only the check key hashes them in order. A comment from the first import to the end of the last import's line keeps the written order, so no comment moves relative to code; the verifier compares imports as sorted lists. Rejected: the written order, blank-line groups (library, root-anchored, sibling), and moving comments with their import.
