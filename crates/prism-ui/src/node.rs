@@ -113,16 +113,14 @@ impl Drop for OwnedText {
 }
 
 /// One element of a node's chain, with the bounds at its position, relative to the node,
-/// which layout records for drawing and input elements (D11), and, for a layout element, what
-/// its measurement step last gave (D1 and D6 of `layout-in-prism`).
+/// which layout records for drawing and input elements (D11). A layout element records no
+/// bounds, so it keeps there what its measurement step last gave instead (D1 and D6 of
+/// `layout-in-prism`): where it placed the rest of the chain, from its own top-left corner, as
+/// `x` and `y`, and the size of the chain from it as `width` and `height`.
 #[derive(Debug, Clone, Copy)]
 pub struct ChainEntry {
     pub element: Element,
     pub bounds: Rect,
-    /// A step's last size: the size of the chain from this element.
-    pub step_size: Size,
-    /// Where a step last placed the rest of the chain, from its own top-left corner.
-    pub step_offset: (i64, i64),
 }
 
 impl ChainEntry {
@@ -130,8 +128,6 @@ impl ChainEntry {
         ChainEntry {
             element,
             bounds: Rect::ZERO,
-            step_size: Size::ZERO,
-            step_offset: (0, 0),
         }
     }
 }

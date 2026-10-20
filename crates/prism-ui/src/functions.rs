@@ -155,6 +155,13 @@ pub static UI_FUNCTIONS: &[RuntimeFunction] = &[
         never_returns: false,
     },
     RuntimeFunction {
+        name: "prism_ui_layout_rest",
+        address: address(prism_ui_layout_rest as *const ()),
+        parameters: &[I64, I64, I64, I64, I64, I64],
+        result: None,
+        never_returns: false,
+    },
+    RuntimeFunction {
         name: "prism_ui_place",
         address: address(prism_ui_place as *const ()),
         parameters: &[I64, I64, I64, I64, I64, I64],

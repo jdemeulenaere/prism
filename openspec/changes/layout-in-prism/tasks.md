@@ -78,11 +78,11 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement la
 
 ## 6. Examples, timing and documents (D9, D11)
 
-- [ ] 6.1 Use `offset` and `Modifier.layout` in `examples/demo/ui/ui.prism`. Re-bless `touring-the-toolkit.stdout.snap` and read the diff: only the new elements and the nodes they move may change.
+- [x] 6.1 Use `offset` and `Modifier.layout` in `examples/demo/ui/ui.prism`. Re-bless `touring-the-toolkit.stdout.snap` and read the diff: only the new elements and the nodes they move may change.
   - Run `prism fmt --check examples/`, `prism check` on every file under `examples/`, `prism run --check-allocations examples/run/main.prism`, and each UI entry with `--check-allocations --headless`, as `openspec/config.yaml` lists.
 - [ ] 6.2 Make sure `app_frame_timing.rs`'s header table and targets still hold `layout-primitive`'s resize target.
 - [ ] 6.3 On an idle machine and a release build, re-run task 1.2's measurements and `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture`. Record them in `design.md` against the baseline and check D9's budgets. Investigate a miss before going on.
-- [ ] 6.4 Documents.
+- [x] 6.4 Documents.
   - Tick items 11b and 11 of "After Milestone 2: the review round" in `ROADMAP.md`.
   - Mark A4 done in `docs/milestone-2-review-notes.md`, naming both layout changes.
   - Replace any remaining mention of native layout modifiers in `docs/architecture.md`.

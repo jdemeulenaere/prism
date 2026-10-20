@@ -78,10 +78,10 @@ window 640x800
       box #77 16,454 200x44 width(200) border(1 #FF888888)
         layout #78 16,454 152x44
           text #79 16,454 48x20 "layout"
-          text #80 68,454 56x20 "measure"
+          text #80 68,454 56x20 "measure" offset(0,2)
           text #81 128,454 40x20 "place"
           text #82 16,478 88x20 "constraints"
-          text #83 108,478 48x20 "policy"
+          text #83 108,478 52x20 "policy" layout
       row #84 16,510 608x24 fillMaxWidth height(24)
         box #85 16,510 202x24 weight(1.0) fillMaxHeight background(#FFE8DEF8)
         column #86 218,510 72x24 weight(2.0 nofill)
@@ -161,10 +161,10 @@ rect 244,406 12x12 #FF0000FF radius 6
 border 244,406 12x12 width 1 #FF444444 radius 6
 border 16,454 200x44 width 1 #FF888888
 text 16,454 size 16 #FF000000 "layout"
-text 68,454 size 16 #FF000000 "measure"
+text 68,456 size 16 #FF000000 "measure"
 text 128,454 size 16 #FF000000 "place"
 text 16,478 size 16 #FF000000 "constraints"
-text 108,478 size 16 #FF000000 "policy"
+text 112,478 size 16 #FF000000 "policy"
 rect 16,510 202x24 #FFE8DEF8
 rect 218,510 72x24 #FFCCCCCC
 text 222,512 size 16 #FF000000 "weighted"

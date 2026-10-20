@@ -598,107 +598,156 @@ public fun Modifier.layout(
 // `/prism/compose/layout` with the modifiers that make the elements, since one function must
 // see every variant.
 package fun MeasureScope.measureElement(
-    element: &ModifierElement,
+    layoutElement: &ModifierElement,
     measurable: Measurable,
     constraints: Constraints,
-): MeasureResult = when (element) {
+): MeasureResult = when (layoutElement) {
     ModifierElement.Padding(val start, val top, val end, val bottom) -> {
+        // `constraints.offset(-horizontal, -vertical)`, then the rest's size plus the padding
+        // clamped into the constraints, written out: each call is a call through the function
+        // table in Tier 1 code, and a step runs for every padding of every measured node.
         val horizontal = start + end
         val vertical = top + bottom
+        val minWidth = if (constraints.minWidth > horizontal) {
+            constraints.minWidth - horizontal
+        } else {
+            0
+        }
+        val minHeight = if (constraints.minHeight > vertical) {
+            constraints.minHeight - vertical
+        } else {
+            0
+        }
+        val infinity = Constraints.Infinity
+        val maxWidth = if (constraints.maxWidth == infinity) {
+            infinity
+        } else if (constraints.maxWidth > horizontal) {
+            constraints.maxWidth - horizontal
+        } else {
+            0
+        }
+        val maxHeight = if (constraints.maxHeight == infinity) {
+            infinity
+        } else if (constraints.maxHeight > vertical) {
+            constraints.maxHeight - vertical
+        } else {
+            0
+        }
         val rest = prism_ui_measure(
             measurable.node,
             measurable.element,
-            constraints.offset(-horizontal, -vertical),
+            Constraints(minWidth, maxWidth, minHeight, maxHeight),
         )
-        placeRest(
-            rest,
-            constraints.constrainWidth(rest.width + horizontal),
-            constraints.constrainHeight(rest.height + vertical),
-            start,
-            top,
-        )
+        var width = rest.width + horizontal
+        if (width > constraints.maxWidth) {
+            width = constraints.maxWidth
+        }
+        if (width < constraints.minWidth) {
+            width = constraints.minWidth
+        }
+        var height = rest.height + vertical
+        if (height > constraints.maxHeight) {
+            height = constraints.maxHeight
+        }
+        if (height < constraints.minHeight) {
+            height = constraints.minHeight
+        }
+        prism_ui_layout_rest(node, element, width, height, start, top)
+        MeasureResult(width, height, node, element)
     }
     ModifierElement.Size(val width, val height) -> {
-        val exactWidth = constraints.constrainWidth(width)
-        val exactHeight = constraints.constrainHeight(height)
+        // Each set axis exact at its size clamped into the constraints.
+        var minWidth = constraints.minWidth
+        var maxWidth = constraints.maxWidth
+        if (width != -1) {
+            minWidth = if (width < constraints.minWidth) {
+                constraints.minWidth
+            } else if (width > constraints.maxWidth) {
+                constraints.maxWidth
+            } else {
+                width
+            }
+            maxWidth = minWidth
+        }
+        var minHeight = constraints.minHeight
+        var maxHeight = constraints.maxHeight
+        if (height != -1) {
+            minHeight = if (height < constraints.minHeight) {
+                constraints.minHeight
+            } else if (height > constraints.maxHeight) {
+                constraints.maxHeight
+            } else {
+                height
+            }
+            maxHeight = minHeight
+        }
         val rest = prism_ui_measure(
             measurable.node,
             measurable.element,
-            Constraints(
-                if (width == -1) constraints.minWidth else exactWidth,
-                if (width == -1) constraints.maxWidth else exactWidth,
-                if (height == -1) constraints.minHeight else exactHeight,
-                if (height == -1) constraints.maxHeight else exactHeight,
-            ),
+            Constraints(minWidth, maxWidth, minHeight, maxHeight),
         )
-        placeRest(rest, rest.width, rest.height, 0, 0)
+        prism_ui_layout_rest(node, element, rest.width, rest.height, 0, 0)
+        MeasureResult(rest.width, rest.height, node, element)
     }
     ModifierElement.DefaultMinSize(val width, val height) -> {
+        // A minimum of 0 raised to each specified size, at most the maximum.
+        var minWidth = constraints.minWidth
+        if (minWidth == 0 && width >= 0) {
+            minWidth = if (width < constraints.maxWidth) width else constraints.maxWidth
+        }
+        var minHeight = constraints.minHeight
+        if (minHeight == 0 && height >= 0) {
+            minHeight = if (height < constraints.maxHeight) height else constraints.maxHeight
+        }
         val rest = prism_ui_measure(
             measurable.node,
             measurable.element,
-            Constraints(
-                raisedMinimum(constraints.minWidth, width, constraints.maxWidth),
-                constraints.maxWidth,
-                raisedMinimum(constraints.minHeight, height, constraints.maxHeight),
-                constraints.maxHeight,
-            ),
+            Constraints(minWidth, constraints.maxWidth, minHeight, constraints.maxHeight),
         )
-        placeRest(rest, rest.width, rest.height, 0, 0)
+        prism_ui_layout_rest(node, element, rest.width, rest.height, 0, 0)
+        MeasureResult(rest.width, rest.height, node, element)
     }
     ModifierElement.FillMax(val width, val height, val fraction) -> {
-        val fillWidth = width && constraints.maxWidth != Constraints.Infinity
-        val fillHeight = height && constraints.maxHeight != Constraints.Infinity
-        val exactWidth = constraints.constrainWidth(
-            (constraints.maxWidth.toDouble() * fraction).toInt(),
-        )
-        val exactHeight = constraints.constrainHeight(
-            (constraints.maxHeight.toDouble() * fraction).toInt(),
-        )
-        val rest = prism_ui_measure(
-            measurable.node,
-            measurable.element,
-            Constraints(
-                if (fillWidth) exactWidth else constraints.minWidth,
-                if (fillWidth) exactWidth else constraints.maxWidth,
-                if (fillHeight) exactHeight else constraints.minHeight,
-                if (fillHeight) exactHeight else constraints.maxHeight,
-            ),
-        )
-        placeRest(rest, rest.width, rest.height, 0, 0)
+        // Each bounded axis exact at the fraction of its maximum, clamped into the constraints.
+        var exact = constraints
+        if (width && constraints.maxWidth != Constraints.Infinity) {
+            val share = constraints.constrainWidth(
+                (constraints.maxWidth.toDouble() * fraction).toInt(),
+            )
+            exact = Constraints(share, share, exact.minHeight, exact.maxHeight)
+        }
+        if (height && constraints.maxHeight != Constraints.Infinity) {
+            val share = constraints.constrainHeight(
+                (constraints.maxHeight.toDouble() * fraction).toInt(),
+            )
+            exact = Constraints(exact.minWidth, exact.maxWidth, share, share)
+        }
+        val rest = prism_ui_measure(measurable.node, measurable.element, exact)
+        prism_ui_layout_rest(node, element, rest.width, rest.height, 0, 0)
+        MeasureResult(rest.width, rest.height, node, element)
     }
     ModifierElement.Offset(val x, val y) -> {
         val rest = prism_ui_measure(measurable.node, measurable.element, constraints)
-        placeRest(rest, rest.width, rest.height, x, y)
+        prism_ui_layout_rest(node, element, rest.width, rest.height, x, y)
+        MeasureResult(rest.width, rest.height, node, element)
     }
     else -> {
         val rest = prism_ui_measure(measurable.node, measurable.element, constraints)
-        placeRest(rest, rest.width, rest.height, 0, 0)
+        prism_ui_layout_rest(node, element, rest.width, rest.height, 0, 0)
+        MeasureResult(rest.width, rest.height, node, element)
     }
 }
 
-// `minimum` raised to `value`, at most `maximum`, when it is 0 and `value` is specified (not
-// negative): `defaultMinSize`'s rule.
-private fun raisedMinimum(minimum: Int, value: Int, maximum: Int): Int {
-    if (minimum != 0 || value < 0) {
-        return minimum
-    }
-    return if (value < maximum) value else maximum
-}
-
-// A step's `layout(width, height) { rest.place(x, y) }`, through the runtime's entry points.
-private fun MeasureScope.placeRest(
-    rest: Placeable,
+// A step's `layout(width, height) { rest.place(x, y) }` in one call: gives the chain from the
+// step at `element` of `node` its size and places the rest of the chain at `(x, y)`.
+private external fun prism_ui_layout_rest(
+    node: Int,
+    element: Int,
     width: Int,
     height: Int,
     x: Int,
     y: Int,
-): MeasureResult {
-    prism_ui_begin_placement(node, element, width, height)
-    prism_ui_place(node, element, rest.node, rest.element, x, y)
-    prism_ui_end_placement(node, element)
-    return MeasureResult(width, height, node, element)
-}
+)
 
 // A child's data for the toolkit's layouts: the first `weight` of its chain (0.0 for none)
 // with its `fill`, and the code of its first `align` (-1 for none).

@@ -358,8 +358,13 @@ fn or_raise<T>(result: UiResult<T>) -> T {
 /// Measures the chain of a node from `position` under `c`: the step there, which measures the
 /// rest, or past the last step the content. Gives the size of the chain from `position`.
 fn measure_from(position: Position, c: Constraints) -> Size {
-    let id = position.node;
-    match or_raise(with_state(|state| next_from(state, position, c))) {
+    let next = or_raise(with_state(|state| next_from(state, position, c)));
+    take_next(position.node, c, next)
+}
+
+/// Measures the chain of `id` from what [`next_from`] found under `c`, and gives its size.
+fn take_next(id: NodeId, c: Constraints, next: Next) -> Size {
+    match next {
         Next::Done(size) => size,
         Next::Window => measure_window(id),
         Next::Policy(call) => {
@@ -538,8 +543,8 @@ fn end_step(state: &mut State, scope: Position, c: Constraints) -> UiResult<Size
     }
     let size = c.constrain(frame.size).bounded();
     let entry = &mut state.tree.node_mut(scope.node).unwrap().chain[scope.element];
-    entry.step_size = size;
-    entry.step_offset = frame.origin;
+    // A step records no bounds: its entry keeps its offset and size (D6).
+    entry.bounds = Rect::new(frame.origin.0, frame.origin.1, size.width, size.height);
     Ok(size)
 }
 
@@ -550,23 +555,24 @@ fn end_step(state: &mut State, scope: Position, c: Constraints) -> UiResult<Size
 fn finish(state: &mut State, id: NodeId, constraints: Constraints, size: Size) -> Size {
     let node = state.tree.node_mut(id).unwrap();
     let count = node.chain.len().min(CAPACITY);
-    let mut origins = [(0i64, 0i64); CAPACITY];
+    // The content's origin: the sum of the steps' offsets.
     let (mut x, mut y) = (0i64, 0i64);
-    for (index, entry) in node.chain[..count].iter().enumerate() {
-        origins[index] = (x, y);
+    for entry in &node.chain[..count] {
         if entry.element.is_step() {
-            x += entry.step_offset.0;
-            y += entry.step_offset.1;
+            x += entry.bounds.x;
+            y += entry.bounds.y;
         }
     }
+    // Back from the content: the origin and size of the chain from each position.
     let mut changed = false;
     let mut rest = Size::new(node.content.width, node.content.height);
-    for (index, entry) in node.chain[..count].iter_mut().enumerate().rev() {
+    let mut origin = (x, y);
+    for entry in node.chain[..count].iter_mut().rev() {
         if entry.element.is_step() {
-            rest = entry.step_size;
+            rest = Size::new(entry.bounds.width, entry.bounds.height);
+            origin = (origin.0 - entry.bounds.x, origin.1 - entry.bounds.y);
         } else if entry.element.records_bounds() {
-            let (x, y) = origins[index];
-            let bounds = Rect::new(x, y, rest.width, rest.height);
+            let bounds = Rect::new(origin.0, origin.1, rest.width, rest.height);
             changed |= entry.bounds != bounds;
             entry.bounds = bounds;
         }
@@ -864,8 +870,8 @@ pub fn measure_child(child: NodeId, constraints: Constraints) -> UiResult<Size> 
 enum Measured {
     /// A child of the running policy's node, from the start of its measurement.
     Child(Start),
-    /// The rest of the running step's chain.
-    Rest,
+    /// The rest of the running step's chain, from what measuring it does next.
+    Rest(Next),
 }
 
 /// `Measurable.measure(constraints)` of the measurable naming `position` (D5 of
@@ -892,7 +898,7 @@ pub fn measure_position(position: Position, constraints: Constraints) -> UiResul
                 return Err(INVALID_CONSTRAINTS);
             }
             frame.measured = 1;
-            return Ok(Measured::Rest);
+            return next_from(state, position, constraints).map(Measured::Rest);
         }
         let frame = *frame;
         let child = position.node;
@@ -912,7 +918,7 @@ pub fn measure_position(position: Position, constraints: Constraints) -> UiResul
     })?;
     Ok(match measured {
         Measured::Child(start) => complete(position.node, constraints, start),
-        Measured::Rest => measure_from(position, constraints),
+        Measured::Rest(next) => take_next(position.node, constraints, next),
     })
 }
 
@@ -989,6 +995,30 @@ pub fn place(scope: Position, placeable: Position, x: i64, y: i64) -> UiResult<(
     })
 }
 
+/// A built-in step's `layout(width, height) { rest.place(x, y) }` in one entry call (D2 of
+/// `layout-in-prism`): gives the chain from the step `scope` names its size, and places the
+/// rest of the chain, measured in the step, at `(x, y)` from the step's top-left corner.
+pub fn layout_rest(scope: Position, width: i64, height: i64, x: i64, y: i64) -> UiResult<()> {
+    with_state(|state| {
+        let frame = state.layout.frames.last_mut().ok_or(LAYOUT_OUTSIDE)?;
+        if !frame.step || frame.node != scope.node || frame.element != scope.element {
+            return Err(LAYOUT_OUTSIDE);
+        }
+        if frame.layout_called {
+            return Err(LAYOUT_TWICE);
+        }
+        if frame.measured == 0 {
+            return Err(PLACED_OUTSIDE);
+        }
+        frame.layout_called = true;
+        frame.size = Size::new(width, height);
+        // Positions stay within `MAX_EXTENT` of the step (D23).
+        frame.origin = (clamp_extent(x), clamp_extent(y));
+        frame.placed = 1;
+        Ok(())
+    })
+}
+
 /// The size and own alignment of `child`, measured in the innermost running policy: what a
 /// container's placement block reads in one call (D25).
 pub fn measured_child(child: NodeId) -> UiResult<(Size, Option<Alignment>)> {
@@ -1045,7 +1075,6 @@ pub fn absolute_bounds(tree: &crate::tree::UiTree, id: NodeId) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modifier::Element;
     use crate::properties::{Arrangement, Shape};
     use crate::test_support::*;
     use crate::text::FixedAdvanceMetrics;

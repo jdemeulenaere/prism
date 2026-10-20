@@ -1068,9 +1068,7 @@ unsafe extern "C" fn element_step(
         ),
         _ => measured,
     };
-    or_raise(layout::begin_placement(scope, size.width, size.height));
-    or_raise(layout::place(scope, rest, x, y));
-    or_raise(layout::end_placement(scope));
+    or_raise(layout::layout_rest(scope, size.width, size.height, x, y));
     write_result(result, scope, size);
 }
 

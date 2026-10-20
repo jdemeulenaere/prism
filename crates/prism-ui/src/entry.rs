@@ -239,6 +239,25 @@ pub extern "C" fn prism_ui_place(
     ))
 }
 
+/// A built-in step's `layout(width, height) { rest.place(x, y) }`, in one call.
+#[no_mangle]
+pub extern "C" fn prism_ui_layout_rest(
+    node: u64,
+    element: u64,
+    width: i64,
+    height: i64,
+    x: i64,
+    y: i64,
+) {
+    or_raise(layout::layout_rest(
+        Position::of_words(node, element),
+        width,
+        height,
+        x,
+        y,
+    ))
+}
+
 /// A row's or column's arrangement and alignment, as its policy reads them in one call.
 ///
 /// # Safety

@@ -201,15 +201,23 @@ compose fun FlowRow(spacing: Int, content: compose () -> Unit) {
     }
 }
 
-// Tags in a flow row, wrapping inside a fixed width.
+// Tags in a flow row, wrapping inside a fixed width: one drawn a little lower by `offset`, which
+// moves it without changing its size, and one given a left margin by a layout modifier of its
+// own, as Compose's `Modifier.layout`.
 compose fun Tags() {
     Box(Modifier.width(200.dp).border(1.dp, Color.Gray)) {
         FlowRow(spacing = 4) {
             Text("layout")
-            Text("measure")
+            Text("measure", modifier = Modifier.offset(y = 2.dp))
             Text("place")
             Text("constraints")
-            Text("policy")
+            Text(
+                "policy",
+                modifier = Modifier.layout { measurable, constraints ->
+                    val placeable = measurable.measure(constraints.offset(horizontal = -4))
+                    layout(placeable.width + 4, placeable.height) { placeable.place(4, 0) }
+                },
+            )
         }
     }
 }

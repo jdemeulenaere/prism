@@ -30,8 +30,10 @@
 //! The resize session lays out the 1,000-item app in full at every frame, about 7,000 nodes,
 //! every container through its measure policy written in Prism (`layout-primitive` D18), and
 //! prints its `layout` median against the native layout's, measured before that change on the
-//! machine that set the budget ([`NATIVE_RESIZE_LAYOUT`]), which it should stay within three
-//! times of.
+//! machine that set the budget ([`NATIVE_RESIZE_LAYOUT`]). Since `layout-in-prism`, every
+//! layout modifier is a measurement step written in Prism too, so the session also prints its
+//! median against the one measured just before that change ([`POLICIES_RESIZE_LAYOUT`]), which
+//! it should stay within 1.5 times of (`layout-in-prism` D9); the 4 ms p99 target is unchanged.
 //!
 //! The todo inputs are paced 100 ms apart, as a person's (D15 and D16 of `strong-skipping`): the
 //! same work takes longer on a core that clocked down while the program slept, which is what a
@@ -46,6 +48,10 @@ const FIRST_FRAME_RUNS: usize = 20;
 /// The `layout` median of the resize session with the native layout pass, in milliseconds, on
 /// the M4 Pro that measured `layout-primitive`'s baseline (D18).
 const NATIVE_RESIZE_LAYOUT: f64 = 0.177;
+
+/// The `layout` median of the resize session with the policies in Prism and the layout
+/// modifiers native, in milliseconds, on the same machine, before `layout-in-prism` (D9).
+const POLICIES_RESIZE_LAYOUT: f64 = 0.528;
 
 /// The `examples/` workspace.
 fn examples() -> PathBuf {
@@ -295,11 +301,15 @@ fn the_example_apps_meet_their_frame_budgets() {
     todo_idle.print("todo of 1,000 items, a click on empty space then frame");
     let resizing = Measurement::take("apps/todo/large.prism", &resizes, warm);
     resizing.print("todo of 1,000 items, resized between 800 and 801 wide, frame after each");
+    let resize_layout = resizing.median_of_medians("layout");
     println!(
-        "  resize layout median {:.3} ms, {:.2} x the native layout's {:.3} ms (budget 3 x)",
-        resizing.median_of_medians("layout"),
-        resizing.median_of_medians("layout") / NATIVE_RESIZE_LAYOUT,
-        NATIVE_RESIZE_LAYOUT
+        "  resize layout median {:.3} ms, {:.2} x the native layout's {:.3} ms, {:.2} x the native \
+         layout modifiers' {:.3} ms (budget 1.5 x)",
+        resize_layout,
+        resize_layout / NATIVE_RESIZE_LAYOUT,
+        NATIVE_RESIZE_LAYOUT,
+        resize_layout / POLICIES_RESIZE_LAYOUT,
+        POLICIES_RESIZE_LAYOUT
     );
 
     let first_frames = |cache: &std::ffi::OsStr| {
