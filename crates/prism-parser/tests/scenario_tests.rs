@@ -1583,7 +1583,7 @@ fn library_declarations_parse() {
 #[test]
 fn intrinsic_properties_parse() {
     let file = parse(
-        "public intrinsic val String.length: Int\npublic intrinsic val <T> List<T>.indices: Range\n",
+        "public intrinsic val String.length: Int\npublic intrinsic val <T> List<T>.size: Int\n",
     );
     let shapes: Vec<(String, String, String, usize)> = file
         .declarations
@@ -1602,7 +1602,7 @@ fn intrinsic_properties_parse() {
         shapes,
         vec![
             ("String".into(), "length".into(), "Int".into(), 0),
-            ("List<T>".into(), "indices".into(), "Range".into(), 1),
+            ("List<T>".into(), "size".into(), "Int".into(), 1),
         ]
     );
 }
@@ -1873,4 +1873,123 @@ fn an_empty_index_list_rejected() {
     let error = parse_source(src).expect_err(src);
     assert_eq!(error.code, "E2001");
     assert_eq!(error.span.start, src.len() - 1);
+}
+
+/// syntax: "Extension property getters parse".
+#[test]
+fn extension_property_getters_parse() {
+    let file = parse(concat!(
+        "public val Int.dp: Dp get() = Dp(this)\n",
+        "val <T> List<T>.second: &T\n",
+        "    get() = &this[1]\n",
+        "private val Box.area: Int get() { return w * h }\n",
+    ));
+    let shapes: Vec<(Visibility, usize, String, String, String, bool, bool)> = file
+        .declarations
+        .iter()
+        .map(|d| match d {
+            Declaration::ExtensionProperty(p) => (
+                p.visibility,
+                p.type_parameters.len(),
+                p.receiver.to_string(),
+                p.name.clone(),
+                p.ty.to_string(),
+                p.is_intrinsic(),
+                matches!(
+                    p.getter.as_ref().expect("a getter").body,
+                    FunctionBody::Expr(_)
+                ),
+            ),
+            _ => panic!("expected properties"),
+        })
+        .collect();
+    assert_eq!(
+        shapes,
+        vec![
+            (
+                Visibility::Public,
+                0,
+                "Int".into(),
+                "dp".into(),
+                "Dp".into(),
+                false,
+                true
+            ),
+            (
+                Visibility::Private,
+                1,
+                "List<T>".into(),
+                "second".into(),
+                "&T".into(),
+                false,
+                true
+            ),
+            (
+                Visibility::Private,
+                0,
+                "Box".into(),
+                "area".into(),
+                "Int".into(),
+                false,
+                false
+            ),
+        ]
+    );
+}
+
+/// syntax: "Extension property getters parse": the getter on the line after the type, after
+/// several line breaks, and a declaration following the getter on its own line.
+#[test]
+fn extension_property_getters_on_later_lines() {
+    let file = parse("val Int.twice: Int\n\n\n    get() = this * 2\nfun f(): Int = 1.twice\n");
+    assert_eq!(file.declarations.len(), 2);
+    let Declaration::ExtensionProperty(property) = &file.declarations[0] else {
+        panic!("expected a property");
+    };
+    let Some(Getter {
+        body: FunctionBody::Expr(body),
+        ..
+    }) = &property.getter
+    else {
+        panic!("expected an expression getter");
+    };
+    assert_eq!(body.to_string(), "(this * 2)");
+    let file = parse("val Int.twice: Int get() {\n    return this * 2\n}\nval x = 1\n");
+    assert_eq!(file.declarations.len(), 2);
+}
+
+/// syntax: "get as an identifier".
+#[test]
+fn get_as_an_identifier() {
+    let file = parse(concat!(
+        "fun get(get: Int): Int = get\n",
+        "val get = 1\n",
+        "fun f(b: Bag) { b.get(0); val x = get }\n",
+        "struct S { val get: Int }\n",
+    ));
+    assert_eq!(file.declarations.len(), 4);
+}
+
+/// syntax: "Extension properties without a getter rejected".
+#[test]
+fn extension_properties_without_a_getter_rejected() {
+    for (source, needle) in [
+        ("val String.twice: Int\nfun f() {}\n", "needs a getter"),
+        ("val Int.half: Int = 2\n", "get() = 2"),
+        ("var Int.twice: Int get() = 2\n", "read-only"),
+        ("compose val Int.x: Int get() = 1\n", "compose"),
+        (
+            "val <T, R> List<T>.other: Int get() = 0\n",
+            "'R' does not occur in the receiver type",
+        ),
+    ] {
+        let error = prism_parser::parse_source(source).expect_err(source);
+        assert_eq!(error.code, "E2001", "{}", source);
+        assert!(
+            error.message.contains(needle),
+            "{}: {}",
+            source,
+            error.message
+        );
+    }
 }

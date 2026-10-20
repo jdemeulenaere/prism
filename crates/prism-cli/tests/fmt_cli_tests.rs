@@ -286,3 +286,33 @@ fn intrinsic_structs_formatted() {
         "public intrinsic struct RecomposeScope : Copy\n"
     );
 }
+
+/// formatting: "Getters formatted".
+#[test]
+fn getters_formatted() {
+    let output = prism_with_input(
+        &["fmt", "-"],
+        "public  val   Int.dp :Dp\n  get( )=Dp( this )\nval <T> List<T>.someVeryLongPropertyName: Range get() = computeTheRangeOfThisListFromItsElements(this, 0)\n",
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "public val Int.dp: Dp get() = Dp(this)\n\nval <T> List<T>.someVeryLongPropertyName: Range\n    get() = computeTheRangeOfThisListFromItsElements(this, 0)\n"
+    );
+    // Formatting the result again changes nothing.
+    let again = prism_with_input(&["fmt", "-"], &stdout(&output));
+    assert_eq!(stdout(&again), stdout(&output));
+}
+
+/// formatting: "A getter with a block formatted".
+#[test]
+fn a_getter_with_a_block_formatted() {
+    let output = prism_with_input(&["fmt", "-"], "val Box.area:Int get(){ return w*h }\n");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "val Box.area: Int get() {\n    return w * h\n}\n"
+    );
+    let again = prism_with_input(&["fmt", "-"], &stdout(&output));
+    assert_eq!(stdout(&again), stdout(&output));
+}

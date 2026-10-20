@@ -135,10 +135,19 @@ fn erase_declaration(declaration: &mut Declaration) {
         }
         Declaration::ExtensionProperty(property) => {
             erase(&mut property.span);
-            erase(&mut property.library.span);
+            if let Some(library) = &mut property.library {
+                erase(&mut library.span);
+            }
             erase_type_parameters(&mut property.type_parameters);
             erase_type(&mut property.receiver);
             erase_type(&mut property.ty);
+            if let Some(getter) = &mut property.getter {
+                erase(&mut getter.span);
+                match &mut getter.body {
+                    FunctionBody::Block(block) => erase_block(block),
+                    FunctionBody::Expr(expression) => erase_expression(expression),
+                }
+            }
         }
     }
 }

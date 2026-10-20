@@ -1,0 +1,2 @@
+// expect: E2001
+intrinsic val String.b: Int get() = 1

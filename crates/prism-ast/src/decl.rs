@@ -308,14 +308,15 @@ pub struct TopLevelVarDecl {
     pub span: Span,
 }
 
-/// An intrinsic extension property, `intrinsic val <T> List<T>.size: Int` (D6 of
-/// `standard-library`): read without parentheses, typed by its declaration and lowered by the
-/// compiler. Only the bundled library declares them, and only `intrinsic`.
+/// An extension property: `intrinsic val <T> List<T>.size: Int` of the bundled library, typed
+/// by its declaration and lowered by the compiler (D6 of `standard-library`), or a read-only
+/// property with a getter, `val Int.dp: Dp get() = Dp(this)`, in any file (D5 of
+/// `core-library-in-prism`). Both are read without parentheses.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExtensionPropertyDecl {
     pub visibility: Visibility,
-    /// The `intrinsic` modifier.
-    pub library: LibraryModifier,
+    /// The `intrinsic` modifier; `None` for a property with a getter.
+    pub library: Option<LibraryModifier>,
     pub type_parameters: Vec<TypeParameter>,
     /// The receiver type (`List<T>`).
     pub receiver: Type,
@@ -324,6 +325,17 @@ pub struct ExtensionPropertyDecl {
     /// Whether it is declared `intrinsic var`, which can also be assigned (D4 of
     /// `state-handles`), rather than `intrinsic val`.
     pub writable: bool,
+    /// The getter, `get() = expression` or `get() { ... }`; `None` exactly for an intrinsic
+    /// property.
+    pub getter: Option<Getter>,
+    pub span: Span,
+}
+
+/// The getter of an extension property: its body, an expression or a block, and the span of
+/// its `get` keyword.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Getter {
+    pub body: FunctionBody,
     pub span: Span,
 }
 
@@ -335,6 +347,38 @@ impl ExtensionPropertyDecl {
         } else {
             "val"
         }
+    }
+
+    /// Whether the property is `intrinsic`.
+    pub fn is_intrinsic(&self) -> bool {
+        self.library.is_some()
+    }
+
+    /// The getter as the extension function it is checked and compiled as (D6 of
+    /// `core-library-in-prism`): a function named like the property, with a shared receiver of
+    /// the receiver type, the property's type parameters, no parameters and the property's
+    /// type as its result, spanning the whole declaration. `None` for an intrinsic property.
+    pub fn getter_function(&self) -> Option<FunctionDecl> {
+        let getter = self.getter.as_ref()?;
+        Some(FunctionDecl {
+            context: None,
+            visibility: self.visibility,
+            is_compose: false,
+            is_capture: false,
+            is_operator: false,
+            receiver: Some(Box::new(Receiver {
+                ty: self.receiver.clone(),
+                mode: ReceiverMode::Shared,
+                span: self.receiver.span,
+            })),
+            name: self.name.clone(),
+            type_parameters: self.type_parameters.clone(),
+            params: Vec::new(),
+            return_type: Some(self.ty.clone()),
+            body: Some(getter.body.clone()),
+            library: None,
+            span: self.span,
+        })
     }
 }
 
@@ -383,7 +427,7 @@ impl Declaration {
     pub fn library_modifier(&self) -> Option<LibraryModifier> {
         match self {
             Declaration::Function(f) => f.library,
-            Declaration::ExtensionProperty(p) => Some(p.library),
+            Declaration::ExtensionProperty(p) => p.library,
             Declaration::Struct(s) => s.intrinsic,
             Declaration::Enum(_) | Declaration::Var(_) => None,
         }

@@ -1,4 +1,4 @@
 // expect: E3002
 public intrinsic val String.length: Int
 
-public intrinsic val <T> List<T>.indices: Range
+public intrinsic val <T> List<T>.size: Int

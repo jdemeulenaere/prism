@@ -118,11 +118,10 @@ impl<'a> Printer<'a> {
             }
             Declaration::ExtensionProperty(property) => {
                 let mut parts = vec![self.visibility(property.visibility, property.span)];
-                parts.push(text(format!(
-                    "{} {} ",
-                    property.library.kind.as_str(),
-                    property.keyword()
-                )));
+                if let Some(library) = property.library {
+                    parts.push(text(format!("{} ", library.kind.as_str())));
+                }
+                parts.push(text(format!("{} ", property.keyword())));
                 if !property.type_parameters.is_empty() {
                     parts.push(self.type_parameters(&property.type_parameters));
                     parts.push(text(" "));
@@ -130,6 +129,29 @@ impl<'a> Printer<'a> {
                 parts.push(self.ty(&property.receiver));
                 parts.push(text(format!(".{}: ", property.name)));
                 parts.push(self.ty(&property.ty));
+                // The getter (D13 of `core-library-in-prism`): an expression getter on the
+                // header's line when the declaration fits, else on the next line, indented one
+                // level, as Kotlin writes it; a block getter on the header's line.
+                if let Some(getter) = &property.getter {
+                    let comments = self.comments_before(getter.span.start);
+                    match &getter.body {
+                        FunctionBody::Expr(body) => {
+                            let body = self.expression(body);
+                            parts.push(group(indent(concat(vec![
+                                line(),
+                                comments,
+                                text("get() = "),
+                                body,
+                            ]))));
+                        }
+                        FunctionBody::Block(block) => {
+                            parts.push(text(" "));
+                            parts.push(comments);
+                            parts.push(text("get() "));
+                            parts.push(self.block(block));
+                        }
+                    }
+                }
                 concat(parts)
             }
         }

@@ -1,0 +1,13 @@
+// expect: ok
+public struct Dp : Copy { val value: Int }
+
+struct Box : Copy { val w: Int, val h: Int }
+
+public val Int.dp: Dp get() = Dp(this)
+
+val <T> List<T>.second: &T
+    get() = &this[1]
+
+private val Box.area: Int get() {
+    return w * h
+}

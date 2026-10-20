@@ -2658,7 +2658,9 @@ impl TypeChecker {
                 Declaration::Function(f) if f.receiver.is_some() && f.is_intrinsic() => {
                     self.register_intrinsic_extension(f);
                 }
-                Declaration::ExtensionProperty(p) => self.register_intrinsic_property(p),
+                Declaration::ExtensionProperty(p) if p.is_intrinsic() => {
+                    self.register_intrinsic_property(p)
+                }
                 _ => {}
             }
         }

@@ -1,0 +1,13 @@
+// expect: ok
+struct Bag { val n: Int }
+
+struct S { val get: Int }
+
+fun Bag.get(i: Int): Int = n + i
+
+fun get(get: Int): Int = get
+
+fun f(b: Bag) {
+    b.get(0)
+    val x = get(1)
+}

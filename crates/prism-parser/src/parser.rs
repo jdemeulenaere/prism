@@ -499,12 +499,19 @@ impl Parser {
             }
         }
 
+        // An extension property with a getter (`val Int.dp: Dp get() = Dp(this)`, D5 of
+        // `core-library-in-prism`): `val` or `var` followed by type parameters or a receiver.
+        if library.is_none() && !is_compose && mode.is_none() && self.at_extension_property() {
+            let property = self.parse_extension_property(visibility, None, start_span)?;
+            return Ok(Declaration::ExtensionProperty(property));
+        }
         if let Some(modifier) = library {
             if matches!(self.peek_kind(), TokenKind::Val | TokenKind::Var)
                 && !is_compose
                 && mode.is_none()
             {
-                let property = self.parse_extension_property(visibility, modifier, start_span)?;
+                let property =
+                    self.parse_extension_property(visibility, Some(modifier), start_span)?;
                 return Ok(Declaration::ExtensionProperty(property));
             }
             if self.peek_kind() == &TokenKind::Struct && !is_compose && mode.is_none() {
@@ -985,22 +992,53 @@ impl Parser {
         Ok(Some(LibraryModifier { kind, span }))
     }
 
-    /// An intrinsic extension property from `val` or `var` on: `val <T> List<T>.size: Int`,
-    /// with no initializer (D6 of `standard-library`); `var` declares a writable one (D4 of
-    /// `state-handles`).
+    /// Whether the cursor is at `val` or `var` starting an extension property: followed by a
+    /// type parameter list, or by a name and then `.` or a type argument list.
+    fn at_extension_property(&self) -> bool {
+        matches!(self.peek_kind(), TokenKind::Val | TokenKind::Var)
+            && match self.peek_ahead(1) {
+                TokenKind::Lt => true,
+                TokenKind::Ident(_) => matches!(self.peek_ahead(2), TokenKind::Dot | TokenKind::Lt),
+                _ => false,
+            }
+    }
+
+    /// An extension property from `val` or `var` on: `val <T> List<T>.size: Int`. An
+    /// `intrinsic` one (`library`) has no initializer and no getter (D6 of `standard-library`),
+    /// and `var` declares a writable one (D4 of `state-handles`). Any other one is read-only and
+    /// has a getter after its type, on the same line or the next, `get() = expression` or
+    /// `get() { ... }`, where `get` is a keyword at that position only (D5 of
+    /// `core-library-in-prism`). Every type parameter must occur in the receiver type, so a
+    /// read solves them from the receiver alone.
     fn parse_extension_property(
         &mut self,
         visibility: Visibility,
-        library: LibraryModifier,
+        library: Option<LibraryModifier>,
         start_span: Span,
     ) -> Result<ExtensionPropertyDecl, ParseError> {
-        let writable = self.bump().kind == TokenKind::Var;
-        if library.kind == LibraryKind::External {
+        let keyword = self.bump();
+        let writable = keyword.kind == TokenKind::Var;
+        if let Some(LibraryModifier {
+            kind: LibraryKind::External,
+            span,
+        }) = library
+        {
             return Err(ParseError::new(
                 "An external declaration is a function: 'external fun name(...)'; properties are 'intrinsic val'",
-                library.span,
+                span,
             ));
         }
+        if writable && library.is_none() {
+            return Err(ParseError::new(
+                "An extension property is read-only: declare it with 'val' and a getter, as in 'val Int.twice: Int get() = this * 2'",
+                keyword.span,
+            ));
+        }
+        let what = if library.is_some() {
+            "an intrinsic property"
+        } else {
+            "an extension property"
+        };
         let type_parameters = if self.peek_kind() == &TokenKind::Lt {
             self.parse_type_parameter_list(true)?
         } else {
@@ -1018,7 +1056,10 @@ impl Parser {
                 }
                 None => {
                     return Err(ParseError::new(
-                        "Expected '.' and the property name after the receiver type of an intrinsic property",
+                        format!(
+                            "Expected '.' and the property name after the receiver type of {}",
+                            what
+                        ),
                         lt_span,
                     ))
                 }
@@ -1026,7 +1067,15 @@ impl Parser {
         }
         if self.peek_kind() != &TokenKind::Dot {
             return Err(ParseError::new(
-                "An intrinsic property has a receiver, as in 'intrinsic val String.length: Int'",
+                format!(
+                    "{} has a receiver, as in '{}'",
+                    capitalized(what),
+                    if library.is_some() {
+                        "intrinsic val String.length: Int"
+                    } else {
+                        "val Int.twice: Int get() = this * 2"
+                    }
+                ),
                 self.peek().span,
             ));
         }
@@ -1037,24 +1086,115 @@ impl Parser {
             Type::generic(receiver_name, receiver_arguments, receiver_span)
         };
         self.bump(); // '.'
-        let (name, _) = self.expect_ident()?;
-        self.expect(TokenKind::Colon)?;
-        let ty = self.parse_type()?;
-        if matches!(self.peek_kind(), TokenKind::Eq | TokenKind::LBrace) {
+        let (name, name_span) = self.expect_ident()?;
+        if self.peek_kind() != &TokenKind::Colon {
             return Err(ParseError::new(
-                "An intrinsic property has no initializer: the compiler provides its value",
+                format!(
+                    "Expected ':' and the type of '{}': {} always declares its type",
+                    name, what
+                ),
                 self.peek().span,
             ));
         }
-        let end_span = ty.span;
+        self.bump(); // ':'
+        let ty = self.parse_type()?;
+        // Kotlin's rule: a read solves the type parameters from its receiver alone.
+        if let Some(parameter) = type_parameters
+            .iter()
+            .find(|p| !type_mentions(&receiver, &p.name))
+        {
+            return Err(ParseError::new(
+                format!(
+                    "The type parameter '{}' does not occur in the receiver type '{}': a property's type parameters are solved from its receiver",
+                    parameter.name, receiver
+                ),
+                parameter.span,
+            ));
+        }
+        let at_getter = matches!(self.peek_kind(), TokenKind::Ident(word) if word == "get")
+            && self.peek_ahead(1) == &TokenKind::LParen;
+        if library.is_some() {
+            if at_getter {
+                return Err(ParseError::new(
+                    "An intrinsic property has no getter: the compiler provides its value",
+                    self.peek().span,
+                ));
+            }
+            if matches!(self.peek_kind(), TokenKind::Eq | TokenKind::LBrace) {
+                return Err(ParseError::new(
+                    "An intrinsic property has no initializer: the compiler provides its value",
+                    self.peek().span,
+                ));
+            }
+            return Ok(ExtensionPropertyDecl {
+                visibility,
+                library,
+                type_parameters,
+                receiver,
+                name,
+                ty: ty.clone(),
+                writable,
+                getter: None,
+                span: start_span.merge(ty.span),
+            });
+        }
+        if self.peek_kind() == &TokenKind::Eq && !self.peek().is_preceded_by_newline {
+            let eq_span = self.bump().span;
+            let suggestion = match self.parse_expr(Precedence::Lowest) {
+                Ok(value) => format!("get() = {}", value),
+                Err(_) => "get() = ...".to_string(),
+            };
+            return Err(ParseError::new(
+                format!(
+                    "An extension property stores no value, so it has no initializer: compute its value in a getter, '{}'",
+                    suggestion
+                ),
+                eq_span,
+            ));
+        }
+        if !at_getter {
+            return Err(ParseError::new(
+                format!(
+                    "The extension property '{}' needs a getter: an extension property has no stored value, so write 'get() = ...' after its type",
+                    name
+                ),
+                name_span.merge(ty.span),
+            ));
+        }
+        let get_span = self.bump().span; // 'get'
+        self.expect(TokenKind::LParen)?;
+        self.expect(TokenKind::RParen)?;
+        let (body, end_span) = match self.peek_kind() {
+            TokenKind::Eq => {
+                self.bump();
+                let expr = self.parse_expr(Precedence::Lowest)?;
+                let span = expr.span;
+                (FunctionBody::Expr(expr), span)
+            }
+            TokenKind::LBrace => {
+                let block = self.parse_block_expr()?;
+                let span = block.span;
+                (FunctionBody::Block(block), span)
+            }
+            _ => {
+                return Err(ParseError::new(
+                    "Expected '= expression' or '{ ... }' after 'get()'",
+                    self.peek().span,
+                ))
+            }
+        };
         Ok(ExtensionPropertyDecl {
             visibility,
-            library,
+            library: None,
             type_parameters,
             receiver,
             name,
             ty,
-            writable,
+            writable: false,
+            getter: Some(Getter {
+                body,
+                span: get_span,
+            }),
             span: start_span.merge(end_span),
         })
     }
@@ -1406,16 +1546,8 @@ impl Parser {
     ) -> Result<TopLevelVarDecl, ParseError> {
         self.expect(TokenKind::Val)?;
 
-        let (name, name_span) = self.expect_ident()?;
-        if matches!(self.peek_kind(), TokenKind::Dot | TokenKind::Lt) {
-            return Err(ParseError::new(
-                format!(
-                    "A top-level 'val' has no receiver: extension properties such as 'val {}.name' are declared only by the bundled library, with 'intrinsic val'",
-                    name
-                ),
-                name_span.merge(self.peek().span),
-            ));
-        }
+        // `val` followed by a receiver is an extension property (`at_extension_property`).
+        let (name, _) = self.expect_ident()?;
         let mut ty = None;
         if self.peek_kind() == &TokenKind::Colon {
             self.bump();
@@ -3328,5 +3460,41 @@ fn stored_borrow(ty: &Type) -> Option<&Type> {
         TypeKind::Nullable(inner) => stored_borrow(inner),
         TypeKind::Named { type_args, .. } => type_args.iter().find_map(stored_borrow),
         TypeKind::Unit | TypeKind::Function { .. } => None,
+    }
+}
+
+/// Whether the written type `ty` mentions the type parameter `name`, at any depth.
+fn type_mentions(ty: &Type, name: &str) -> bool {
+    match &ty.kind {
+        TypeKind::Named {
+            name: named,
+            type_args,
+        } => {
+            (type_args.is_empty() && named == name)
+                || type_args.iter().any(|a| type_mentions(a, name))
+        }
+        TypeKind::Nullable(inner) | TypeKind::Reference { inner, .. } => type_mentions(inner, name),
+        TypeKind::Unit => false,
+        TypeKind::Function {
+            receiver,
+            params,
+            return_type,
+            ..
+        } => {
+            receiver
+                .as_ref()
+                .is_some_and(|r| type_mentions(&r.ty, name))
+                || params.iter().any(|p| type_mentions(p, name))
+                || type_mentions(return_type, name)
+        }
+    }
+}
+
+/// `text` with its first letter in upper case.
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
     }
 }

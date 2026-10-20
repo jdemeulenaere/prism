@@ -1,0 +1,4 @@
+// expect: ok
+val get = 1
+
+fun f(): Int = get

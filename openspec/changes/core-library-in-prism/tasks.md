@@ -26,14 +26,14 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 2. Syntax and formatting (D5, D13)
 
-- [ ] 2.1 AST (`crates/prism-ast/src/decl.rs`): `ExtensionPropertyDecl` gains `getter: Option<Getter>`, an expression or a block body, absent for `intrinsic val`/`var`. Update every match on it: the parser, formatter, ABI extraction, type checker and test helpers. Verify with `cargo build --workspace`.
-- [ ] 2.2 Parser (`parse_extension_property` and its caller in `parse_declaration`):
+- [x] 2.1 AST (`crates/prism-ast/src/decl.rs`): `ExtensionPropertyDecl` gains `getter: Option<Getter>`, an expression or a block body, absent for `intrinsic val`/`var`. Update every match on it: the parser, formatter, ABI extraction, type checker and test helpers. Verify with `cargo build --workspace`.
+- [x] 2.2 Parser (`parse_extension_property` and its caller in `parse_declaration`):
   - accept `val` with a receiver and no library modifier;
   - after the type, skip newlines and read `get` `(` `)` then `=` and an expression, or a block, with `get` matched as an identifier at that position only;
   - reject with `E2001`: a missing getter (the message says that an extension property stores no value), an initializer (help `get() = ...`), a getter on an `intrinsic` property, `var` without `intrinsic`, `compose` or a receiver mode before `val`, and a type parameter that does not occur in the receiver type (named in the message).
 
   Add fixtures under `syntax/` for "Extension property getters parse", "get as an identifier", "Extension properties without a getter rejected", "Intrinsic properties parse" and "Extension properties outside the library form rejected", and parser unit tests for the newline forms. Verify with `cargo test -p prism-lexer -p prism-parser`.
-- [ ] 2.3 Formatter (`crates/prism-formatter/src/printer/declarations.rs`): print the getter by D13, keeping an expression getter on the header's line inside one group that breaks to an indented `get()` line, and a block getter on the header's line. Extend `verify.rs` to compare the getter. Add fixtures or `fmt_cli_tests.rs` cases for "Getters formatted" and "A getter with a block formatted", and an idempotency check over the new `syntax/` fixtures. Verify with `cargo test -p prism-formatter -p prism-cli --test fmt_cli_tests`.
+- [x] 2.3 Formatter (`crates/prism-formatter/src/printer/declarations.rs`): print the getter by D13, keeping an expression getter on the header's line inside one group that breaks to an indented `get()` line, and a block getter on the header's line. Extend `verify.rs` to compare the getter. Add fixtures or `fmt_cli_tests.rs` cases for "Getters formatted" and "A getter with a block formatted", and an idempotency check over the new `syntax/` fixtures. Verify with `cargo test -p prism-formatter -p prism-cli --test fmt_cli_tests`.
 
 ## 3. ABI (D12)
 

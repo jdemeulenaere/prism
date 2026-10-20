@@ -1,0 +1,2 @@
+// expect: E2001
+val <T, R> List<T>.other: Int get() = 0
