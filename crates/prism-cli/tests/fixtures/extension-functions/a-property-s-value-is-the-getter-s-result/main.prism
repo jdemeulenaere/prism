@@ -1,0 +1,18 @@
+// expect: ok
+// run: 0
+import /prism/collections
+import /prism/core
+
+struct Team { val members: List<String> }
+
+val Team.first: String get() = members[0].clone()
+
+val Team.names: List<String> get() = members.map { it.clone() }
+
+fun main() {
+    val t = Team(listOf("ann", "bo"))
+    val s = t.first
+    t.names.add("cy")
+    println(s + t.first)
+    println(listOf(t).map { it.first }.size)
+}

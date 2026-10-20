@@ -9379,7 +9379,8 @@ impl TypeChecker {
 
     /// In an extension body, the member access `this.name` that a bare name `name` stands for:
     /// a name that is no local or parameter, and that names a field of the receiver's struct (D5
-    /// of `extension-methods`).
+    /// of `extension-methods`), a member property of a built-in type or an extension property
+    /// of the receiver's type (D6 of `core-library-in-prism`).
     fn implicit_this_field(&self, expr: &Expr) -> Option<Expr> {
         let ExprKind::Ident(name) = &expr.kind else {
             return None;
@@ -9388,7 +9389,9 @@ impl TypeChecker {
             return None;
         }
         let receiver = self.current_receiver()?;
-        self.has_field(&receiver, name)
+        // An extension property of the receiver reads like a field (D6 of
+        // `core-library-in-prism`).
+        (self.has_field(&receiver, name) || self.names_extension_property(&receiver, name))
             .then(|| this_member(name, expr.span))
     }
 
@@ -10299,8 +10302,12 @@ impl TypeChecker {
             ExprKind::Ident(name) if self.is_top_level_value(name) => {
                 (format!("top-level value '{}'", name), false)
             }
-            // `Color.Red` names a variant: a fresh value, not a field.
-            ExprKind::MemberAccess { target, .. } if self.type_name_symbol(target).is_some() => {
+            // `Color.Red` names a variant: a fresh value, not a field. A property read is a call,
+            // whose result is a temporary (D6 of `core-library-in-prism`).
+            ExprKind::MemberAccess { target, .. }
+                if self.type_name_symbol(target).is_some()
+                    || self.builder.property_read_spans.contains(&expr.span) =>
+            {
                 return None
             }
             ExprKind::MemberAccess { target, member, .. } => {
@@ -10546,8 +10553,9 @@ impl TypeChecker {
             Type::Nullable(inner) => (inner.as_ref(), true),
             other => (other, false),
         };
-        let reached = peel_indirection(base_ty).clone();
-        let field_or_variant = match &reached {
+        // Borrowed until a property is found, so a field read pays no clone.
+        let reached = peel_indirection(base_ty);
+        let field_or_variant = match reached {
             Type::Struct { id, .. } => {
                 !self.is_layout_only(id) && self.types.field_index(id, member).is_some()
             }
@@ -10555,17 +10563,17 @@ impl TypeChecker {
             Type::Error | Type::Nullable(_) => true,
             _ => false,
         };
-        if field_or_variant || self.state_value_member(&reached, member).is_some() {
+        if field_or_variant || self.state_value_member(reached, member).is_some() {
             return None;
         }
-        let extension = match self.member(&reached, member) {
+        let extension = match self.member(reached, member) {
             Some(found) if found.property && found.builtin.is_none() => found.clone(),
             Some(_) => return None,
             None => {
-                if !self.names_extension_property(&reached, member) {
+                if !self.names_extension_property(reached, member) {
                     return None;
                 }
-                match self.find_extension(&reached, member) {
+                match self.find_extension(reached, member) {
                     ExtensionLookup::Found { extension, .. } if extension.property => *extension,
                     ExtensionLookup::Ambiguous(modules) => {
                         self.errors.push(TypeError::AmbiguousImport {
@@ -10579,6 +10587,7 @@ impl TypeChecker {
                 }
             }
         };
+        let reached = reached.clone();
         if self.reject_unimported_members(&reached, span)
             || !self.check_visibility(&extension.symbol, span)
         {
@@ -10617,6 +10626,7 @@ impl TypeChecker {
             expected: None,
         };
         let read = self.call_extension(call, &extension, &reached, receiver, span);
+        self.builder.property_read_spans.insert(span);
         Some(if through_nullable {
             self.close_chain(joined, read, SafeNavigationOrigin::Written, span)
         } else {
@@ -11084,6 +11094,9 @@ impl TypeChecker {
                 // value may be changed is the state rules' (D5 of `state-handles`).
                 let writable = match is_var {
                     _ if self.state_value_root(node).is_some() => true,
+                    // A property read is a temporary, writable unless reached through a shared
+                    // borrow (D6 of `core-library-in-prism`).
+                    _ if self.builder.property_read_spans.contains(&expr.span) => true,
                     Some(is_var) => is_var && contents_writable(&base_ty, base_writable),
                     None => true,
                 };

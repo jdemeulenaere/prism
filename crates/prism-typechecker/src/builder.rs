@@ -45,6 +45,10 @@ pub(crate) struct BodyBuilder {
     /// The span of each index through a `get` operator, whose element is not a list's, so a
     /// move out of it suggests no `removeAt` (`E4017`).
     pub(crate) accessor_index_spans: HashSet<Span>,
+    /// The spans of the member accesses that read a property with a getter (D6 of
+    /// `core-library-in-prism`): calls, whose results are temporaries rather than fields, so
+    /// moving one moves nothing out of its receiver.
+    pub(crate) property_read_spans: HashSet<Span>,
 }
 
 /// An element place `a[i]` reached through a shared `get` operator returning a borrow:
@@ -82,6 +86,7 @@ impl BodyBuilder {
             state_value_spans: HashSet::new(),
             accessor_places: HashMap::new(),
             accessor_index_spans: HashSet::new(),
+            property_read_spans: HashSet::new(),
         }
     }
 

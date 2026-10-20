@@ -22,6 +22,10 @@ A read of an extension property MUST call its getter with a shared borrow of the
 - **WHEN** `struct Pair<T> { val a: T, val b: T }`, `val <T> Pair<T>.first: &T get() = &a` and `fun f(p: &Pair<String>): Int = p.first.length` are checked
 - **THEN** the file typechecks, `p.first` having type `&String`, tied to `p` by the elision rules of a getter's shared receiver
 
+#### Scenario: A property's value is the getter's result
+- **WHEN** `struct Team { val members: List<String> }`, `val Team.first: String get() = members[0].clone()` and `val Team.names: List<String> get() = members.map { it.clone() }` are declared, with `import /prism/collections`, and `fun main() { val t = Team(listOf("ann", "bo")); val s = t.first; t.names.add("cy"); println(s + t.first); println(listOf(t).map { it.first }.size) }` runs with `--check-allocations`
+- **THEN** stdout is `annann` then `1`, and the exit status is 0: each read is a temporary the caller owns, moved or changed without touching `t`
+
 #### Scenario: Assigning an extension property rejected
 - **WHEN** `struct Box : Copy { val w: Int }`, `val Box.twice: Int get() = w * 2` and `fun f() { var b = Box(1); b.twice = 4 }` are checked
 - **THEN** the type checker emits `E4003` for the assignment, saying that `twice` has no setter
@@ -36,6 +40,10 @@ A getter's body MUST be checked as the body of an extension function with a shar
 #### Scenario: A getter with a block body
 - **WHEN** `struct Team { val members: List<String> }` and `val Team.label: String get() { if (members.isEmpty()) return "empty"; return members[0].clone() }` are declared and `fun main() { println(Team(listOf("ann", "bo")).label); println(Team(listOf()).label) }` runs with `--check-allocations`
 - **THEN** stdout is `ann` then `empty`, and the exit status is 0
+
+#### Scenario: A bare name reads an extension property
+- **WHEN** `struct Box : Copy { val w: Int, val h: Int }`, `val Box.area: Int get() = w * h`, `val Box.double: Int get() = area * 2` and `fun Box.triple(): Int = area * 3` are declared and `fun main() { println(Box(2, 3).double); println(Box(2, 3).triple()) }` runs with `--check-allocations`
+- **THEN** stdout is `12` then `18`, and the exit status is 0: in an extension or getter body, `area` reads `this.area`
 
 #### Scenario: A getter calling a composable rejected
 - **WHEN** `compose fun Leaf() {}`, `struct Box : Copy { val w: Int }` and `val Box.leaf: Int get() { Leaf(); return 1 }` are checked
