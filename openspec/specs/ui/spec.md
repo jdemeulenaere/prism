@@ -199,6 +199,21 @@ A composable parameter of type `Modifier` MUST be stable, so a skippable composa
 - **WHEN** a headless app of 400 × 300 composes `Column { Box(modifier = Modifier.defaultMinSize(minWidth = 30.dp)) { Text("a") }; Box(modifier = Modifier.fillMaxWidth(0.5)) { } }` and its script is `dump`
 - **THEN** the dump holds `box #2 0,0 30x20 defaultMinSize(30x-)` and `box #4 0,20 200x0 fillMaxWidth(0.5)`
 
+### Requirement: Offset
+`offset(x: Dp = 0.dp, y: Dp = 0.dp)` of `/prism/compose/layout` MUST lay out the rest of the chain under the same constraints, keep its size, and place it at `(x, y)`, so that the elements after it, the content and the children are drawn and hit there while the node keeps its size and position. `dump` MUST print it as `offset(<x>,<y>)`.
+
+#### Scenario: An offset background
+- **WHEN** a headless app of 400 × 300 composes `Box(modifier = Modifier.offset(x = 10.dp, y = 5.dp).background(Color.Red).size(20.dp)) { }` and its script is `dump` then `dump draw`
+- **THEN** stdout is the lines `window 400x300`, `  box #1 0,0 20x20 offset(10,5) background(#FFFF0000) size(20x20)`, `clear 400x300 #FFFFFFFF` and `rect 10,5 20x20 #FFFF0000`
+
+#### Scenario: The clickable area follows an offset
+- **WHEN** a headless app composes `Box(modifier = Modifier.offset(x = 20.dp).clickable { println("hit") }.size(10.dp)) { }` and its script is `click 5 5` then `click 25 5`
+- **THEN** stdout is `hit` once
+
+#### Scenario: A text field is hit where it is drawn
+- **WHEN** a headless app of 400 × 300 composes `TextField(name.value, { name.value = it }, modifier = Modifier.offset(x = 150.dp))` and its script is `click 50 18`, `dump`, `click 250 18`, `type "a"` and `dump`
+- **THEN** the first dump holds `textfield #1 0,0 200x36 offset(150,0) defaultMinSize(200x-) textFieldFrame(#FF79747E #FF6750A4) padding(8)`, unfocused, and the second `textfield #1 0,0 200x36 "a" focused offset(150,0) defaultMinSize(200x-) textFieldFrame(#FF79747E #FF6750A4) padding(8)`
+
 ### Requirement: Weights Share the Remaining Space of a Row or Column
 In a row or column, the children with a `weight(weight, fill = true)` MUST share, by weight, the space that the children without one leave on the main axis, when the main axis is bounded: exactly with `fill`, and at most without it.
 
@@ -325,6 +340,13 @@ A node whose properties, modifier chain, measure policy and descendants did not 
 - **WHEN** a Rust test lays out a column of 100 texts, measured by a test support policy that counts its calls, changes one text to another of the same width, and lays out again
 - **THEN** the second layout calls the column's policy zero times, and a change to a wider text calls it once
 
+### Requirement: The Rest of a Clean Chain Reuses Its Measurement
+When a node is measured again with no change to its properties, modifier chain, measure policy or descendants, and one of its layout modifiers measures the rest of its chain under the constraints it gave it last time, the rest MUST reuse its last size, without running the layout modifiers after it or measuring the node's content.
+
+#### Scenario: A resized node reuses the rest after a size
+- **WHEN** a headless app of 400 × 300 composes `Column { Layout(content = { }, modifier = Modifier.size(20.dp).padding(2.dp)) { measurables, constraints -> println("measured ${constraints.minWidth}x${constraints.minHeight}"); layout(constraints.minWidth, constraints.minHeight) { } } }` and its script is `resize 300 200` then `dump`
+- **THEN** stdout is the lines `measured 16x16`, once, `window 300x200`, `  column #1 0,0 20x20` and `    layout #2 0,0 20x20 size(20x20) padding(2)`
+
 ### Requirement: The Layout Primitive
 `/prism/compose/ui` MUST declare `Layout(content: compose () -> Unit, modifier: Modifier = Modifier, measurePolicy: attached MeasureScope.(&List<Measurable>, Constraints) -> MeasureResult)`. A call MUST make one node of kind `layout`, whose children are those `content` composes, and whose content is measured by calling `measurePolicy` with the node's children as measurables, in order, and the constraints left by its modifier chain.
 
@@ -448,6 +470,38 @@ Once its buffers have grown, a layout MUST allocate nothing in the toolkit, incl
 - **WHEN** `crates/prism-ui/tests/allocations.rs` drives an app of a column of rows, boxes and texts, measured by the test support's policies, through 100 resizes alternating between two window sizes, each followed by a layout of the whole tree and a display list build
 - **THEN** no allocation happens after the first iteration
 
+### Requirement: Layout Modifiers Are Measurement Steps
+Each layout element of a chain (`padding`, `width`, `height`, `size`, `defaultMinSize`, `fillMax*`, `offset` and `layout`) MUST be a step written in Prism, as Compose's layout modifier nodes are: it measures the rest of the chain, the elements after it and then the node's content, once, under constraints it chooses, and places it. Other elements MUST pass the constraints on unchanged and record the bounds of the rest at their position.
+
+#### Scenario: Layout modifiers inside a custom layout
+- **WHEN** a headless app of 400 × 300 composes `Diagonal { Text("a", modifier = Modifier.padding(4.dp)); Text("b", modifier = Modifier.size(10.dp).padding(2.dp)) }`, with `Diagonal` as in "A custom layout places its children diagonally", and its script is `dump`
+- **THEN** stdout is the lines `window 400x300`, `  layout #1 0,0 26x38`, `    text #2 0,0 16x28 "a" padding(4)` and `    text #3 16,28 10x10 "b" size(10x10) padding(2)`
+
+### Requirement: The Layout Modifier
+`/prism/compose/ui` MUST declare `Modifier.layout(measure: attached MeasureScope.(Measurable, Constraints) -> MeasureResult)`, which appends an element whose step is `measure`. The node MUST keep the step function as it keeps a handler. Two such elements MUST be equal when their functions have the same code and equal captures, all of them `Copy`. `dump` MUST print the element as `layout`.
+
+#### Scenario: A layout modifier moves its content
+- **WHEN** a headless app of 400 × 300 composes `Text("a", modifier = Modifier.layout { measurable, constraints -> val p = measurable.measure(constraints); layout(p.width + 10, p.height) { p.place(10, 0) } }.background(Color.Red))` and its script is `dump` then `dump draw`
+- **THEN** stdout is the lines `window 400x300`, `  text #1 0,0 18x20 "a" layout background(#FFFF0000)`, `clear 400x300 #FFFFFFFF`, `rect 10,0 8x20 #FFFF0000` and `text 10,0 size 16 #FF000000 "a"`
+
+#### Scenario: A card with an equal layout modifier is skipped
+- **WHEN** `compose fun Card(modifier: Modifier) { println("card"); Box(modifier = modifier) { } }` is called as `Card(modifier = Modifier.layout { measurable, constraints -> val p = measurable.measure(constraints); layout(p.width, p.height) { p.place(0, 0) } })` in a column beside `Text("${c.value}")` and a `Button` incrementing `c`, and the headless script is `click "+"`
+- **THEN** stdout is `card` once: the recomposition after the click skips `Card`
+
+### Requirement: A Layout Modifier Places Its Content
+A layout modifier's step that returns without placing the rest of its chain MUST end the program with `ui misuse: a layout modifier did not place its content`.
+
+#### Scenario: A layout modifier that hides its content
+- **WHEN** a headless app composes `Text("a", modifier = Modifier.layout { measurable, constraints -> val p = measurable.measure(constraints); layout(p.width, p.height) { } })`
+- **THEN** stderr is exactly `panic: ui misuse: a layout modifier did not place its content` and a newline, and the exit status is 101
+
+### Requirement: Layout Modifier Steps Allocate Nothing
+Once its buffers have grown, a layout MUST allocate nothing in the toolkit for the steps of `padding`, `width`, `height`, `size`, `defaultMinSize`, `fillMax*` and `offset`, including the elements passed to their steps.
+
+#### Scenario: Resizing padded rows allocates nothing
+- **WHEN** `crates/prism-ui/tests/allocations.rs` drives an app of a column of rows whose nodes carry paddings, sizes, minimum sizes and fills, measured by the test support's policies and steps, through 100 resizes alternating between two window sizes, each followed by a layout and a display list build
+- **THEN** no allocation happens after the first iteration
+
 ### Requirement: Nodes Follow Their Composables
 Each node call of a toolkit composable MUST own one node, created the first time its group is composed and reused while its group is matched. Its properties MUST be updated in place on later passes, and it MUST be removed when its group is removed. Nodes MUST be numbered from 1 per app in creation order, never reusing a number.
 
@@ -539,7 +593,7 @@ A headless run MUST read its event script's commands in order and end the app af
 - **THEN** stdout is the lines `window 200x100` and `  box #1 0,0 200x100 fillMaxSize`
 
 ### Requirement: Script Targets Are Found by Their Text
-A target `"<text>" [<n>]` MUST name the n-th node, 1 by default and in tree order, whose text, or text field value, is exactly the string. The command MUST act at the centre of that node's bounds, rounded down, hit-testing from there. A target that matches no node MUST end the program with `event script line <n>: no node shows the text "<text>"`.
+A target `"<text>" [<n>]` MUST name the n-th node, 1 by default and in tree order, whose text, or text field value, is exactly the string. The command MUST act at the centre of that node's content, where its steps placed it, rounded down, hit-testing from there. A target that matches no node MUST end the program with `event script line <n>: no node shows the text "<text>"`.
 
 #### Scenario: A missing target
 - **WHEN** the counter program runs headless with the script `click "Minus"`
@@ -549,8 +603,12 @@ A target `"<text>" [<n>]` MUST name the n-th node, 1 by default and in tree orde
 - **WHEN** the counter program runs headless with the script `type "x"`
 - **THEN** stderr is exactly `panic: event script line 1: no text field is focused` and a newline, and the exit status is 101
 
+#### Scenario: A text target follows an offset
+- **WHEN** a headless app of 400 × 300 composes `Text("go", modifier = Modifier.offset(x = 100.dp).clickable { println("go") })` and its script is `click "go"`
+- **THEN** stdout is `go` and a newline
+
 ### Requirement: Script Targets by Kind
-Wherever an event script accepts a text target, it MUST also accept `<kind> [<n>]`: the n-th node, 1 by default and in tree order, of kind `column`, `row`, `box`, `text`, `spacer`, `textfield` or `layout`, or whose `clickable` or `toggleable` element has the role `button` or `checkbox`. The command MUST act at the centre of that node's bounds, rounded down, hit-testing from there.
+Wherever an event script accepts a text target, it MUST also accept `<kind> [<n>]`: the n-th node, 1 by default and in tree order, of kind `column`, `row`, `box`, `text`, `spacer`, `textfield` or `layout`, or whose `clickable` or `toggleable` element has the role `button` or `checkbox`. The command MUST act, rounded down and hit-testing from there, at the centre of that node's content, where its steps placed it, or for a role, of that element's bounds.
 
 #### Scenario: Clicking the second checkbox
 - **WHEN** a headless app of 400 × 300 composes `compose fun Two() { val a = remember { mutableStateOf(false) }; val b = remember { mutableStateOf(false) }; Column { Checkbox(checked = a.value, onCheckedChange = { a.value = it }); Checkbox(checked = b.value, onCheckedChange = { b.value = it }) } }`, and its script is `click checkbox 2` then `dump`
@@ -665,7 +723,7 @@ A handler whose closure's captures did not change MUST run its new body at its n
 - **THEN** the dump holds the text node reading `Count: 11`
 
 ### Requirement: Layout and Drawing After a Reload
-After the pass that follows a reload, the frame loop MUST lay out every node measured by a measure policy again, as the reload may have changed the code it runs, and build the display list only when that layout or the pass changed a node's bounds or what it draws. Matched nodes MUST keep their numbers and focus, and no frame MUST be presented when nothing visible changed.
+After the pass that follows a reload, the frame loop MUST lay out again every node measured by a measure policy or holding a `layout` modifier, as the reload may have changed the code they run, and build the display list only when that layout or the pass changed a node's bounds or what it draws. Matched nodes MUST keep their numbers and focus, and no frame MUST be presented when nothing visible changed.
 
 #### Scenario: A focused field keeps its focus and text across a reload
 - **WHEN** the typing app, run headless under `--watch`, gets the script `click 100 18`, `type "ab"`, an edit of `Text("Hello ${name.value}")` to `Text("Hi ${name.value}")`, then `type "c"` and `dump`
@@ -674,6 +732,10 @@ After the pass that follows a reload, the frame loop MUST lay out every node mea
 #### Scenario: Editing a function a policy calls
 - **WHEN** a headless app under `--watch` composes, in `app/main.prism`, `Spaced { Text("a"); Text("b") }`, where `Spaced` is a `Layout` that stacks its children with `gap()` pixels after each and `public fun gap(): Int = 0` is declared in `lib/gaps.prism`, and its script is `dump`, `edit lib/gaps.prism lib/gaps.prism.v2`, whose `gap()` returns 10, and `dump`
 - **THEN** the first dump holds `text #3 0,20 8x20 "b"` and the second `layout #1 0,0 8x60` and `text #3 0,30 8x20 "b"`, although no composable body changed
+
+#### Scenario: Editing a function a layout modifier calls
+- **WHEN** a headless app under `--watch` composes, in `app/main.prism`, `Text("a", modifier = Modifier.layout { measurable, constraints -> val p = measurable.measure(constraints); layout(p.width + shift(), p.height) { p.place(shift(), 0) } })`, with `public fun shift(): Int = 0` declared in `lib/shifts.prism`, and its script is `dump`, `edit lib/shifts.prism lib/shifts.prism.v2`, whose `shift()` returns 10, and `dump`
+- **THEN** the first dump holds `text #1 0,0 8x20 "a" layout` and the second `text #1 0,0 18x20 "a" layout`
 
 ### Requirement: A Reload With Errors Keeps the Running UI
 When a reload does not compile, the app MUST keep running its previous code, its composition and its nodes unchanged, and keep handling events, while the session prints the diagnostics and `reload: not applied; the program keeps running its previous code` on stderr.
@@ -849,3 +911,14 @@ Decisions from `layout-primitive` (item 11a of the review round, the first half 
 - **Policies are program code** (D13, D14, D24). They run during layout as handlers of the app's composition: a runtime error ends the program with its location, misuse of the protocol is a `ui misuse:` error, and a state a policy writes is composed and laid out again before the next event, eight layouts at most per settle, so a policy that keeps writing cannot stall the loop (found in review: writes were composed only after the next event). Rejected: no bound (a hang), an error past the bound.
 - **Bounded geometry** (D23, found in review). Sizes are clamped to 2,147,483,647, Kotlin's `Int.MAX_VALUE`, and positions to that far from the parent's content, as are modifier sizes and paddings, so a policy under `Constraints.Infinity` or placing at any `Int` cannot overflow the pass, dumps, drawing or hit testing; the overflow aborted the process. Rejected: saturating arithmetic at every sum, a misuse error.
 - **Costs** (D18, D25). One policy call per measured node of the five policy kinds and a few entry calls per child; no allocation in a layout of the containers; no new compile stage. On a release build (M4 Pro) the engine's 10,000-node layout with Rust policies is within 1.1× the native pass, and the full relayout of the 1,000-item app (about 7,000 nodes) takes 0.53 ms, about 2.9× the native 0.18 ms (3.45× before review), against a p99 target of 4 ms. Tier 2 inlining of the entry calls is the follow-up.
+
+Decisions from `layout-in-prism` (item 11b of the review round, the second half of the layout part of the review's agreed item A4, user direction 2026-10-20 to follow Compose with plain-data modifiers; planned autonomously on 2026-10-20, refined while implementing and reviewing the change, and logged in `docs/decisions-for-review.md`). With `layout-primitive`, every layout rule of the toolkit is Prism code:
+
+- **Layout modifiers are measurement steps** (D1, D6, D13). Each layout element (`padding`, `width`, `height`, `size`, `defaultMinSize`, `fillMax*`, `offset`, `layout`) measures the rest of its chain once under constraints it chooses and places it, as Compose's `LayoutModifierNode.measure`; other elements pass the constraints on and record the bounds of the rest at their position, summed from the steps' placements once the node is measured. A content policy places children at the content's origin from the last measurement, and the end of the measurement moves them when the steps moved the content. Rejected: native built-in steps with only `Modifier.layout` in Prism (the user's direction), steps as pure constraint transforms (no placing), positions relative to the parent's content, a second placement walk.
+- **One capture-free dispatcher** (D2, D11, D15). The built-in steps are `measureElement` of `/prism/compose/ui`, beside `ModifierElement` rather than in `/prism/compose/layout` (a deviation from Compose's module split, since one function must see every variant), which `runApp` gives the runtime once; the runtime passes each element re-encoded from its decoded, bounded form, so the steps' sums cannot overflow. The arithmetic is Compose's (`Constraints.offset` for padding), and `fillMax*` truncates, which the spec states as rounding down. Rejected: a function value per element (an allocation and a registration per element per pass), one registration per element kind, the runtime calling a library function by symbol, keeping the raw element words per chain entry.
+- **`Modifier.layout` and `offset`** (D3, D4, D8). `Modifier.layout { measurable, constraints -> }` keeps its step as a handler entry of kind `LayoutModifier`, compared by code and captures so an equal modifier keeps a skippable composable skipping; a reload lays its nodes out again. `offset(x, y)` places the rest at an offset without changing the node's size. Rejected: a composable that remembers its lambda (a composed modifier).
+- **Positions in a chain** (D5, D14). `Measurable`, `Placeable`, `MeasureScope`, `PlacementScope` and `MeasureResult` carry a `package` element index; frames are `(node, element)`; lent measurables are two words, their buffers indexed by nested policies, not by every frame. Rust content (the engine's tests) uses Rust ports of the built-in steps.
+- **A step must place its content** (D10). Not placing it is `ui misuse: a layout modifier did not place its content`, where Compose hides the rest silently; relaxable later without breaking a program.
+- **Placed bounds for input and targets** (D17, found in review). A text field is hit at its `textFieldFrame` bounds (its content without a frame), where Compose's text field takes pointer input, after the caller's modifier, so an `offset` moves it; script targets act at the centre of a node's placed content, or of a role element's bounds. Rejected: the node's bounds moved by its steps' offsets, targets kept at the node's bounds (`click "go"` missed an offset label).
+- **The rest of a clean chain is reused** (D18, found in review). When a step of a node with no change measures the rest of its chain under the constraints it gave it last time, the rest keeps its last size without running the later steps or the content: the node-level cache applied at a chain position, so a resize skips the policies behind a `size` or `width`. It goes beyond Compose, observable only through side effects in steps or policies. Rejected: recognizing pass-through steps natively (copying their rules into the runtime), a cache on the step's own constraints.
+- **Costs** (D9, D16). One step call and a few entry calls per layout element per measurement, no allocation, no new compile stage, about 250 lines of library. The full relayout of the 1,000-item app stays within 1.5× of the native-modifier build (1.38× in review's A/B, about 0.73 ms against the 4 ms p99 target), after D18; ending a step in fewer state borrows and a constant-initialized thread state measured no gain. Tier 2 inlining of the entry points is the follow-up for the per-step cost (about 50–70 ns).
