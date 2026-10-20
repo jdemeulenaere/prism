@@ -1119,6 +1119,9 @@ fn composed_bodies_run() {
          }\n",
     );
     let passes: extern "C" fn() -> i64 = function(&program, "main::passes");
+    // A composition frees through the runtime's allocator, which the allocation check of a
+    // concurrent test would see.
+    let _lock = prism_runtime::test_lock();
     assert_eq!(passes(), 1);
     assert_eq!(prism_compose::live_compositions_report(), None);
 }
@@ -1145,6 +1148,10 @@ fn state_operations_run() {
          }\n",
     );
     let counter: extern "C" fn() -> i64 = function(&program, "main::counter");
+    // The lists allocate through the runtime's allocator, which is process-wide: a concurrent
+    // test under the allocation check would count them as its own leaks, or their frees as
+    // invalid ones.
+    let _lock = prism_runtime::test_lock();
     assert_eq!(counter(), 15);
     let list: extern "C" fn() -> i64 = function(&program, "main::list");
     assert_eq!(list(), 44);

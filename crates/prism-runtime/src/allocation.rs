@@ -344,7 +344,9 @@ pub extern "C" fn prism_rt_register_top_level_value(storage: *mut u8, drop: Drop
 }
 
 /// Serializes the tests of this process that start runs or read the allocation check, which is
-/// process-wide.
+/// process-wide, and the tests that run code allocating or freeing through
+/// [`prism_rt_allocate`] and [`prism_rt_free`], which a concurrent check would count as its own
+/// leaks or invalid frees.
 #[doc(hidden)]
 pub fn test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
