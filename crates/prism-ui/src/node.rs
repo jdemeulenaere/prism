@@ -121,6 +121,10 @@ impl Drop for OwnedText {
 pub struct ChainEntry {
     pub element: Element,
     pub bounds: Rect,
+    /// For a layout element, the constraints its step last measured the rest of the chain under,
+    /// which a clean node's next measurement reuses the rest's size for (D18 of
+    /// `layout-in-prism`).
+    pub rest_constraints: Option<Constraints>,
 }
 
 impl ChainEntry {
@@ -128,6 +132,7 @@ impl ChainEntry {
         ChainEntry {
             element,
             bounds: Rect::ZERO,
+            rest_constraints: None,
         }
     }
 }

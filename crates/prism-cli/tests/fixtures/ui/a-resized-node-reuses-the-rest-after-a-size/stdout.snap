@@ -1,0 +1,4 @@
+measured 16x16
+window 300x200
+  column #1 0,0 20x20
+    layout #2 0,0 20x20 size(20x20) padding(2)

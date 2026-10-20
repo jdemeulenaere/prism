@@ -47,6 +47,13 @@ Once its buffers have grown, a layout MUST allocate nothing in the toolkit for t
 - **WHEN** `crates/prism-ui/tests/allocations.rs` drives an app of a column of rows whose nodes carry paddings, sizes, minimum sizes and fills, measured by the test support's policies and steps, through 100 resizes alternating between two window sizes, each followed by a layout and a display list build
 - **THEN** no allocation happens after the first iteration
 
+### Requirement: The Rest of a Clean Chain Reuses Its Measurement
+When a node is measured again with no change to its properties, modifier chain, measure policy or descendants, and one of its layout modifiers measures the rest of its chain under the constraints it gave it last time, the rest MUST reuse its last size, without running the layout modifiers after it or measuring the node's content.
+
+#### Scenario: A resized node reuses the rest after a size
+- **WHEN** a headless app of 400 × 300 composes `Column { Layout(content = { }, modifier = Modifier.size(20.dp).padding(2.dp)) { measurables, constraints -> println("measured ${constraints.minWidth}x${constraints.minHeight}"); layout(constraints.minWidth, constraints.minHeight) { } } }` and its script is `resize 300 200` then `dump`
+- **THEN** stdout is the lines `measured 16x16`, once, `window 300x200`, `  column #1 0,0 20x20` and `    layout #2 0,0 20x20 size(20x20) padding(2)`
+
 ## MODIFIED Requirements
 
 ### Requirement: Layout and Drawing After a Reload

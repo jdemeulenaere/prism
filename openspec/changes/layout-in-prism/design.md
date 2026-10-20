@@ -275,7 +275,7 @@ So the budgets are: resize `layout` median at most 0.79 ms, paced toggle and typ
   - Under `PRISM_ASSERT_TIMING=1`, `ui_timing` fails only its display-list growth check. The A/B's "before" column fails it too, so the busy machine causes it, not this change.
   - Investigated with a sampling profile of `ui_timing` (Rust steps, so Prism code is not involved) and A/B runs. The time is the protocol, spread over the step's four state borrows (`next_from`, the rest's `measure`, `layout_rest`, `end_step`), the function-table call and the frame push and pop. The Prism dispatcher's own code is not measurable: a version calling `Constraints.offset` and `constrainWidth` measured within noise of the version with inlined arithmetic.
   - Two changes went in while investigating: one entry point, `prism_ui_layout_rest`, replaces `begin`, `place` and `end` for built-in steps, and the rest of a chain is measured in the borrow that checks it.
-- **Budget revised (autonomous, D16)**: the resize median may be at most 1.7× this change's baseline. The 4 ms p99 target keeps a margin of about 4×.
+- **Budget revised (autonomous, D16)**: the resize median may be at most 1.7× this change's baseline. The 4 ms p99 target keeps a margin of about 4×. The review restored 1.5× with D18 (D16).
 - **Startup** grows by about 3 ms cold, 6%: the front end and code generation of the library's added 250 lines. The cold target of 50 ms holds, with the margin narrowed. The warm start is unchanged.
 
 ### D10. A step must place the rest of its chain (autonomous)
@@ -336,16 +336,30 @@ Rejected:
 - The dispatcher's `else` branch measures the rest under the same constraints and places it at `(0, 0)`, the pass-through every non-step element does. It never runs, since the native side calls the dispatcher only for steps. This avoids a `Nothing` external with its own error message.
 - `/prism/compose/ui` now imports `/prism/core`, for `Int.toDouble()` and `Double.toInt()`.
 
-### D16. The resize budget is 1.7× (autonomous, measured while applying)
+### D16. The resize budget stays 1.5× (autonomous; relaxed to 1.7× while applying, restored in review)
 
-The full relayout of the 1,000-item app costs 1.50 to 1.64 times this change's baseline (D9's table), against a planned 1.5×. The cost is the native protocol per step, not Prism code: about 70 ns for four state borrows, a function-table call and a frame.
+While applying, the full relayout of the 1,000-item app measured 1.50 to 1.64 times this change's baseline (D9's table), against a planned 1.5×, and the budget was relaxed to 1.7×. The review recovered it with D18, and the budget is 1.5× again.
 
-- The budget becomes 1.7×, about 0.9 ms, against `layout-primitive`'s 4 ms p99 target, which holds with a margin of about 4×.
-- The follow-up is fewer state borrows per step, for instance ending a step's frame in the borrow of the next entry call, and Tier 2 inlining of the entry points. It goes in `ROADMAP.md` at archive.
+**Measured in review**, on the M4 Pro with three unrelated processes holding a core each (two `miri` runs and a VS Code helper), so as an A/B of release builds run interleaved, 21 resize sessions each, medians of their `layout` medians:
+
+| Build | `layout` median | Against the first |
+|---|---|---|
+| `0aad5be8`, before this change (native layout modifiers) | 0.578 ms | 1 |
+| this change as applied (`3e43bf7d`) | 0.840 ms | 1.45× |
+| with D18 | 0.799 ms | 1.38× |
+
+The same conditions inflate the baseline's 0.528 ms by about 9%. Scaled to it, the change costs about 0.73 ms.
+
+**What did not help**, each measured the same way and reverted:
+- **Ending a built-in step in its `layout_rest` call**, one state borrow fewer per step: 0.815 against 0.823 ms, within noise, with the full layout of `ui_timing` (Rust steps) unchanged too.
+- **A constant-initialized thread state**, to skip the lazy initialization check of each borrow: the full layout of 10,000 nodes took 0.99 ms instead of 0.78 ms.
+
+A sampling profile spreads the step's native cost over about ten parts (the frame, the step call, the element's encoding, the measure and `layout_rest` entries, the protocol's result values), none above 3% of the layout. So fewer borrows alone cannot recover much. Tier 2 inlining of the entry points into the library's steps remains the follow-up for the per-step cost.
 
 Rejected:
 - **Native built-in steps**: the user's direction for this item.
 - **Holding a borrow across program code**: the re-entrancy rule of `layout-primitive` D21.
+- **Keeping 1.7×**: D18 recovers the budget without a native rule.
 
 ### D17. A text field is hit where it is drawn, and script targets act where nodes are placed (autonomous, review fix)
 
@@ -359,6 +373,24 @@ The review found that a text field's hit area stayed at the node's own bounds un
 Rejected:
 - **The node's bounds moved by the sum of its steps' offsets**: a padding's offset would move the hit area without shrinking it.
 - **Keeping script targets at the node's bounds**: `click "go"` would miss an offset button's label.
+
+### D18. The rest of a clean chain reuses its size (autonomous, review)
+
+The node-level cache (`layout-primitive` D11) skips a clean node measured under its last constraints. A resize gives every row new constraints, so every node of the 1,000-item app is measured again with its steps. But a `size` or `width` step often gives the rest of its chain the same constraints as last time: the checkbox's `size(20.dp)`, the spacer's `width(8.dp)`.
+
+- **Rule.** When a step of a node that is neither `needs_measure` nor `child_needs_measure` measures the rest of its chain under the constraints it gave it last time, the rest keeps its last size: the steps after it and the content (policy or text) do not run.
+- **Its size** is the size the next step recorded in its chain entry, or the content's past the last step. The entries, the content's origin and the children's positions stand, since the rest gave them under the same constraints. `finish` sums the offsets as before, so a step before it that moves the rest still moves everything.
+- **Each step's chain entry keeps the constraints** it last measured the rest under (`ChainEntry::rest_constraints`, 40 bytes).
+- It is the node-level rule applied at a position in the chain. Like a policy (`layout-primitive` D11), a step is taken to depend only on its constraints, the size of the rest, its element and its captures. A reload marks the nodes whose steps or policies are program code (D8), so they run again.
+- It goes beyond Compose, which measures every modifier node of a remeasured layout node again. Only side effects in a step or a policy can observe the difference, and the policy rule already allows it.
+
+**Run-time cost.** One comparison of constraints per step. In the resize session it skips two policy calls a row, about 2,000 per relayout.
+
+**Compile-time cost.** None.
+
+Rejected:
+- **Recognizing pass-through steps natively** (`offset(0, 0)`, a `defaultMinSize` under non-zero minimums): it would copy the steps' rules into the runtime, against the user's direction.
+- **A cache keyed by the step's own constraints**: the outer steps of a resized node get new constraints. It is the rest's constraints that stay the same.
 
 ## Risks / Trade-offs
 

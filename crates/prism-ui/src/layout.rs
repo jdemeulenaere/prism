@@ -55,7 +55,11 @@
 //! size costs a flag check per sibling on its path. A policy is taken to depend only on its
 //! constraints, its children's sizes and parent data, its node's properties and its captures
 //! (D11): a child it did not measure has its last constraints cleared, so that its changes run
-//! the policy again. Steps within a node run whenever the node is measured.
+//! the policy again. Steps within a node run whenever the node is measured, but when a step
+//! of a clean node measures the rest of its chain under the constraints it gave it last time,
+//! the rest keeps its last size without running the steps after it or the content (D18 of
+//! `layout-in-prism`): a resize gives every row new constraints, and a `size` gives the rest of
+//! its chain the same ones.
 
 use crate::error::{
     raise, UiResult, INVALID_CONSTRAINTS, LAYOUT_OUTSIDE, LAYOUT_TWICE, MEASURED_OUTSIDE,
@@ -860,6 +864,25 @@ fn valid(c: Constraints) -> bool {
         && c.min_height <= c.max_height
 }
 
+/// The size of the rest of `node`'s chain after the step at `step`, measured again under
+/// `constraints`, when it is its last size (D18 of `layout-in-prism`): the node and its
+/// descendants are clean and the step measured the rest under the same constraints last time,
+/// so the steps after it and the content would give what they gave. That size is the size
+/// the next step recorded, or the content's past the last step.
+fn reused_rest(node: &Node, step: usize, constraints: Constraints) -> Option<Size> {
+    if node.needs_measure
+        || node.child_needs_measure
+        || node.chain[step].rest_constraints != Some(constraints)
+    {
+        return None;
+    }
+    let next = node.chain[step + 1..]
+        .iter()
+        .find(|entry| entry.element.is_step())
+        .map_or(node.content, |entry| entry.bounds);
+    Some(Size::new(next.width, next.height))
+}
+
 /// `Measurable.measure(constraints)` of a child (D6): measures `child`, a child of the node
 /// whose policy is running innermost, at most once in that run, and gives its size.
 pub fn measure_child(child: NodeId, constraints: Constraints) -> UiResult<Size> {
@@ -898,6 +921,12 @@ pub fn measure_position(position: Position, constraints: Constraints) -> UiResul
                 return Err(INVALID_CONSTRAINTS);
             }
             frame.measured = 1;
+            let step = frame.element;
+            let node = state.tree.node_mut(position.node).unwrap();
+            if let Some(size) = reused_rest(node, step, constraints) {
+                return Ok(Measured::Rest(Next::Done(size)));
+            }
+            node.chain[step].rest_constraints = Some(constraints);
             return next_from(state, position, constraints).map(Measured::Rest);
         }
         let frame = *frame;
@@ -1490,9 +1519,13 @@ mod tests {
             }
             nodes.push(node);
         }
+        // The tree and its display list, which holds the bounds the elements recorded.
         let dump = |tree: &crate::tree::UiTree| {
             let mut out = String::new();
             crate::dump::dump_tree(tree, None, &mut out);
+            let mut list = crate::draw::DisplayList::new();
+            list.build(tree, &FixedAdvanceMetrics, None);
+            crate::dump::dump_display_list(&list, &mut out);
             out
         };
         let mut layout = Layout::new();
@@ -1534,9 +1567,16 @@ mod tests {
                                 x: random(9) as i64 - 4,
                                 y: random(9) as i64 - 4,
                             },
+                            background(0xFFFF_0000, Shape::RECTANGLE),
                             padding(random(4) as i64),
                         ],
-                        &[size(random(60) as i64, random(60) as i64)],
+                        // A size gives the rest the same constraints under most of its
+                        // node's, which a relayout then reuses the rest's size for.
+                        &[
+                            size(random(60) as i64, random(60) as i64),
+                            background(0xFF00_FF00, Shape::RECTANGLE),
+                            padding(random(4) as i64),
+                        ],
                         &[weight(1.0 + random(3) as f64, random(2) == 0)],
                         &[
                             align(Alignment::from_code(random(15) as i64).unwrap()),
@@ -1604,6 +1644,47 @@ mod tests {
 
     /// The misuse details of D13 that Rust code can reach in process, from a policy and from
     /// outside any layout.
+    /// D18 of `layout-in-prism`: a clean node measured under new constraints runs its steps, and
+    /// the rest of its chain after a step that gives it its last constraints keeps its size
+    /// without its policy; a node needing measuring runs it again.
+    #[test]
+    fn the_rest_after_a_step_reuses_its_size_under_the_same_constraints() {
+        let mut b = TreeBuilder::new(400, 300);
+        let root = b.root();
+        let column = b.add(root, NodeKind::Column);
+        let node = b.add(column, NodeKind::Layout);
+        b.set_policy(node, counting_policy());
+        b.chain(
+            node,
+            &[
+                size(20, 20),
+                background(0xFFFF_0000, Shape::RECTANGLE),
+                padding(2),
+            ],
+        );
+        let mut layout = Layout::new();
+        b.lay_out_with(&mut layout, &FixedAdvanceMetrics);
+        let calls = policy_calls();
+        let before = b.tree.node(node).unwrap().chain[1].bounds;
+        b.tree.resize(300, 200);
+        assert!(b.lay_out_with(&mut layout, &FixedAdvanceMetrics));
+        assert_eq!(
+            policy_calls(),
+            calls,
+            "the size gives the rest its last constraints"
+        );
+        assert_eq!(b.tree.node(node).unwrap().chain[1].bounds, before);
+        assert_eq!(bounds(&b, node), "0,0 20x20");
+        b.tree.mark_needs_measure(node);
+        b.tree.resize(250, 200);
+        assert!(b.lay_out_with(&mut layout, &FixedAdvanceMetrics));
+        assert_eq!(
+            policy_calls(),
+            calls + 1,
+            "a node needing measuring runs its policy"
+        );
+    }
+
     #[test]
     fn measure_policy_misuse_details() {
         use crate::error::UiError;

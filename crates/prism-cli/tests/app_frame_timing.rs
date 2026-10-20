@@ -33,7 +33,7 @@
 //! machine that set the budget ([`NATIVE_RESIZE_LAYOUT`]). Since `layout-in-prism`, every
 //! layout modifier is a measurement step written in Prism too, so the session also prints its
 //! median against the one measured just before that change ([`POLICIES_RESIZE_LAYOUT`]), which
-//! it should stay within 1.7 times of (`layout-in-prism` D16); the 4 ms p99 target is unchanged.
+//! it should stay within 1.5 times of (`layout-in-prism` D9 and D16); the 4 ms p99 target is unchanged.
 //!
 //! The todo inputs are paced 100 ms apart, as a person's (D15 and D16 of `strong-skipping`): the
 //! same work takes longer on a core that clocked down while the program slept, which is what a
@@ -304,7 +304,7 @@ fn the_example_apps_meet_their_frame_budgets() {
     let resize_layout = resizing.median_of_medians("layout");
     println!(
         "  resize layout median {:.3} ms, {:.2} x the native layout's {:.3} ms, {:.2} x the native \
-         layout modifiers' {:.3} ms (budget 1.7 x)",
+         layout modifiers' {:.3} ms (budget 1.5 x)",
         resize_layout,
         resize_layout / NATIVE_RESIZE_LAYOUT,
         NATIVE_RESIZE_LAYOUT,
