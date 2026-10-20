@@ -18,7 +18,8 @@
 //! temporaries are live from `bb0` to the return. One walk of the body, with constant work per
 //! statement, argument and group.
 
-use crate::stability::{is_function_parameter, is_skippable};
+use crate::identity::{operand_source, rvalue_source, HiddenCaptures, HiddenKind, VersionSource};
+use crate::stability::{has_version_word, is_function_parameter, is_skippable};
 use crate::{Appended, BodyKeys};
 use prism_ast::Span;
 use prism_mir::{
@@ -113,11 +114,14 @@ pub(crate) fn compose_body(
     id: BodyId,
     keys: &BodyKeys,
     appended: &mut Appended,
+    hidden: &HiddenCaptures,
 ) -> Body {
     let original = &file.bodies[id];
-    let mut rewriter = Rewriter::new(file, id, keys, appended);
+    let mut rewriter = Rewriter::new(file, id, keys, appended, hidden);
     if original.is_compose {
         rewriter.add_composer_arguments();
+        rewriter.add_hidden_captures();
+        rewriter.plan_identities();
     }
     rewriter.replay();
     rewriter.finish()
@@ -163,10 +167,30 @@ pub(crate) struct Rewriter<'a> {
     adapter: Option<(BodyId, Type)>,
     /// A `Unit` temporary that operations without a result write.
     unit: Option<LocalId>,
+    /// The hidden version captures of the file's composable closures (D6 of `strong-skipping`).
+    hidden: &'a HiddenCaptures,
+    /// Per declared parameter, its version argument, for a borrow other than of a state object
+    /// (D4 of `strong-skipping`).
+    version_arguments: Vec<Option<LocalId>>,
+    /// For a composable closure, per hidden capture: the capture local it versions, its own
+    /// local and its kind (D6 of `strong-skipping`).
+    hidden_locals: Vec<(LocalId, LocalId, HiddenKind)>,
+    /// The version local of each reference local whose value reaches a borrowed argument or a
+    /// hidden capture (D5 of `strong-skipping`).
+    version_locals: HashMap<LocalId, LocalId>,
+    /// The reference locals whose version is fixed for the whole body (D5 of
+    /// `strong-skipping`).
+    fixed_versions: HashMap<LocalId, crate::identity::Fixed>,
 }
 
 impl<'a> Rewriter<'a> {
-    fn new(file: &'a MirFile, id: BodyId, keys: &'a BodyKeys, appended: &'a mut Appended) -> Self {
+    fn new(
+        file: &'a MirFile,
+        id: BodyId,
+        keys: &'a BodyKeys,
+        appended: &'a mut Appended,
+        hidden: &'a HiddenCaptures,
+    ) -> Self {
         let body = file.bodies[id].clone();
         let declared = body.argument_count;
         let skippable = is_skippable(&body, &file.types);
@@ -197,14 +221,22 @@ impl<'a> Rewriter<'a> {
             call_site_ordinals: HashMap::new(),
             adapter: None,
             unit: None,
+            hidden,
+            version_arguments: vec![None; declared],
+            hidden_locals: Vec::new(),
+            version_locals: HashMap::new(),
+            fixed_versions: HashMap::new(),
         }
     }
 
-    /// Inserts `$composer` and the change words after the declared arguments, renumbering
-    /// every later local (D19).
+    /// Inserts `$composer`, the change words and the version words after the declared
+    /// arguments, renumbering every later local (D19; D4 of `strong-skipping`).
     fn add_composer_arguments(&mut self) {
         let words = word_count(self.declared);
-        let added = 1 + words;
+        let versioned: Vec<usize> = (0..self.declared)
+            .filter(|index| has_version_word(&self.declared_type(*index), self.types))
+            .collect();
+        let added = 1 + words + versioned.len();
         let first = self.declared + 1;
         renumber_locals(&mut self.body, first, added);
         let old = std::mem::take(&mut self.body.locals).into_vec();
@@ -231,11 +263,174 @@ impl<'a> Rewriter<'a> {
             };
             self.changed.push(locals.alloc(argument(name)));
         }
+        for (ordinal, index) in versioned.into_iter().enumerate() {
+            self.version_arguments[index] =
+                Some(locals.alloc(argument(format!("$version{}", ordinal))));
+        }
         for local in old {
             locals.alloc(local);
         }
         self.body.locals = locals;
         self.body.argument_count += added;
+    }
+
+    /// For a composable closure, appends one `Int` capture local per hidden version capture
+    /// after its captures, renumbering every later local (D6 of `strong-skipping`).
+    fn add_hidden_captures(&mut self) {
+        let hidden = self.hidden.of_body(self.id);
+        if hidden.is_empty() {
+            return;
+        }
+        let first_capture = self.body.argument_count + 1;
+        let first = first_capture + self.body.capture_count;
+        renumber_locals(&mut self.body, first, hidden.len());
+        let old = std::mem::take(&mut self.body.locals).into_vec();
+        let mut locals = Arena::new();
+        let mut old = old.into_iter();
+        for _ in 0..first {
+            locals.alloc(old.next().expect("the arguments and the captures"));
+        }
+        for capture in hidden {
+            let captured = LocalId((first_capture + capture.capture) as u32);
+            let name = locals[captured].name.clone().unwrap_or_default();
+            let local = locals.alloc(LocalDeclaration {
+                ty: Type::Int,
+                kind: LocalKind::Capture,
+                mutable: false,
+                name: Some(format!("$version({})", name)),
+                binding: None,
+                parameter_kind: ParameterKind::Plain,
+                span: self.span,
+            });
+            self.hidden_locals.push((captured, local, capture.kind));
+        }
+        for local in old {
+            locals.alloc(local);
+        }
+        self.body.locals = locals;
+        let widened = self.body.capture_widenings.len() == self.body.capture_count;
+        self.body.capture_count += hidden.len();
+        for _ in hidden {
+            self.body.capture_modes.push(prism_mir::CaptureMode::Owned);
+            if widened {
+                self.body.capture_widenings.push(None);
+            }
+        }
+    }
+
+    /// Finds the versions of the reference locals that reach borrowed arguments and hidden
+    /// captures, and gives a version local to each one whose version is not fixed (D5 of
+    /// `strong-skipping`).
+    fn plan_identities(&mut self) {
+        let own: Vec<crate::identity::HiddenCapture> = self.hidden.of_body(self.id).to_vec();
+        let analysis =
+            crate::identity::analyze(self.file, &self.body, self.hidden, &own, |local| {
+                self.given_version(local)
+            });
+        self.fixed_versions = analysis.fixed;
+        let mut needed: Vec<LocalId> = analysis.needed.into_iter().collect();
+        needed.sort();
+        for local in needed {
+            let version = self.temporary(Type::Int);
+            self.version_locals.insert(local, version);
+        }
+    }
+
+    /// The version the body was given for the argument or capture local `local`: its version
+    /// argument or its hidden capture.
+    fn given_version(&self, local: LocalId) -> Option<crate::identity::Fixed> {
+        let index = local.index();
+        if index >= 1 && index <= self.declared {
+            return self.version_arguments[index - 1].map(crate::identity::Fixed::Given);
+        }
+        self.hidden_locals
+            .iter()
+            .find(|(captured, _, _)| *captured == local)
+            .map(|(_, hidden, _)| crate::identity::Fixed::Given(*hidden))
+    }
+
+    /// Whether `local` is a capture local with a hidden version of the place it stands for.
+    fn is_hidden_place(&self, local: LocalId) -> bool {
+        self.hidden_locals
+            .iter()
+            .any(|(captured, _, kind)| *captured == local && *kind == HiddenKind::Place)
+    }
+
+    /// The version a borrowed argument or hidden capture derived from `source` has (D2 of
+    /// `strong-skipping`): a constant, a version argument, a hidden capture or a version local.
+    fn version_operand(&self, source: VersionSource) -> Operand {
+        let fixed = |fixed: crate::identity::Fixed| match fixed {
+            crate::identity::Fixed::Constant(value) => Self::int(value),
+            crate::identity::Fixed::Given(local) => self.copy(local),
+        };
+        match source {
+            VersionSource::None => Self::int(0),
+            VersionSource::Permanent => Self::int(1),
+            VersionSource::CapturedPlace(captured) => {
+                if !self.is_hidden_place(captured) {
+                    return Self::int(0);
+                }
+                self.given_version(captured).map_or(Self::int(0), fixed)
+            }
+            VersionSource::Reference(local) => {
+                if let Some(version) = self.fixed_versions.get(&local) {
+                    return fixed(*version);
+                }
+                if let Some(version) = self.version_locals.get(&local) {
+                    return self.copy(*version);
+                }
+                self.given_version(local).map_or(Self::int(0), fixed)
+            }
+        }
+    }
+
+    /// The source of the version of a reference assigned `rvalue` in this body.
+    fn assigned_source(&self, rvalue: &Rvalue) -> VersionSource {
+        rvalue_source(&self.body, self.types, rvalue, |local| {
+            self.is_hidden_place(local)
+        })
+    }
+
+    /// The hidden version captures to append to a composable closure value built from
+    /// `captures`, in the order of its hidden captures (D6 of `strong-skipping`).
+    fn hidden_capture_values(&self, closure: BodyId, captures: &[Capture]) -> Vec<Capture> {
+        self.hidden
+            .of_body(closure)
+            .iter()
+            .map(|hidden| {
+                let source = crate::identity::hidden_source(
+                    &self.body,
+                    self.types,
+                    &captures[hidden.capture],
+                    hidden.kind,
+                    |local| self.is_hidden_place(local),
+                );
+                Capture::Owned(self.version_operand(source))
+            })
+            .collect()
+    }
+
+    /// When `destination` is a reference local with a version local, a block assigning it
+    /// `value` before going to `target`, for a call whose result has that version; else
+    /// `target`.
+    fn version_after_call(&mut self, destination: &Place, target: BlockId, value: i64) -> BlockId {
+        let Some(version) = destination
+            .as_local()
+            .and_then(|local| self.version_locals.get(&local).copied())
+        else {
+            return target;
+        };
+        let block = self.new_block();
+        let span = self.span;
+        self.blocks[block.index()].statements.push(Statement {
+            kind: StatementKind::assign(Place::local(version), Rvalue::Use(Self::int(value))),
+            span,
+        });
+        self.blocks[block.index()].terminator = Terminator {
+            kind: TerminatorKind::Goto(target),
+            span,
+        };
+        block
     }
 
     // Blocks.
@@ -470,12 +665,26 @@ impl<'a> Rewriter<'a> {
                 );
                 self.regions.pop();
             }
-            StatementKind::Assign(place, rvalue) => {
+            StatementKind::Assign(place, mut rvalue) => {
                 self.note_assignment(&place, &rvalue);
+                // A composable closure also owns the versions of the references it borrows
+                // from (D6 of `strong-skipping`).
+                if let Rvalue::Closure { body, captures } = rvalue.as_mut() {
+                    let hidden = self.hidden_capture_values(*body, captures);
+                    captures.extend(hidden);
+                }
+                let version = place
+                    .as_local()
+                    .and_then(|local| self.version_locals.get(&local).copied())
+                    .map(|version| (version, self.version_operand(self.assigned_source(&rvalue))));
                 self.pending.push(Statement {
                     kind: StatementKind::Assign(place, rvalue),
                     span,
                 });
+                // A reference's version is assigned beside it, so they agree on every path.
+                if let Some((version, operand)) = version {
+                    self.assign(version, Rvalue::Use(operand), span);
+                }
             }
             StatementKind::Destructure {
                 source,
@@ -485,6 +694,10 @@ impl<'a> Rewriter<'a> {
                 for (_, target) in &parts {
                     self.sources.remove(target);
                 }
+                let versions: Vec<LocalId> = parts
+                    .iter()
+                    .filter_map(|(_, target)| self.version_locals.get(target).copied())
+                    .collect();
                 self.pending.push(Statement {
                     kind: StatementKind::Destructure {
                         source,
@@ -493,6 +706,9 @@ impl<'a> Rewriter<'a> {
                     },
                     span,
                 });
+                for version in versions {
+                    self.assign(version, Rvalue::Use(Self::int(0)), span);
+                }
             }
             kind => self.pending.push(Statement { kind, span }),
         }
@@ -530,6 +746,24 @@ impl<'a> Rewriter<'a> {
             Rvalue::Use(Operand::Constant(_)) => Some(Source::Static),
             Rvalue::Use(Operand::Copy(source, _) | Operand::Move(source, _)) => {
                 self.place_source(source)
+            }
+            // A borrow of a top-level value is static, and a reborrow of a whole borrowed
+            // parameter forwards its bits (D10 of `strong-skipping`).
+            Rvalue::Borrow {
+                mutable: false,
+                place: borrowed,
+                ..
+            } if borrowed.projections.first() == Some(&Projection::Deref) => {
+                if self.sources.get(&borrowed.local) == Some(&Source::TopLevelReference) {
+                    Some(Source::Static)
+                } else if borrowed.projections.len() == 1
+                    && borrowed.local.index() >= 1
+                    && borrowed.local.index() <= self.declared
+                {
+                    Some(Source::Parameter(borrowed.local.index() - 1))
+                } else {
+                    None
+                }
             }
             _ => None,
         };
@@ -578,6 +812,13 @@ impl<'a> Rewriter<'a> {
                 target,
                 is_compose,
             } if builtin.is_compose_runtime() => {
+                // The value a `remember` lends is permanent (D2 of `strong-skipping`).
+                let target = match target {
+                    Some(target) if builtin == BuiltinFunction::Remember => {
+                        Some(self.version_after_call(&destination, target, 1))
+                    }
+                    target => target,
+                };
                 let call = IntrinsicCall {
                     builtin,
                     arguments,
@@ -639,14 +880,23 @@ impl<'a> Rewriter<'a> {
             } if self.body.is_compose => {
                 let wrapped = self.start_call_site_group(span);
                 let words = self.change_words(&arguments, span);
+                // One version per borrowed parameter, after the change words (D4 of
+                // `strong-skipping`).
+                let versions: Vec<Operand> = arguments
+                    .iter()
+                    .zip(parameters.iter())
+                    .filter(|(_, parameter)| has_version_word(parameter, self.types))
+                    .map(|(argument, _)| self.version_operand(operand_source(argument)))
+                    .collect();
                 arguments.push(self.composer());
                 parameters.push(Type::Int);
                 parameter_kinds.push(ParameterKind::Plain);
-                for word in words {
+                for word in words.into_iter().chain(versions) {
                     arguments.push(word);
                     parameters.push(Type::Int);
                     parameter_kinds.push(ParameterKind::Plain);
                 }
+                let target = target.map(|target| self.version_after_call(&destination, target, 0));
                 if let Some(local) = destination.as_local() {
                     self.sources.remove(&local);
                 }
@@ -677,10 +927,51 @@ impl<'a> Rewriter<'a> {
                     self.end_call_site_group(target, span);
                 }
             }
-            kind => {
-                if let TerminatorKind::Call { destination, .. } = &kind {
+            mut kind => {
+                if let TerminatorKind::Call {
+                    callee,
+                    arguments,
+                    parameters,
+                    type_arguments,
+                    destination,
+                    target,
+                    ..
+                } = &mut kind
+                {
                     if let Some(local) = destination.as_local() {
                         self.sources.remove(&local);
+                    }
+                    let version = destination
+                        .as_local()
+                        .and_then(|local| self.version_locals.get(&local).copied());
+                    match (callee, version) {
+                        // A borrow of a state's contents has the state's version, read on
+                        // the same state object right before the read (D2 of
+                        // `strong-skipping`).
+                        (Callee::State(prism_mir::StateOperation::Read), Some(version)) => {
+                            let state = match &arguments[0] {
+                                Operand::Move(place, span) | Operand::Copy(place, span) => {
+                                    Operand::Copy(place.clone(), *span)
+                                }
+                                constant => constant.clone(),
+                            };
+                            let kind = prism_mir::StateOperation::kind_of(parameters);
+                            self.call_with(
+                                Callee::State(prism_mir::StateOperation::Version),
+                                vec![state],
+                                prism_mir::StateOperation::Version.parameters(kind),
+                                type_arguments.clone(),
+                                Place::local(version),
+                                span,
+                            );
+                        }
+                        (_, Some(_)) => {
+                            if let Some(next) = *target {
+                                let destination = destination.clone();
+                                *target = Some(self.version_after_call(&destination, next, 0));
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 self.terminate(kind, span)
@@ -1235,9 +1526,21 @@ impl<'a> Rewriter<'a> {
                 block.statements.extend(deads.iter().cloned());
             }
         }
+        // Version locals start with no identity, so that one read on a path where its
+        // reference was never assigned is defined.
+        let mut versions: Vec<LocalId> = self.version_locals.values().copied().collect();
+        versions.sort();
+        let initial: Vec<Statement> = versions
+            .into_iter()
+            .map(|local| Statement {
+                kind: StatementKind::assign(Place::local(local), Rvalue::Use(Self::int(0))),
+                span: self.span,
+            })
+            .collect();
         let entry = &mut self.blocks[0].statements;
         let rest = std::mem::take(entry);
         entry.extend(lives);
+        entry.extend(initial);
         entry.extend(rest);
         let mut arena = Arena::new();
         for block in self.blocks {
@@ -1332,12 +1635,21 @@ impl<'a> Rewriter<'a> {
         let functions: Vec<usize> = (0..self.declared)
             .filter(|index| is_function_parameter(&self.declared_type(*index)))
             .collect();
+        let versions: Vec<LocalId> = self.version_arguments.iter().flatten().copied().collect();
         for index in 0..self.declared {
             self.parameter_bits(index);
         }
-        let restarted = (!functions.is_empty()).then(|| self.temporary(Type::Bool));
+        let restarted =
+            (!functions.is_empty() || !versions.is_empty()).then(|| self.temporary(Type::Bool));
         let replaceable = restarted.map(|_| self.new_block());
         if let Some(replaceable) = replaceable {
+            // A borrow without identity may be of the caller's frame, which a restart could
+            // not read later: the call runs in the replaceable group (D8 of `strong-skipping`).
+            for &version in &versions {
+                let next = self.new_block();
+                self.switch(self.copy(version), vec![(0, replaceable)], next);
+                self.current = next;
+            }
             for &index in &functions {
                 let keepable = self.temporary(Type::Bool);
                 let borrow = self.parameter_borrow(index);
@@ -1513,6 +1825,35 @@ impl<'a> Rewriter<'a> {
             Rvalue::Bits(BitOperator::And, self.copy(passed), Self::int(3)),
             span,
         );
+        if let Some(version) = self.version_arguments[index] {
+            // A borrow is kept as its identity, its address and version, compared by its two
+            // words (D7 of `strong-skipping`).
+            let result = self.temporary(Type::Int);
+            let composer = self.composer();
+            self.operation(
+                ComposerOperation::Keep(ty.clone()),
+                vec![
+                    composer,
+                    self.copy(LocalId((index + 1) as u32)),
+                    self.copy(version),
+                    self.copy(passed),
+                ],
+                vec![Type::Int, ty, Type::Int, Type::Int],
+                Place::local(result),
+                span,
+            );
+            self.assign(
+                bits,
+                Rvalue::Bits(BitOperator::And, self.copy(result), Self::int(3)),
+                span,
+            );
+            self.assign(
+                dirty,
+                Rvalue::Bits(BitOperator::Or, self.copy(dirty), self.copy(result)),
+                span,
+            );
+            return;
+        }
         if !is_function_parameter(&ty) {
             // A borrowed state is kept as its weak handle, compared by identity (D13 of
             // `owned-state`).
@@ -1652,11 +1993,13 @@ impl<'a> Rewriter<'a> {
     fn skippable_end(&mut self, end: BlockId, ret: BlockId, restarted: Option<LocalId>) {
         let span = self.span;
         let restart = self.appended.reserve();
+        let versioned: Vec<bool> = self.version_arguments.iter().map(Option::is_some).collect();
         let restart_body = crate::restart::restart_body(
             &self.file.bodies[self.id],
             self.id,
             &self.body,
             self.declared,
+            &versioned,
             self.types,
             span,
         );

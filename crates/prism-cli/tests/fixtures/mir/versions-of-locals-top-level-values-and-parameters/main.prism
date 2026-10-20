@@ -1,0 +1,9 @@
+// expect: ok
+val Title: String = "t"
+compose fun Show(s: &String) {}
+compose fun Screen(s: &String) {
+    val local = "a" + "b"
+    Show(local)
+    Show(Title)
+    Show(s)
+}

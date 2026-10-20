@@ -1,0 +1,16 @@
+// expect: ok
+// run: 0
+struct Item { val id: Int, val title: String }
+compose fun Show(s: &String) { println("show $s") }
+compose fun ItemView(item: &Item, tick: &State<Int>) {
+    println("item ${tick.value}")
+    Show(item.title)
+}
+compose fun Screen(items: &State<List<Item>>, tick: &State<Int>) { ItemView(items.value[0], tick) }
+fun main() {
+    val items = mutableStateOf(listOf(Item(1, "a" + "b")))
+    val tick = mutableStateOf(0)
+    val c = composition { Screen(items, tick) }
+    tick.value = 1
+    println(c.recompose())
+}

@@ -43,6 +43,7 @@ pub(crate) fn restart_body(
     function: BodyId,
     composed: &Body,
     declared: usize,
+    versioned: &[bool],
     types: &prism_typed_tree::TypeTable,
     span: Span,
 ) -> Body {
@@ -74,6 +75,13 @@ pub(crate) fn restart_body(
             locals.alloc(local(ty.clone(), LocalKind::Temporary, name, span))
         })
         .collect();
+    // A kept identity's version, read beside its reference (D7 of `strong-skipping`).
+    let versions: Vec<Option<LocalId>> = versioned
+        .iter()
+        .map(|versioned| {
+            versioned.then(|| locals.alloc(local(Type::Int, LocalKind::Temporary, None, span)))
+        })
+        .collect();
     let viewed: Vec<Option<LocalId>> = parameter_types
         .iter()
         .map(|ty| {
@@ -85,15 +93,35 @@ pub(crate) fn restart_body(
     let mut blocks = Arena::new();
     let lives: Vec<Statement> = kept
         .iter()
+        .chain(versions.iter().flatten())
         .chain(viewed.iter().flatten())
         .map(|local| Statement {
             kind: StatementKind::StorageLive(*local),
             span,
         })
         .collect();
-    // One block per kept argument, read in parameter order.
+    // One block per kept argument, read in parameter order, and one per kept version.
+    let mut reads: Vec<(ComposerOperation, LocalId)> = Vec::new();
     for (index, (local, ty)) in kept.iter().zip(&kept_types).enumerate() {
-        let statements = if index == 0 {
+        reads.push((
+            ComposerOperation::KeptParameter {
+                index: index as u32,
+                ty: ty.clone(),
+            },
+            *local,
+        ));
+        if let Some(version) = versions[index] {
+            reads.push((
+                ComposerOperation::KeptVersion {
+                    index: index as u32,
+                    ty: ty.clone(),
+                },
+                version,
+            ));
+        }
+    }
+    for (position, (operation, destination)) in reads.into_iter().enumerate() {
+        let statements = if position == 0 {
             lives.clone()
         } else {
             Vec::new()
@@ -101,16 +129,13 @@ pub(crate) fn restart_body(
         blocks.alloc(block(
             statements,
             TerminatorKind::Call {
-                callee: Callee::Composer(ComposerOperation::KeptParameter {
-                    index: index as u32,
-                    ty: ty.clone(),
-                }),
+                callee: Callee::Composer(operation),
                 arguments: vec![copy(composer)],
                 parameters: vec![Type::Int],
                 parameter_kinds: vec![ParameterKind::Plain],
                 type_arguments: Vec::new(),
-                destination: Place::local(*local),
-                target: Some(prism_mir::BlockId((index + 1) as u32)),
+                destination: Place::local(destination),
+                target: Some(prism_mir::BlockId((position + 1) as u32)),
                 is_compose: false,
             },
             span,
@@ -157,15 +182,17 @@ pub(crate) fn restart_body(
             .into_iter()
             .map(|word| Operand::Constant(Constant::Int(word))),
     );
+    arguments.extend(versions.iter().flatten().map(|version| copy(*version)));
+    let added = 1 + words + versions.iter().flatten().count();
     let mut parameters = original
         .arguments()
         .map(|local| original.locals[local].ty.clone())
         .collect::<Vec<_>>();
-    parameters.extend(std::iter::repeat_n(Type::Int, 1 + words));
+    parameters.extend(std::iter::repeat_n(Type::Int, added));
     let parameter_kinds = original
         .arguments()
         .map(|local| original.locals[local].parameter_kind)
-        .chain(std::iter::repeat_n(ParameterKind::Plain, 1 + words))
+        .chain(std::iter::repeat_n(ParameterKind::Plain, added))
         .collect();
     let type_arguments = original
         .type_parameters
@@ -191,6 +218,7 @@ pub(crate) fn restart_body(
     ));
     let deads = kept
         .iter()
+        .chain(versions.iter().flatten())
         .chain(viewed.iter().flatten())
         .rev()
         .map(|local| Statement {

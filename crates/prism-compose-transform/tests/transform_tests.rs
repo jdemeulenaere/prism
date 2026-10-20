@@ -201,10 +201,12 @@ fn which_composables_are_skippable() {
          compose fun <T> E(x: T) {}\n\
          compose fun <T : Copy> F(x: T) {}\n\
          compose fun G(onClick: escaping () -> Unit) {}\n\
-         compose fun H(): Int = 1\n",
+         compose fun H(): Int = 1\n\
+         compose fun L(s: (&String)?, p: &Point) {}\n\
+         compose fun M(r: &mut Int) {}\n",
     );
     let dump = file.dump();
-    for name in ["A", "B", "C", "D", "E", "F", "G", "H"] {
+    for name in ["A", "B", "C", "D", "E", "F", "G", "H", "L", "M"] {
         let header = dump
             .lines()
             .find(|line| {
@@ -215,7 +217,7 @@ fn which_composables_are_skippable() {
         let skippable = header.contains("skippable");
         assert_eq!(
             skippable,
-            matches!(name, "A" | "F" | "G"),
+            matches!(name, "A" | "C" | "F" | "G" | "L"),
             "{}: {}",
             name,
             header
@@ -296,4 +298,122 @@ fn summaries_list_the_body_keys_of_composable_bodies() {
     );
     let decoded = prism_mir::FileSummary::decode(&summary.encode()).expect("it decodes");
     assert_eq!(decoded, summary);
+}
+
+/// The version operand of each call of `main::Show` in the body named `name`, in block order:
+/// `const <n>`, the name of the argument or capture copied, or `local` for a version local.
+fn show_versions(file: &MirFile, name: &str) -> Vec<String> {
+    let (_, body) = file
+        .bodies
+        .iter()
+        .find(|(id, _)| file.body_name(*id) == name)
+        .unwrap_or_else(|| panic!("no body {}", name));
+    calls(file, name)
+        .into_iter()
+        .filter_map(|kind| match kind {
+            TerminatorKind::Call {
+                callee: Callee::Function(path),
+                arguments,
+                ..
+            } if path.name == "Show" => Some(match arguments.last() {
+                Some(Operand::Constant(prism_mir::Constant::Int(n))) => format!("const {}", n),
+                Some(Operand::Copy(place, _)) => body.locals[place.local]
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| "local".to_string()),
+                other => format!("{:?}", other),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether the body named `name` calls `state version`.
+fn reads_a_version(file: &MirFile, name: &str) -> bool {
+    calls(file, name).into_iter().any(|kind| {
+        matches!(
+            kind,
+            TerminatorKind::Call {
+                callee: Callee::State(prism_mir::StateOperation::Version),
+                ..
+            }
+        )
+    })
+}
+
+/// compose: "A Borrowed Argument's Identity Is Its Address and Its Source's Version": each
+/// source of a borrow gives its version (D2 of `strong-skipping`).
+#[test]
+fn identities_of_each_source() {
+    let file = compose(
+        "val Title: String = \"t\"\n\
+         struct Item { val title: String }\n\
+         compose fun Show(s: &String) {}\n\
+         compose fun Screen(items: &State<List<String>>, item: &Item, p: &String) {\n\
+             val local = \"a\" + \"b\"\n\
+             Show(local)\n\
+             Show(Title)\n\
+             Show(p)\n\
+             Show(item.title)\n\
+             val r = remember { \"x\" + \"y\" }\n\
+             Show(r)\n\
+             Show(items.value[0])\n\
+         }\n",
+    );
+    assert_eq!(
+        show_versions(&file, "main::Screen"),
+        [
+            "const 0",
+            "const 1",
+            "$version1",
+            "$version0",
+            "const 1",
+            "local"
+        ]
+    );
+    assert!(reads_a_version(&file, "main::Screen"));
+}
+
+/// The version of a `for` variable over a state's contents is the state's, through the loop.
+#[test]
+fn identities_through_a_loop_and_its_closures() {
+    let file = compose(
+        "compose fun Show(s: &String) {}\n\
+         compose fun Screen(items: &State<List<String>>) {\n\
+             for (s in items.value) { Show(s); key(s.length) { Show(s) } }\n\
+         }\n",
+    );
+    assert_eq!(show_versions(&file, "main::Screen"), ["local"]);
+    assert!(reads_a_version(&file, "main::Screen"));
+    // The key lambda passes its hidden capture.
+    assert_eq!(
+        show_versions(&file, "main::Screen#closure0"),
+        ["$version(s)"]
+    );
+}
+
+/// A reference assigned on two branches gets a version local assigned on each; a call's result
+/// has no identity.
+#[test]
+fn identities_of_branches_and_call_results() {
+    let file = compose(
+        "fun first(xs: &List<String>): &String = &xs[0]\n\
+         compose fun Show(s: &String) {}\n\
+         compose fun Screen(items: &State<List<String>>, c: Bool) {\n\
+             val local = \"a\" + \"b\"\n\
+             val r = if (c) &items.value[0] else &local\n\
+             Show(r)\n\
+             Show(first(&items.value))\n\
+         }\n",
+    );
+    assert_eq!(show_versions(&file, "main::Screen"), ["local", "const 0"]);
+    let (_, body) = file
+        .bodies
+        .iter()
+        .find(|(id, _)| file.body_name(*id) == "main::Screen")
+        .unwrap();
+    // The version local of `r`'s value is assigned a constant on the branch of the local.
+    let dump = file.dump();
+    assert!(body.blocks.len() > 1, "{}", dump);
+    assert!(reads_a_version(&file, "main::Screen"), "{}", dump);
 }

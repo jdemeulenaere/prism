@@ -1,0 +1,75 @@
+module main
+val main::Title: String @2:1
+  local _0: String (return)
+  bb0:
+    _0 = const "t" @2:21
+    return @2:1
+compose fun main::Show(_1: &String): Unit @3:1
+  local _0: Unit (return)
+  local _1 s: &String (argument)
+  bb0:
+    _0 = const () @3:30
+    return @3:1
+compose fun main::Screen(_1: &String): Unit @4:1
+  local _0: Unit (return)
+  local _1 s: &String (argument)
+  local _2 local: String (user)
+  local _3: String (temporary)
+  local _4: &String (temporary)
+  local _5: String (temporary)
+  local _6: &String (temporary)
+  local _7: &String (temporary)
+  local _8: Unit (temporary)
+  local _9: &String (temporary)
+  local _10: &String (temporary)
+  local _11: Unit (temporary)
+  local _12: &String (temporary)
+  local _13: Unit (temporary)
+  bb0:
+    storage_live _2 @5:5
+    storage_live _3 @5:17
+    _3 = const "a" @5:17
+    storage_live _4 @5:17
+    _4 = &_3 (operator) @5:17
+    storage_live _5 @5:23
+    _5 = const "b" @5:23
+    storage_live _6 @5:23
+    _6 = &_5 (operator) @5:23
+    _2 = move _4 + move _6 @5:17
+    storage_dead _6 @5:5
+    drop _5 -> bb1 @5:5
+  bb1:
+    storage_dead _5 @5:5
+    storage_dead _4 @5:5
+    drop _3 -> bb2 @5:5
+  bb2:
+    storage_dead _3 @5:5
+    storage_live _7 @6:10
+    _7 = &_2 (argument) @6:10
+    storage_live _8 @6:5
+    _8 = call compose main::Show(move _7) -> bb3 @6:5
+  bb3:
+    storage_dead _8 @6:5
+    storage_dead _7 @6:5
+    storage_live _9 @7:10
+    storage_live _10 @7:10
+    _10 = const &main::Title @7:10
+    _9 = &(*_10) (argument) @7:10
+    storage_live _11 @7:5
+    _11 = call compose main::Show(move _9) -> bb4 @7:5
+  bb4:
+    storage_dead _11 @7:5
+    storage_dead _10 @7:5
+    storage_dead _9 @7:5
+    storage_live _12 @8:10
+    _12 = copy _1 @8:10
+    storage_live _13 @8:5
+    _13 = call compose main::Show(move _12) -> bb5 @8:5
+  bb5:
+    storage_dead _13 @8:5
+    storage_dead _12 @8:5
+    _0 = const () @4:32
+    drop _2 -> bb6 @9:1
+  bb6:
+    storage_dead _2 @9:1
+    return @4:1

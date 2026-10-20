@@ -1,0 +1,14 @@
+// expect: ok
+// run: 0
+compose fun Show(s: &String, n: &State<Int>) { println("show $s ${n.value}") }
+compose fun Screen(n: &State<Int>) {
+    val s = "a" + "b"
+    println("screen")
+    Show(s, n)
+}
+fun main() {
+    val n = mutableStateOf(0)
+    val c = composition { Screen(n) }
+    n.value = 1
+    println(c.recompose())
+}

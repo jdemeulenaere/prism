@@ -1,0 +1,275 @@
+module main
+phase composed
+val main::Title: String @2:1
+  local _0: String (return)
+  bb0:
+    _0 = const "t" @2:21
+    return @2:1
+compose composed skippable fun main::Show(_1: &String, _2: Int, _3: Int, _4: Int): Unit @3:1
+  local _0: Unit (return)
+  local _1 s: &String (argument)
+  local _2 $composer: Int (argument)
+  local _3 $changed: Int (argument)
+  local _4 $version0: Int (argument)
+  local _5: Int (temporary)
+  local _6: Bool (temporary)
+  local _7: Unit (temporary)
+  local _8: Int (temporary)
+  local _9: Int (temporary)
+  local _10: Int (temporary)
+  local _11: Int (temporary)
+  local _12: Bool (temporary)
+  local _13: (Int) -> Unit (temporary)
+  bb0:
+    storage_live _5 @3:1
+    storage_live _6 @3:1
+    storage_live _7 @3:1
+    storage_live _8 @3:1
+    storage_live _9 @3:1
+    storage_live _10 @3:1
+    storage_live _11 @3:1
+    storage_live _12 @3:1
+    storage_live _13 @3:1
+    switch copy _4 [0 -> bb4, otherwise -> bb5] @3:1
+  bb1:
+    switch copy _6 [0 -> bb16, otherwise -> bb15] @3:1
+  bb2:
+    _0 = const () @3:30
+    goto -> bb1 @3:1
+  bb3:
+    storage_dead _13 @3:1
+    storage_dead _12 @3:1
+    storage_dead _11 @3:1
+    storage_dead _10 @3:1
+    storage_dead _9 @3:1
+    storage_dead _8 @3:1
+    storage_dead _7 @3:1
+    storage_dead _6 @3:1
+    storage_dead _5 @3:1
+    return @3:1
+  bb4:
+    _7 = call composer start_group key 0xfc865c0f29a67d20 /* body main::Show */(copy _2) -> bb14 @3:1
+  bb5:
+    _7 = call composer start_restart_group key 0xfc865c0f29a67d20 /* body main::Show */(copy _2) -> bb6 @3:1
+  bb6:
+    _6 = const true @3:1
+    _8 = const 0 @3:1
+    _9 = bits copy _3 >>> const 1 @3:1
+    _9 = bits copy _9 & const 3 @3:1
+    _10 = call composer keep<&String>(copy _2, copy _1, copy _4, copy _9) -> bb7 @3:1
+  bb7:
+    _5 = bits copy _10 & const 3 @3:1
+    _8 = bits copy _8 | copy _10 @3:1
+    _8 = bits copy _8 & const 4 @3:1
+    _11 = bits copy _3 & const 1 @3:1
+    switch copy _11 [0 -> bb9, otherwise -> bb8] @3:1
+  bb8:
+    goto -> bb2 @3:1
+  bb9:
+    switch copy _8 [0 -> bb10, otherwise -> bb8] @3:1
+  bb10:
+    _12 = call composer skipping(copy _2) -> bb12 @3:1
+  bb11:
+    _7 = call composer skip_to_group_end(copy _2) -> bb13 @3:1
+  bb12:
+    switch copy _12 [0 -> bb8, otherwise -> bb11] @3:1
+  bb13:
+    goto -> bb1 @3:1
+  bb14:
+    _6 = const false @3:1
+    _5 = bits copy _3 >>> const 1 @3:1
+    _5 = bits copy _5 & const 3 @3:1
+    goto -> bb2 @3:1
+  bb15:
+    _13 = closure main::Show#restart [] @3:1
+    _7 = call composer end_restart_group(copy _2, move _13) -> bb18 @3:1
+  bb16:
+    _7 = call composer end_group(copy _2) -> bb17 @3:1
+  bb17:
+    goto -> bb3 @3:1
+  bb18:
+    goto -> bb3 @3:1
+compose composed skippable fun main::Screen(_1: &String, _2: Int, _3: Int, _4: Int): Unit @4:1
+  local _0: Unit (return)
+  local _1 s: &String (argument)
+  local _2 $composer: Int (argument)
+  local _3 $changed: Int (argument)
+  local _4 $version0: Int (argument)
+  local _5 local: String (user)
+  local _6: String (temporary)
+  local _7: &String (temporary)
+  local _8: String (temporary)
+  local _9: &String (temporary)
+  local _10: &String (temporary)
+  local _11: Unit (temporary)
+  local _12: &String (temporary)
+  local _13: &String (temporary)
+  local _14: Unit (temporary)
+  local _15: &String (temporary)
+  local _16: Unit (temporary)
+  local _17: Int (temporary)
+  local _18: Int (temporary)
+  local _19: Int (temporary)
+  local _20: Bool (temporary)
+  local _21: Unit (temporary)
+  local _22: Int (temporary)
+  local _23: Int (temporary)
+  local _24: Int (temporary)
+  local _25: Int (temporary)
+  local _26: Bool (temporary)
+  local _27: (Int) -> Unit (temporary)
+  bb0:
+    storage_live _17 @4:1
+    storage_live _18 @4:1
+    storage_live _19 @4:1
+    storage_live _20 @4:1
+    storage_live _21 @4:1
+    storage_live _22 @4:1
+    storage_live _23 @4:1
+    storage_live _24 @4:1
+    storage_live _25 @4:1
+    storage_live _26 @4:1
+    storage_live _27 @4:1
+    switch copy _4 [0 -> bb10, otherwise -> bb11] @4:1
+  bb1:
+    storage_dead _8 @5:5
+    storage_dead _7 @5:5
+    drop _6 -> bb2 @5:5
+  bb2:
+    storage_dead _6 @5:5
+    storage_live _10 @6:10
+    _10 = &_5 (argument) @6:10
+    storage_live _11 @6:5
+    _11 = call compose main::Show(move _10, copy _2, const 0, const 0) -> bb3 @6:5
+  bb3:
+    storage_dead _11 @6:5
+    storage_dead _10 @6:5
+    storage_live _12 @7:10
+    storage_live _13 @7:10
+    _13 = const &main::Title @7:10
+    _12 = &(*_13) (argument) @7:10
+    storage_live _14 @7:5
+    _14 = call compose main::Show(move _12, copy _2, const 6, const 1) -> bb4 @7:5
+  bb4:
+    storage_dead _14 @7:5
+    storage_dead _13 @7:5
+    storage_dead _12 @7:5
+    storage_live _15 @8:10
+    _15 = copy _1 @8:10
+    storage_live _16 @8:5
+    _18 = const 0 @8:5
+    _19 = bits copy _17 << const 1 @8:5
+    _18 = bits copy _18 | copy _19 @8:5
+    _16 = call compose main::Show(move _15, copy _2, copy _18, copy _4) -> bb5 @8:5
+  bb5:
+    storage_dead _16 @8:5
+    storage_dead _15 @8:5
+    _0 = const () @4:32
+    drop _5 -> bb6 @9:1
+  bb6:
+    storage_dead _5 @9:1
+    goto -> bb7 @4:1
+  bb7:
+    switch copy _20 [0 -> bb22, otherwise -> bb21] @4:1
+  bb8:
+    storage_live _5 @5:5
+    storage_live _6 @5:17
+    _6 = const "a" @5:17
+    storage_live _7 @5:17
+    _7 = &_6 (operator) @5:17
+    storage_live _8 @5:23
+    _8 = const "b" @5:23
+    storage_live _9 @5:23
+    _9 = &_8 (operator) @5:23
+    _5 = move _7 + move _9 @5:17
+    storage_dead _9 @5:5
+    drop _8 -> bb1 @5:5
+  bb9:
+    storage_dead _27 @4:1
+    storage_dead _26 @4:1
+    storage_dead _25 @4:1
+    storage_dead _24 @4:1
+    storage_dead _23 @4:1
+    storage_dead _22 @4:1
+    storage_dead _21 @4:1
+    storage_dead _20 @4:1
+    storage_dead _19 @4:1
+    storage_dead _18 @4:1
+    storage_dead _17 @4:1
+    return @4:1
+  bb10:
+    _21 = call composer start_group key 0x583440014437fd05 /* body main::Screen */(copy _2) -> bb20 @4:1
+  bb11:
+    _21 = call composer start_restart_group key 0x583440014437fd05 /* body main::Screen */(copy _2) -> bb12 @4:1
+  bb12:
+    _20 = const true @4:1
+    _22 = const 0 @4:1
+    _23 = bits copy _3 >>> const 1 @4:1
+    _23 = bits copy _23 & const 3 @4:1
+    _24 = call composer keep<&String>(copy _2, copy _1, copy _4, copy _23) -> bb13 @4:1
+  bb13:
+    _17 = bits copy _24 & const 3 @4:1
+    _22 = bits copy _22 | copy _24 @4:1
+    _22 = bits copy _22 & const 4 @4:1
+    _25 = bits copy _3 & const 1 @4:1
+    switch copy _25 [0 -> bb15, otherwise -> bb14] @4:1
+  bb14:
+    goto -> bb8 @4:1
+  bb15:
+    switch copy _22 [0 -> bb16, otherwise -> bb14] @4:1
+  bb16:
+    _26 = call composer skipping(copy _2) -> bb18 @4:1
+  bb17:
+    _21 = call composer skip_to_group_end(copy _2) -> bb19 @4:1
+  bb18:
+    switch copy _26 [0 -> bb14, otherwise -> bb17] @4:1
+  bb19:
+    goto -> bb7 @4:1
+  bb20:
+    _20 = const false @4:1
+    _17 = bits copy _3 >>> const 1 @4:1
+    _17 = bits copy _17 & const 3 @4:1
+    goto -> bb8 @4:1
+  bb21:
+    _27 = closure main::Screen#restart [] @4:1
+    _21 = call composer end_restart_group(copy _2, move _27) -> bb24 @4:1
+  bb22:
+    _21 = call composer end_group(copy _2) -> bb23 @4:1
+  bb23:
+    goto -> bb9 @4:1
+  bb24:
+    goto -> bb9 @4:1
+closure main::Show#restart(_1: Int): Unit @3:1
+  local _0: Unit (return)
+  local _1 $composer: Int (argument)
+  local _2 s: &String (temporary)
+  local _3: Int (temporary)
+  bb0:
+    storage_live _2 @3:1
+    storage_live _3 @3:1
+    _2 = call composer kept_parameter 0<&String>(copy _1) -> bb1 @3:1
+  bb1:
+    _3 = call composer kept_version 0<&String>(copy _1) -> bb2 @3:1
+  bb2:
+    _0 = call compose main::Show(copy _2, copy _1, const 3, copy _3) -> bb3 @3:1
+  bb3:
+    storage_dead _3 @3:1
+    storage_dead _2 @3:1
+    return @3:1
+closure main::Screen#restart(_1: Int): Unit @4:1
+  local _0: Unit (return)
+  local _1 $composer: Int (argument)
+  local _2 s: &String (temporary)
+  local _3: Int (temporary)
+  bb0:
+    storage_live _2 @4:1
+    storage_live _3 @4:1
+    _2 = call composer kept_parameter 0<&String>(copy _1) -> bb1 @4:1
+  bb1:
+    _3 = call composer kept_version 0<&String>(copy _1) -> bb2 @4:1
+  bb2:
+    _0 = call compose main::Screen(copy _2, copy _1, const 3, copy _3) -> bb3 @4:1
+  bb3:
+    storage_dead _3 @4:1
+    storage_dead _2 @4:1
+    return @4:1

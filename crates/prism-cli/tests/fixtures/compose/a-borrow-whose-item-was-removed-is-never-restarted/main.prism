@@ -1,0 +1,17 @@
+// expect: ok
+// run: 0
+compose fun Show(s: &String, n: &State<Int>) { println("show $s ${n.value}") }
+compose fun Screen(items: &State<List<String>>, n: &State<Int>) {
+    println("screen ${items.value.size}")
+    if (items.value.size > 0) {
+        Show(items.value[0], n)
+    }
+}
+fun main() {
+    val items = mutableStateOf(listOf("a" + "b"))
+    val n = mutableStateOf(0)
+    val c = composition { Screen(items, n) }
+    items.value.removeAt(0)
+    n.value = 1
+    println(c.recompose())
+}

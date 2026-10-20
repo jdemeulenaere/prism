@@ -1,0 +1,4 @@
+screen 0
+show hello
+screen 1
+true

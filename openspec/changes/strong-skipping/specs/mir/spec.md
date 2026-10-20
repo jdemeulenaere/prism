@@ -16,7 +16,7 @@ A composable closure that captures a dereference of a reference MUST also own a 
 
 #### Scenario: A key lambda captures a version
 - **WHEN** `prism dump-mir --composed` runs on a file declaring `compose fun Show(s: &String) {}` and `compose fun Screen(items: &State<List<String>>) { for (s in items.value) { key(s.length) { Show(s) } } }`
-- **THEN** `main::Screen` builds the closure value of the `key` lambda from a borrow of `*s` and then a copy of the version it passes for `s`, and the lambda's body passes a copy of its last capture local as the version argument of its call of `main::Show`
+- **THEN** `main::Screen` builds the closure value of the `key` lambda from a borrow of `s` and then a copy of the version it passes for `s`, and the lambda's body passes a copy of its last capture local as the version argument of its call of `main::Show`
 
 ## MODIFIED Requirements
 

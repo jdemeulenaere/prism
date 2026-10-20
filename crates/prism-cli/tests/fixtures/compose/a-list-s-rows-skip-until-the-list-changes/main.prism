@@ -1,0 +1,20 @@
+// expect: ok
+// run: 0
+compose fun Row(s: &String) { println("row $s") }
+compose fun Rows(items: &State<List<String>>, tick: &State<Int>) {
+    println("rows ${tick.value}")
+    for (s in items.value) {
+        Row(s)
+    }
+}
+fun main() {
+    val items = mutableStateOf(listOf("a", "b"))
+    val tick = mutableStateOf(0)
+    val c = composition { Rows(items, tick) }
+    tick.value = 1
+    println(c.recompose())
+    items.value.add("c")
+    println(c.recompose())
+    tick.value = 2
+    println(c.recompose())
+}

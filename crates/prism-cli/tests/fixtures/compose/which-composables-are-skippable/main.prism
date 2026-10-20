@@ -11,3 +11,5 @@ compose fun H(): Int = 1
 compose fun I(s: &State<Int>, m: &MutableState<String>) { }
 compose fun J(onClick: attached () -> Unit) { }
 compose fun K(s: MutableState<Int>) { }
+compose fun L(s: (&String)?, p: &Point) { }
+compose fun M(r: &mut Int) { }

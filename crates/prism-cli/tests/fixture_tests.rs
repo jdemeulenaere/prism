@@ -598,6 +598,10 @@ const INSTANCE_SCENARIOS: &[&str] = &[
 /// "Composed MIR Dump" (D19 of `compose-transform`).
 const COMPOSED_SCENARIOS: &[&str] = &[
     "composer-passed-to-composable-calls",
+    "a-skippable-body-keeping-a-borrow",
+    "versions-passed-to-a-row",
+    "versions-of-locals-top-level-values-and-parameters",
+    "a-key-lambda-captures-a-version",
     "a-composable-lambda-takes-the-composer",
     "a-skippable-body-and-its-restart-closure",
     "the-adapter-of-a-composition",

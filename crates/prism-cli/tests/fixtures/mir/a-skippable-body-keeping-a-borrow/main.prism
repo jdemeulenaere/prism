@@ -1,0 +1,4 @@
+// expect: ok
+compose fun Show(s: &String) {
+    println(s)
+}

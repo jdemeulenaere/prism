@@ -1,0 +1,72 @@
+module main
+compose fun main::Show(_1: &String): Unit @2:1
+  local _0: Unit (return)
+  local _1 s: &String (argument)
+  bb0:
+    _0 = const () @2:30
+    return @2:1
+compose fun main::Screen(_1: &State<List<String>>): Unit @3:1
+  local _0: Unit (return)
+  local _1 items: &State<List<String>> (argument)
+  local _2: &List<String> (temporary)
+  local _3: &State<List<String>> (temporary)
+  local _4: &List<String> (temporary)
+  local _5: Int (temporary)
+  local _6: Int (temporary)
+  local _7: Bool (temporary)
+  local _8: &List<String> (temporary)
+  local _9 s: &String (user)
+  local _10: &String (temporary)
+  local _11: Unit (temporary)
+  bb0:
+    group_start g0 /* loop 0 */ @4:5
+    storage_live _2 @4:5
+    storage_live _3 @4:15
+    _3 = &(*_1) (receiver) @4:15
+    storage_live _4 @4:15
+    _4 = call state read<List<String>>(copy _3) -> bb1 @4:15
+  bb1:
+    _2 = &(*_4) (iteration) @4:15
+    storage_live _5 @4:5
+    storage_live _6 @4:5
+    storage_live _7 @4:5
+    storage_live _8 @4:5
+    _8 = &(*_2) (iteration) @4:5
+    _5 = call builtin size<String>(move _8) -> bb2 @4:5
+  bb2:
+    _6 = const 0 @4:5
+    _7 = copy _5 == const 0 @4:5
+    switch copy _7 [0 -> bb4, otherwise -> bb3] @4:5
+  bb3:
+    goto -> bb5 @4:5
+  bb4:
+    goto -> bb6 @4:5
+  bb5:
+    storage_dead _8 @4:5
+    storage_dead _7 @4:5
+    storage_dead _6 @4:5
+    storage_dead _5 @4:5
+    storage_dead _4 @4:5
+    storage_dead _3 @4:5
+    storage_dead _2 @4:5
+    group_end g0 @4:5
+    _0 = const () @3:49
+    return @3:1
+  bb6:
+    storage_live _9 @4:5
+    _9 = &(*_2)[_6] (iteration) @4:5
+    storage_live _10 @5:14
+    _10 = copy _9 @5:14
+    storage_live _11 @5:9
+    _11 = call compose main::Show(move _10) -> bb7 @5:9
+  bb7:
+    storage_dead _11 @5:9
+    storage_dead _10 @5:9
+    storage_dead _9 @6:5
+    _6 = copy _6 + const 1 @4:5
+    _7 = copy _6 == copy _5 @4:5
+    switch copy _7 [0 -> bb9, otherwise -> bb8] @4:5
+  bb8:
+    goto -> bb5 @4:5
+  bb9:
+    goto -> bb6 @4:5

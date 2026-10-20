@@ -1,27 +1,49 @@
-//! Stable parameters and skippable composables (D7 of `compose-transform`).
+//! Parameters that can be kept, and restartable composables (D7 of `compose-transform`, D1 of
+//! `strong-skipping`).
 //!
-//! A parameter is stable when its type is `Copy` and holds no borrow, by its declared markers
-//! alone (a type parameter only by its `Copy` bound), when it is a shared borrow of a type with
-//! a capture function (a state object, kept as its weak handle and compared by identity, D13 of
-//! `owned-state`), or when it is an `escaping` or `attached` function type that is not
-//! composable, or a nullable of one: such a value is kept when it is *keepable*, which only its
-//! descriptor says, at run time (D9). A composable returning `Unit` whose parameters are all
-//! stable is skippable. Deciding it costs one marker or capture-function lookup per parameter
-//! type, and nothing reads fields, bodies or other files.
+//! There is no stability inference: a composable returning `Unit` is restartable, and so
+//! skippable, when every parameter can be kept. A parameter can be kept when its type is `Copy`
+//! and holds no borrow, by its declared markers alone (a type parameter only by its `Copy`
+//! bound), compared by `==`; when it is a shared borrow of a type with a capture function (a
+//! state object, kept as its weak handle and compared by identity, D13 of `owned-state`); when
+//! it is any other shared borrow `&T`, or a nullable of one, kept as its identity, its address
+//! and its source's version (D2 of `strong-skipping`); or when it is an `escaping` or
+//! `attached` function type that is not composable, or a nullable of one: such a value is kept
+//! when it is *keepable*, which only its descriptor says, at run time (D9). By-value values that
+//! are not `Copy`, `&mut` borrows and composable content lambdas cannot be kept: a restart
+//! could pass them again only by cloning or aliasing. Deciding it costs one marker or
+//! capture-function lookup per parameter type, and nothing reads fields, bodies or other files.
 
 use prism_mir::{Body, BodyOwner, LocalId};
 use prism_typed_tree::{ParameterKind, Type, TypeTable};
 
-/// Whether a parameter of type `ty`, declared with `kind`, is stable: an `escaping` or
-/// `attached` function value is kept as one (D9 of `owned-state`).
-pub fn is_stable(ty: &Type, kind: ParameterKind, types: &TypeTable) -> bool {
+/// Whether a parameter of type `ty`, declared with `kind`, can be kept: an `escaping` or
+/// `attached` function value is kept as one (D9 of `owned-state`), a shared borrow as its
+/// identity (D1 of `strong-skipping`).
+pub fn is_keepable(ty: &Type, kind: ParameterKind, types: &TypeTable) -> bool {
     if is_function_parameter(ty) {
         return kind.keeps() && !is_composable_function(ty);
     }
-    if is_borrowed_state(ty, types) {
+    if is_shared_reference(ty) {
         return true;
     }
     types.is_copy(ty) && ty.reference_outside_functions().is_none() && !is_reference(ty)
+}
+
+/// Whether a parameter of type `ty` takes a version word after the change words: a shared
+/// borrow, or a nullable of one, of a type without a capture function (D4 of
+/// `strong-skipping`). A borrowed state object keeps its cell's identity instead.
+pub fn has_version_word(ty: &Type, types: &TypeTable) -> bool {
+    is_shared_reference(ty) && !is_borrowed_state(ty, types)
+}
+
+/// Whether `ty` is a shared borrow `&T` or a nullable `(&T)?` of one.
+fn is_shared_reference(ty: &Type) -> bool {
+    match ty {
+        Type::Reference { mutable, .. } => !mutable,
+        Type::Nullable(inner) => matches!(**inner, Type::Reference { mutable: false, .. }),
+        _ => false,
+    }
 }
 
 /// Whether `ty` is a shared borrow of a type with a capture function (`&State<T>`,
@@ -74,7 +96,7 @@ fn is_reference(ty: &Type) -> bool {
 }
 
 /// Whether the composable function `body` is skippable: it returns `Unit` and every parameter,
-/// the context and the receiver included, is stable. Closures never are (D14).
+/// the context and the receiver included, can be kept. Closures never are (D14).
 pub fn is_skippable(body: &Body, types: &TypeTable) -> bool {
     if !body.is_compose || !matches!(body.owner, BodyOwner::Function(_)) {
         return false;
@@ -84,7 +106,7 @@ pub fn is_skippable(body: &Body, types: &TypeTable) -> bool {
     }
     (1..=body.argument_count).all(|index| {
         let local = &body.locals[LocalId(index as u32)];
-        is_stable(&local.ty, local.parameter_kind, types)
+        is_keepable(&local.ty, local.parameter_kind, types)
     })
 }
 
@@ -121,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn stability_follows_declared_markers() {
+    fn keepability_follows_parameter_kinds() {
         let types = types();
         let parameter = |bound| {
             Type::Parameter(TypeParameter {
@@ -130,7 +152,7 @@ mod tests {
                 bound,
             })
         };
-        let stable = [
+        let keepable = [
             (Type::Int, ParameterKind::Plain),
             (Type::Float, ParameterKind::Plain),
             (Type::Bool, ParameterKind::Plain),
@@ -144,11 +166,26 @@ mod tests {
             (function(false), ParameterKind::Escaping),
             (function(false), ParameterKind::Attached),
             (function(false).nullable(), ParameterKind::Escaping),
+            (
+                Type::Reference {
+                    mutable: false,
+                    inner: Box::new(Type::Int),
+                },
+                ParameterKind::Plain,
+            ),
+            (
+                Type::Reference {
+                    mutable: false,
+                    inner: Box::new(Type::String),
+                }
+                .nullable(),
+                ParameterKind::Plain,
+            ),
         ];
-        for (ty, kind) in &stable {
-            assert!(is_stable(ty, *kind, &types), "{} is stable", ty);
+        for (ty, kind) in &keepable {
+            assert!(is_keepable(ty, *kind, &types), "{} can be kept", ty);
         }
-        let unstable = [
+        let unkeepable = [
             (Type::String, ParameterKind::Plain),
             (
                 Type::plain_struct(NominalId::new("main", "User")),
@@ -156,7 +193,7 @@ mod tests {
             ),
             (
                 Type::Reference {
-                    mutable: false,
+                    mutable: true,
                     inner: Box::new(Type::Int),
                 },
                 ParameterKind::Plain,
@@ -167,8 +204,16 @@ mod tests {
             (function(true), ParameterKind::Escaping),
             (Type::List(Box::new(Type::Int)), ParameterKind::Plain),
         ];
-        for (ty, kind) in &unstable {
-            assert!(!is_stable(ty, *kind, &types), "{} is not stable", ty);
+        for (ty, kind) in &unkeepable {
+            assert!(!is_keepable(ty, *kind, &types), "{} cannot be kept", ty);
         }
+        // Borrows other than of state objects take a version word.
+        let borrow = Type::Reference {
+            mutable: false,
+            inner: Box::new(Type::String),
+        };
+        assert!(has_version_word(&borrow, &types));
+        assert!(has_version_word(&borrow.nullable(), &types));
+        assert!(!has_version_word(&Type::Int, &types));
     }
 }

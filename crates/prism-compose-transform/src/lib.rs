@@ -15,10 +15,16 @@
 //!   path, or for a composable closure by its parent region and the step that reaches it; each
 //!   region lowering marked runs in a replaceable group keyed by its construct and ordinal.
 //!   Keys are BLAKE3 hashes chained from declaration paths, never from positions ([`keys`]).
-//! - **Skipping and restarting** (D7 to D11). A composable returning `Unit` whose parameters are
-//!   all stable ([`stability`]) keeps its arguments in its restart group's slots, compares
+//! - **Skipping and restarting** (D7 to D11). A composable returning `Unit` whose parameters
+//!   can all be kept ([`stability`]) keeps its arguments in its restart group's slots, compares
 //!   them, skips its body when nothing changed and its scope is valid, and ends its group with
 //!   its restart function, a static closure reading the kept slots ([`restart`]).
+//! - **Borrowed identities** (`strong-skipping`). A borrowed argument is kept as its address
+//!   and a version that the caller derives syntactically from where its reference comes from:
+//!   a state's version, permanent, the caller's own, or none, passed as one `Int` per borrowed
+//!   parameter after the change words; a composable closure owns the versions of the
+//!   references it borrows from as hidden captures; a call whose borrow has none runs in a
+//!   replaceable group ([`identity`]).
 //! - **The compose prelude** (D12 to D15). `remember`, `key` and `currentRecomposeScope`, and
 //!   in any body the composition operations, become composer operations; the content given to
 //!   `composition` and `setContent` is wrapped in a root content adapter.
@@ -26,6 +32,7 @@
 //! Each body is walked once, with constant work per statement, argument and group, and a body
 //! that composes nothing costs a scan of its terminators (D24).
 
+mod identity;
 pub mod keys;
 mod restart;
 mod rewrite;
@@ -37,6 +44,9 @@ use prism_typed_tree::ArenaId;
 /// The composed MIR of `file`, elaborated MIR without errors.
 pub fn compose_file(file: &MirFile) -> MirFile {
     let keys = BodyKeys::of(file);
+    // Each composable closure's hidden version captures, which its author's composition and
+    // its own both need (D6 of `strong-skipping`).
+    let hidden = identity::HiddenCaptures::of(file);
     let mut composed = file.clone();
     composed.phase = MirPhase::Composed;
     let mut appended = Appended {
@@ -45,7 +55,7 @@ pub fn compose_file(file: &MirFile) -> MirFile {
     };
     for (id, body) in file.bodies.iter() {
         if body.is_compose || uses_composition_operations(body) {
-            composed.bodies[id] = rewrite::compose_body(file, id, &keys, &mut appended);
+            composed.bodies[id] = rewrite::compose_body(file, id, &keys, &mut appended, &hidden);
         }
         // The body key a reload names the body by (D5 of `compose-hot-reload`).
         if body.is_compose

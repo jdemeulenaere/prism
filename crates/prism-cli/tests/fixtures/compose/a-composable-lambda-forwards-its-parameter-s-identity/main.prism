@@ -1,0 +1,19 @@
+// expect: ok
+// run: 0
+compose fun Show(s: &String) { println("show $s") }
+compose fun Each(items: &State<List<String>>, item: compose (&String) -> Unit) {
+    for (s in items.value) {
+        item(s)
+    }
+}
+compose fun Screen(items: &State<List<String>>, tick: &State<Int>) {
+    println("screen ${tick.value}")
+    Each(items) { s -> Show(s) }
+}
+fun main() {
+    val items = mutableStateOf(listOf("a", "b"))
+    val tick = mutableStateOf(0)
+    val c = composition { Screen(items, tick) }
+    tick.value = 1
+    println(c.recompose())
+}
