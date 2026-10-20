@@ -37,13 +37,15 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 3. ABI (D12)
 
-- [ ] 3.1 `crates/prism-abi/src/signature.rs`:
+- [x] 3.1 `crates/prism-abi/src/signature.rs`:
   - `ExportedSymbol::ExtensionProperty` gains `kind` (plain or intrinsic, as `FunctionKind`);
   - Phase 1 exports every `public` and `package` extension property, never a getter's body;
   - the ABI hash and the symbol order cover the kind;
   - `prism abi` prints `public val Int.dp: Dp` for a plain property.
 
   Update the ABI codec or cache encoding if it serializes these symbols. Add fixtures under `compilation-and-abi/` for "A property's type is part of the ABI", and a `cache_tests.rs` case for "Editing a getter recompiles nothing downstream", which needs two runs. Verify with `cargo test -p prism-abi -p prism-cli --test cache_tests`.
+
+  Implementation note: no codec serializes `ExportedSymbol` (ABIs are re-extracted from source), so none changes. `prism-abi`'s `extension_properties_with_getters_in_the_abi` covers the hash rules at the ABI level here; the fixture and the `cache_tests.rs` case need getters checked and run, so they land with group 4.
 
 ## 4. Type checker, typed tree and MIR: extension properties (D6)
 

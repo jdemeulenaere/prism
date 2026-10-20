@@ -149,11 +149,14 @@ pub enum ExportedSymbol {
         name: String,
         ty: AbiType,
     },
-    /// An exported intrinsic extension property (`public intrinsic val <T> List<T>.size: Int`,
-    /// D6 of `standard-library`), writable when declared `intrinsic var` (D4 of
-    /// `state-handles`).
+    /// An exported extension property: an intrinsic one (`public intrinsic val <T>
+    /// List<T>.size: Int`, D6 of `standard-library`), writable when declared `intrinsic var`
+    /// (D4 of `state-handles`), or one with a getter (`public val Int.dp: Dp`, D12 of
+    /// `core-library-in-prism`), whose getter's body is no part of the ABI.
     ExtensionProperty {
         visibility: Visibility,
+        /// `Intrinsic`, or `Prism` for a property with a getter.
+        kind: FunctionKind,
         type_parameters: Vec<AbiTypeParameter>,
         receiver: AbiType,
         name: String,
@@ -317,17 +320,16 @@ impl ExportedSymbol {
             }
             ExportedSymbol::ExtensionProperty {
                 visibility,
+                kind,
                 type_parameters,
                 receiver,
                 name,
                 ty,
                 writable,
             } => {
-                hasher.write_str(if *writable {
-                    "intrinsic var"
-                } else {
-                    "intrinsic val"
-                });
+                hasher.write_str("property");
+                hasher.write_str(kind.as_str());
+                hasher.write_str(if *writable { "var" } else { "val" });
                 hasher.write_str(visibility.as_str());
                 hash_type_parameters(type_parameters, hasher);
                 receiver.hash_into(hasher);
@@ -393,14 +395,19 @@ impl ExportedSymbol {
             }
             ExportedSymbol::ExtensionProperty {
                 visibility,
+                kind,
                 type_parameters,
                 receiver,
                 name,
                 ty,
                 writable,
             } => Some(format!(
-                "{} intrinsic {} {}{}.{}: {}",
+                "{} {}{} {}{}.{}: {}",
                 visibility,
+                match kind {
+                    FunctionKind::Prism => "",
+                    _ => "intrinsic ",
+                },
                 if *writable { "var" } else { "val" },
                 type_parameter_text(type_parameters),
                 receiver,
@@ -1241,6 +1248,11 @@ impl FileAbi {
                 Declaration::ExtensionProperty(p) => {
                     symbols.push(ExportedSymbol::ExtensionProperty {
                         visibility: vis,
+                        kind: if p.is_intrinsic() {
+                            FunctionKind::Intrinsic
+                        } else {
+                            FunctionKind::Prism
+                        },
                         type_parameters: abi_type_parameters(&p.type_parameters),
                         receiver: lower(&p.receiver),
                         name: p.name.clone(),

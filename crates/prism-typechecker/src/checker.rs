@@ -2205,6 +2205,7 @@ impl TypeChecker {
                     }
                 }
                 ExportedSymbol::ExtensionProperty {
+                    kind,
                     type_parameters,
                     receiver,
                     name,
@@ -2212,6 +2213,9 @@ impl TypeChecker {
                     visibility,
                     writable,
                 } => {
+                    if *kind != FunctionKind::Intrinsic {
+                        continue;
+                    }
                     let constructor = abi_constructor_name(receiver);
                     let Some(entry) =
                         crate::intrinsics::lookup(&abi.module, Some(&constructor), name)

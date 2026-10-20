@@ -699,3 +699,46 @@ fn intrinsic_structs_in_the_abi() {
     };
     assert_ne!(abi.abi_hash, ordinary.abi_hash);
 }
+
+/// compilation-and-abi: "Library Declarations in the ABI": an extension property with a getter
+/// is an entry of any module, shown as `public val Int.dp: Dp`; its getter's body is no part of
+/// the hash, and its type and kind are ("Editing a getter recompiles nothing downstream", "A
+/// property's type is part of the ABI").
+#[test]
+fn extension_properties_with_getters_in_the_abi() {
+    let source = "package geo\n\
+        public struct Box : Copy { val w: Int }\n\
+        public val Box.twice: Int get() = w * 2\n\
+        val Box.hidden: Int get() = 0\n";
+    let abi_of = |source: &str| {
+        let file = prism_parser::parse_source(source).expect("the source parses");
+        prism_abi::FileAbi::extract(&file, "geo/shapes", &prism_abi::no_imports)
+            .expect("the ABI extracts")
+    };
+    let abi = abi_of(source);
+    let texts: Vec<String> = abi
+        .symbols
+        .iter()
+        .filter_map(prism_abi::ExportedSymbol::declaration_text)
+        .collect();
+    assert_eq!(texts, ["public val Box.twice: Int"]);
+    assert!(abi.symbols.iter().any(|symbol| matches!(
+        symbol,
+        prism_abi::ExportedSymbol::ExtensionProperty {
+            kind: prism_abi::FunctionKind::Prism,
+            ..
+        }
+    )));
+    // The getter's body is not part of the ABI.
+    let edited = abi_of(&source.replace("get() = w * 2", "get() { return w + w + 1 }"));
+    assert_eq!(abi.abi_hash, edited.abi_hash);
+    // Its type is.
+    let retyped = abi_of(&source.replace("twice: Int get() = w * 2", "twice: Double get() = 2.0"));
+    assert_ne!(abi.abi_hash, retyped.abi_hash);
+    // A library property's kind is: intrinsic and plain properties of one signature differ.
+    let plain = library_abi(&LIBRARY.replace(
+        "public intrinsic val <T> List<T>.size: Int",
+        "public val <T> List<T>.size: Int get() = 0",
+    ));
+    assert_ne!(library_abi(LIBRARY).abi_hash, plain.abi_hash);
+}
