@@ -100,12 +100,24 @@ pub struct MeasureResultMirror {
     pub node: u64,
 }
 
-/// `Arrangement` of `/prism/compose/layout`: `code` and `space`.
+/// `LineProperties` of `/prism/compose/layout`: a row's or column's arrangement (`code` and
+/// `space`) and alignment, read in one call by its policy.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ArrangementMirror {
+pub struct LinePropertiesMirror {
     pub code: i64,
     pub space: i64,
+    pub alignment: i64,
+}
+
+/// `MeasuredChild` of `/prism/compose/ui`: a child's measured `width` and `height` and its own
+/// alignment code (-1 for none), read in one call by a container's placement block.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeasuredChildMirror {
+    pub width: i64,
+    pub height: i64,
+    pub alignment: i64,
 }
 
 /// `Alignment` of `/prism/compose/ui`: `code`.

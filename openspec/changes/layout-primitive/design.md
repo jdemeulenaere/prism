@@ -326,7 +326,7 @@ public compose fun Column(
 **Capture-free policies.**
 
 - The policy lambdas capture nothing, so they are interned (D8), and a pass that recomposes a container registers, compares and releases its policy without allocating.
-- Their arrangement and alignment are node properties, set by the setters the containers already call, and read back by the policy through private externals of `/prism/compose/layout` (`prism_ui_arrangement(node): Arrangement`, `prism_ui_alignment(node): Alignment`).
+- Their arrangement and alignment are node properties, set by the setters the containers already call, and read back by the policy through private externals of `/prism/compose/layout` (`prism_ui_line_properties(node): LineProperties`, the arrangement and alignment of a row or column in one call since review, D25; `prism_ui_alignment(node): Alignment` for a box).
 - The same properties feed the dumps, so `arrangement spacedBy(8)` is printed as today.
 - A changed arrangement marks the node `needs_measure` through its setter, as today.
 
@@ -338,7 +338,7 @@ public compose fun Column(
 
 **No list of placeables.**
 
-- Compose's `RowColumnMeasurePolicy` keeps an array of placeables between measuring and placing. The toolkit's policies instead get each child's placeable again in the placement block, through `package fun Measurable.measured(): Placeable` (`prism_ui_measured`, valid only for a child measured in the running frame).
+- Compose's `RowColumnMeasurePolicy` keeps an array of placeables between measuring and placing. The toolkit's policies instead get each child's placeable again in the placement block, through the package external `prism_ui_measured(node): MeasuredChild`, valid only for a child measured in the running frame, which gives its size and its own alignment in one call (`package fun Measurable.measured(): Placeable` before review, D25).
 - In Compose, a child's measurable and placeable are the same object (its `MeasurePassDelegate`), so this is a lookup, not a second measurement.
 - So a layout of the containers allocates nothing.
 
@@ -649,7 +649,7 @@ Rejected: a native fallback measuring a policy-less node as a box (D17 rejects n
 
 **Material's surfaces.** `SurfaceBox` of `/prism/compose/material3` started a box node directly. It is now a `LayoutNode` with the box policy, which `/prism/compose/layout` declares `package` (`measureBox`), as Compose's `Surface` is a `Box`.
 
-**Registering a policy** checks the pass as the setters do (`register_measure_policy`): a container composed outside `runApp` keeps ending with `ui misuse: toolkit composables run only inside runApp`, not with the handlers' `modifier handlers are made only while runApp runs`. `Measurable.measured()` of a child not measured in the running measurement, which only toolkit code can call, reuses the detail `a placeable was placed outside its parent's placement`.
+**Registering a policy** checks the pass as the setters do (`register_measure_policy`): a container composed outside `runApp` keeps ending with `ui misuse: toolkit composables run only inside runApp`, not with the handlers' `modifier handlers are made only while runApp runs`. `prism_ui_measured` of a child not measured in the running measurement, which only toolkit code can call, reuses the detail `a placeable was placed outside its parent's placement`.
 
 ### D23. Sizes and positions stay within Kotlin's `Int` range (autonomous, review)
 
@@ -685,6 +685,24 @@ Rejected:
 - **No bound**: a policy whose writes keep changing its layout would hang the app.
 - **A runtime error past the bound**: such a policy is a program that animates through its layout, not a misuse to end.
 
+### D25. The containers' policies call the entry points directly, fewer of them (autonomous, review)
+
+Added at review, for the resize budget D18 missed (3.45× the native layout). In Tier 1 code every call goes through the function table and passes aggregates by address, and the containers' loops made about 20 Prism calls per child: the public wrappers (`Measurable.measure`, `Placeable.place`, the `parentData` getter, `measured()`) around each entry call, and small helpers (`mainOf`, `crossOf`, `larger`, `horizontalPart` with `partOffset`). Behaviour-neutral changes, checked by every dump, session and fixture:
+
+- `measureLine` and `measureBox` call the package externals `prism_ui_measure`, `prism_ui_measured`, `prism_ui_place` and `prism_ui_parent_data` directly (made `package` in `/prism/compose/ui`), and spell out the axis choices and maximums inline.
+- **Fewer entry calls.** `prism_ui_line_properties` gives a row's or column's arrangement and alignment in one call (it replaces `prism_ui_arrangement`). `prism_ui_measured` gives a measured child's size with its own alignment (a package `MeasuredChild`), so placing a child is two entry calls instead of three. A box without children reads no alignment. A todo row now makes about 46 entry calls instead of 55.
+- `horizontalOffset` and `verticalOffset` replace the part-then-offset pairs.
+
+Resize of `large.prism` between widths 800 and 801, `layout` median on the same machine and load: 0.635 ms before, 0.528 ms after (−17 %), about 2.9× the native baseline of task 1.2 scaled to that load (3.45× before). The `ui_timing` engine benchmark is unchanged: its policies are Rust.
+
+**Compile-time cost.** About the same library code: four helpers fewer, two package structs more.
+
+Rejected:
+
+- **A faster thread-local access for the UI state** (a cached pointer read without `thread_local!`'s lazy initialization): measured no difference.
+- **Reading weights only when a child has one** (a flag in `LineProperties`): a walk of the children in Rust for one call fewer in unweighted lines, left for the Tier 2 follow-up, which removes the calls' cost altogether.
+- **Moving the alignment arithmetic back into Rust** (`place` with an alignment): D9 keeps the containers' arithmetic in Prism.
+
 ## Risks / Trade-offs
 
 - **[Re-entrancy in `prism-ui`]** The pass calls program code that calls the pass. → No borrow of the thread's UI state is held across a call (D14). Frames are a stack, and every entry call checks the innermost frame (D13). The randomized incremental-versus-full test keeps running through Rust policies (D17).
@@ -706,5 +724,5 @@ The runtime gains the measure entry points and the `Measure` handler kind, and l
 
 ## Open Questions
 
-- Whether user layouts should get `Measurable.measured()` publicly, so that they too avoid a list of placeables. Compose has no such member; for now it is package-only.
+- Whether user layouts should get a public way to find a measured child's placeable again (the toolkit's `prism_ui_measured`), so that they too avoid a list of placeables. Compose has no such member; for now it is package-only.
 - Whether to observe state reads in policies (Compose's layout snapshot observer), and at what cost per read.

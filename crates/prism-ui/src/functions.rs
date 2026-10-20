@@ -155,8 +155,8 @@ pub static UI_FUNCTIONS: &[RuntimeFunction] = &[
         never_returns: false,
     },
     RuntimeFunction {
-        name: "prism_ui_arrangement",
-        address: address(prism_ui_arrangement as *const ()),
+        name: "prism_ui_line_properties",
+        address: address(prism_ui_line_properties as *const ()),
         parameters: &[Pointer, I64],
         result: None,
         never_returns: false,

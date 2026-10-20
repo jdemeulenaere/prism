@@ -543,9 +543,14 @@ package struct ParentData : Copy {
 // This child's data for the toolkit's layouts.
 package val Measurable.parentData: ParentData get() = prism_ui_parent_data(node)
 
-// The placeable of this child, measured in the running measurement of its parent: what the
-// toolkit's layouts place without keeping a list of placeables.
-package fun Measurable.measured(): Placeable = prism_ui_measured(node)
+// A child measured in the running measurement of its parent, as the toolkit's layouts place it
+// without keeping a list of placeables: its size, and the code of its first `align` (-1 for
+// none).
+package struct MeasuredChild : Copy {
+    val width: Int
+    val height: Int
+    val alignment: Int
+}
 
 // A node group of `kind` whose content `measurePolicy` measures: `update` receives its node on
 // every pass after its policy and modifier are set, then `content` composes its children.
@@ -599,10 +604,10 @@ public compose fun Layout(
 }
 
 // Measures a child of the running measure policy's node.
-private external fun prism_ui_measure(node: Int, constraints: Constraints): Placeable
+package external fun prism_ui_measure(node: Int, constraints: Constraints): Placeable
 
-// The placeable of a child measured by the running measure policy.
-private external fun prism_ui_measured(node: Int): Placeable
+// The size and alignment of a child measured by the running measure policy.
+package external fun prism_ui_measured(node: Int): MeasuredChild
 
 // Starts `layout`'s placement block in the measurement of `node`.
 private external fun prism_ui_begin_placement(node: Int, width: Int, height: Int)
@@ -611,10 +616,10 @@ private external fun prism_ui_begin_placement(node: Int, width: Int, height: Int
 private external fun prism_ui_end_placement(node: Int)
 
 // Places a child of `parent` at `(x, y)` from its content's top-left corner.
-private external fun prism_ui_place(parent: Int, child: Int, x: Int, y: Int)
+package external fun prism_ui_place(parent: Int, child: Int, x: Int, y: Int): Unit
 
 // A child's data for the toolkit's layouts.
-private external fun prism_ui_parent_data(node: Int): ParentData
+package external fun prism_ui_parent_data(node: Int): ParentData
 
 // Runs an app of composable content.
 private external fun prism_ui_run_app(

@@ -831,6 +831,19 @@ pub fn place(parent: NodeId, child: NodeId, x: i64, y: i64) -> UiResult<()> {
     })
 }
 
+/// The size and own alignment of `child`, measured in the innermost running frame: what a
+/// container's placement block reads in one call (D25).
+pub fn measured_child(child: NodeId) -> UiResult<(Size, Option<Alignment>)> {
+    with_state(|state| {
+        let frame = *state.layout.frames.last().ok_or(PLACED_OUTSIDE)?;
+        let node = state.tree.node(child).ok_or(PLACED_OUTSIDE)?;
+        if node.parent != Some(frame.node) || node.stamp != frame.stamp {
+            return Err(PLACED_OUTSIDE);
+        }
+        Ok((node.size, node.parent_data.2))
+    })
+}
+
 /// A live node's value, for the property reads of the containers' policies.
 fn read<R>(node: NodeId, read: impl FnOnce(&Node) -> R) -> UiResult<R> {
     with_state(|state| state.tree.node(node).map(read).ok_or(STALE_NODE))
@@ -839,6 +852,11 @@ fn read<R>(node: NodeId, read: impl FnOnce(&Node) -> R) -> UiResult<R> {
 /// A row's or column's arrangement, as its policy reads it.
 pub fn arrangement(node: NodeId) -> UiResult<Arrangement> {
     read(node, |node| node.arrangement)
+}
+
+/// A row's or column's arrangement and alignment, as its policy reads them in one call (D25).
+pub fn line_properties(node: NodeId) -> UiResult<(Arrangement, Alignment)> {
+    read(node, |node| (node.arrangement, node.alignment))
 }
 
 /// A box's, row's or column's alignment, as its policy reads it.

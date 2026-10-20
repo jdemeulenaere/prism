@@ -95,6 +95,10 @@ import struct prism/compose/ui::MeasureResult : Copy
   field 2 val node: Int
 import struct prism/compose/ui::MeasureScope : Copy
   field 0 val node: Int
+import struct prism/compose/ui::MeasuredChild : Copy
+  field 0 val width: Int
+  field 1 val height: Int
+  field 2 val alignment: Int
 import struct prism/compose/ui::Modifier : Copy
   field 0 val count: Int
   field 1 val first: ModifierElements

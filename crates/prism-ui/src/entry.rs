@@ -14,7 +14,8 @@ use crate::handlers::HandlerKind;
 use crate::layout;
 use crate::modifier::ModifierMirror;
 use crate::runtime::{
-    AlignmentMirror, ArrangementMirror, ConstraintsMirror, ParentDataMirror, PlaceableMirror,
+    AlignmentMirror, ConstraintsMirror, LinePropertiesMirror, MeasuredChildMirror, ParentDataMirror,
+    PlaceableMirror,
 };
 use crate::setters;
 use prism_runtime::{FunctionValue, PrismString};
@@ -171,18 +172,19 @@ pub unsafe extern "C" fn prism_ui_measure(
     });
 }
 
-/// The `Placeable` of a child measured by the running policy (D9 of `layout-primitive`).
+/// The size and own alignment of a child measured by the running policy, which a container's
+/// placement block reads in one call (D9 and D25 of `layout-primitive`).
 ///
 /// # Safety
 ///
-/// `result` must point at storage for a `Placeable`.
+/// `result` must point at storage for a `MeasuredChild`.
 #[no_mangle]
-pub unsafe extern "C" fn prism_ui_measured(result: *mut PlaceableMirror, node: u64) {
-    let size = or_raise(layout::measured(NodeId(node)));
-    result.write(PlaceableMirror {
-        node,
+pub unsafe extern "C" fn prism_ui_measured(result: *mut MeasuredChildMirror, node: u64) {
+    let (size, alignment) = or_raise(layout::measured_child(NodeId(node)));
+    result.write(MeasuredChildMirror {
         width: size.width,
         height: size.height,
+        alignment: alignment.map_or(-1, |alignment| alignment.code()),
     });
 }
 
@@ -204,16 +206,20 @@ pub extern "C" fn prism_ui_place(parent: u64, child: u64, x: i64, y: i64) {
     or_raise(layout::place(NodeId(parent), NodeId(child), x, y))
 }
 
-/// A row's or column's arrangement, as its policy reads it.
+/// A row's or column's arrangement and alignment, as its policy reads them in one call.
 ///
 /// # Safety
 ///
-/// `result` must point at storage for an `Arrangement`.
+/// `result` must point at storage for a `LineProperties`.
 #[no_mangle]
-pub unsafe extern "C" fn prism_ui_arrangement(result: *mut ArrangementMirror, node: u64) {
-    let arrangement = or_raise(layout::arrangement(NodeId(node)));
+pub unsafe extern "C" fn prism_ui_line_properties(result: *mut LinePropertiesMirror, node: u64) {
+    let (arrangement, alignment) = or_raise(layout::line_properties(NodeId(node)));
     let (code, space) = arrangement.words();
-    result.write(ArrangementMirror { code, space });
+    result.write(LinePropertiesMirror {
+        code,
+        space,
+        alignment: alignment.code(),
+    });
 }
 
 /// A box's, row's or column's alignment, as its policy reads it.

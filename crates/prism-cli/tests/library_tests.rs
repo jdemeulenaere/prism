@@ -489,24 +489,32 @@ fn the_modifier_mirrors_match_the_layout_of_the_ui_module() {
 
 /// `layout-primitive` task 3.2: `prism-ui`'s mirrors of the measurement protocol's structs
 /// (`Constraints`, `Measurable`, `Placeable`, `MeasureScope`, `MeasureResult`, `ParentData`,
-/// `Arrangement`, `Alignment`) have the sizes and field offsets `prism dump-layout` gives their
-/// declarations, so that their field order cannot drift. `ParentData` is a `package` struct,
-/// so its declaration is copied out of `/prism/compose/ui` into the probe as a struct of its
-/// own.
+/// `MeasuredChild`, `LineProperties`, `Alignment`) have the sizes and field offsets `prism
+/// dump-layout` gives their declarations, so that their field order cannot drift. `ParentData`,
+/// `MeasuredChild` and `LineProperties` are not public, so their declarations are copied out
+/// of the library into the probe as structs of its own.
 #[test]
 fn the_measurement_mirrors_match_the_layout_of_the_library() {
     use prism_ui::runtime::{
-        AlignmentMirror, ArrangementMirror, ConstraintsMirror, MeasurableMirror,
-        MeasureResultMirror, MeasureScopeMirror, ParentDataMirror, PlaceableMirror,
+        AlignmentMirror, ConstraintsMirror, LinePropertiesMirror, MeasurableMirror,
+        MeasureResultMirror, MeasureScopeMirror, MeasuredChildMirror, ParentDataMirror,
+        PlaceableMirror,
     };
     use std::mem::{offset_of, size_of};
     let library = Library::bundled();
-    let ui = &library.module("prism/compose/ui").unwrap().source;
-    let start = ui
-        .find("package struct ParentData")
-        .expect("ParentData in /prism/compose/ui");
-    let end = start + ui[start..].find('}').unwrap() + 1;
-    let parent_data = ui[start..end].replacen("package struct", "struct", 1);
+    // A declaration of `module`, as a struct of the probe.
+    let copy = |module: &str, declaration: &str| {
+        let source = &library.module(module).unwrap().source;
+        let start = source
+            .find(declaration)
+            .unwrap_or_else(|| panic!("{} in /{}", declaration, module));
+        let end = start + source[start..].find('}').unwrap() + 1;
+        let (_, rest) = source[start..end].split_once("struct").unwrap();
+        format!("struct{}\n", rest)
+    };
+    let private = copy("prism/compose/ui", "package struct ParentData")
+        + &copy("prism/compose/ui", "package struct MeasuredChild")
+        + &copy("prism/compose/layout", "private struct LineProperties");
     let directory =
         std::env::temp_dir().join(format!("prism-measure-layout-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -514,8 +522,8 @@ fn the_measurement_mirrors_match_the_layout_of_the_library() {
     std::fs::write(
         &entry,
         format!(
-            "import /prism/compose/ui\nimport /prism/compose/layout\n{}\nfun f(c: Constraints, m: Measurable, p: Placeable, s: MeasureScope, r: MeasureResult, d: ParentData, a: Arrangement, l: Alignment): Int = 0\n",
-            parent_data
+            "import /prism/compose/ui\nimport /prism/compose/layout\n{}\nfun f(c: Constraints, m: Measurable, p: Placeable, s: MeasureScope, r: MeasureResult, d: ParentData, k: MeasuredChild, a: LineProperties, l: Alignment): Int = 0\n",
+            private
         ),
     )
     .unwrap();
@@ -585,11 +593,21 @@ fn the_measurement_mirrors_match_the_layout_of_the_library() {
         ],
     );
     expect(
-        "struct prism/compose/layout::Arrangement",
-        size_of::<ArrangementMirror>(),
+        "struct main::MeasuredChild",
+        size_of::<MeasuredChildMirror>(),
         &[
-            ("code", "Int", offset_of!(ArrangementMirror, code)),
-            ("space", "Int", offset_of!(ArrangementMirror, space)),
+            ("width", "Int", offset_of!(MeasuredChildMirror, width)),
+            ("height", "Int", offset_of!(MeasuredChildMirror, height)),
+            ("alignment", "Int", offset_of!(MeasuredChildMirror, alignment)),
+        ],
+    );
+    expect(
+        "struct main::LineProperties",
+        size_of::<LinePropertiesMirror>(),
+        &[
+            ("code", "Int", offset_of!(LinePropertiesMirror, code)),
+            ("space", "Int", offset_of!(LinePropertiesMirror, space)),
+            ("alignment", "Int", offset_of!(LinePropertiesMirror, alignment)),
         ],
     );
     expect(
