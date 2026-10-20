@@ -1,0 +1,5 @@
+error[E4003]: cannot assign to field 'count' of a value that is not mutable (a 'val' binding or field, or a shared '&' borrow)
+  --> app/main.prism:13:5
+   13 |     b[0].count = 3
+      |     ^
+   = help: the 'mut' 'get' of 'Bag' disagrees with its shared 'get': declare it as 'operator mut fun Bag.get(index: Int): &mut Item'

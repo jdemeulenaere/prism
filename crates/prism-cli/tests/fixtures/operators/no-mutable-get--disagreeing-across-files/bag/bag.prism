@@ -1,0 +1,7 @@
+package bag
+
+public struct Item { var count: Int }
+
+public struct Other { var count: Int }
+
+public struct Bag { var items: List<Item>, var others: List<Other> }

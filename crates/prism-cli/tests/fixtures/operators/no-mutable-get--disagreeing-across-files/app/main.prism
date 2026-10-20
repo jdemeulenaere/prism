@@ -1,0 +1,14 @@
+// expect: E4003
+// run: 1
+// entry: app/main.prism
+package app
+
+import /bag/bag
+import /mutable/get
+import /shared/get
+
+// The `mut` `get` of another file returns another element type than the shared one: a write
+// cannot use it, and the help says how it must be declared.
+fun f(b: &mut Bag) {
+    b[0].count = 3
+}

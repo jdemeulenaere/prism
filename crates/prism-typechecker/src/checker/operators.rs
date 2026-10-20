@@ -1527,12 +1527,13 @@ impl TypeChecker {
             &mutable_accessor_name("get"),
             &mut layers,
         );
-        let needed = format!(
+        let declaration = format!(
             "operator mut fun {}.get({}): &mut {}",
             reached,
             declared.join(", "),
             element
         );
+        let needed = format!("declare '{}' to change the element", declaration);
         let ExtensionLookup::Found { extension, .. } = lookup else {
             return (None, needed);
         };
@@ -1565,7 +1566,12 @@ impl TypeChecker {
                 },
             );
         if !agrees {
-            return (None, needed);
+            // A `mut` `get` of another file may disagree with the shared one (D9).
+            let help = format!(
+                "the 'mut' 'get' of '{}' disagrees with its shared 'get': declare it as '{}'",
+                reached, declaration
+            );
+            return (None, help);
         }
         let mut parameters = vec![(
             Some(super::THIS.to_string()),
@@ -1657,7 +1663,7 @@ impl TypeChecker {
                 ExpressionKind::Deref { .. } => {
                     let place = self.builder.accessor_places.get(&id)?;
                     if place.mutable.is_none() {
-                        return Some(format!("declare '{}' to change the element", place.needed));
+                        return Some(place.needed.clone());
                     }
                     let ExpressionKind::Call(call) = self.builder.kind(place.call) else {
                         return None;

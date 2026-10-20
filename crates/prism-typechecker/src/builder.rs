@@ -56,8 +56,8 @@ pub(crate) struct AccessorPlace {
     /// The `mut` `get` a write calls instead, if the indexed type has one agreeing with the
     /// shared one.
     pub(crate) mutable: Option<MutableAccessor>,
-    /// The declaration a write needs when there is none (`operator mut fun Bag.get(index:
-    /// Int): &mut Item`).
+    /// The help of a write when there is none: the declaration it needs (`operator mut fun
+    /// Bag.get(index: Int): &mut Item`), or how a disagreeing one must change.
     pub(crate) needed: String,
 }
 

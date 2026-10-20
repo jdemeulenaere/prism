@@ -1,0 +1,5 @@
+package mutable
+
+import /bag/bag
+
+public operator mut fun Bag.get(index: Int): &mut Other = &mut others[index]

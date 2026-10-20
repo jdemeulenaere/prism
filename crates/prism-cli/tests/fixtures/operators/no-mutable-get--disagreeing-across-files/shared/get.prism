@@ -1,0 +1,5 @@
+package shared
+
+import /bag/bag
+
+public operator fun Bag.get(index: Int): &Item = &items[index]
