@@ -1,0 +1,4 @@
+// expect: ok
+import /prism/compose/runtime
+
+fun f(scope: RecomposeScope) { scope.invalidate() }

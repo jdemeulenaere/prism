@@ -1723,8 +1723,7 @@ mod tests {
     fn closure_file() -> MirFile {
         let source = "fun run(f: () -> Int): Int = f()\nfun g(n: Int): Int = run { n }\n";
         let file = prism_parser::parse_source(source).expect("the source parses");
-        let mut checker = prism_typechecker::TypeChecker::new(None, "main")
-            .with_prelude(prism_typechecker::test_prelude());
+        let mut checker = prism_typechecker::TypeChecker::new(None, "main").with_library_imports();
         let tree = checker.check_module(&file);
         assert!(checker.errors.is_empty(), "{:?}", checker.errors);
         crate::lower_file(&tree)

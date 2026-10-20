@@ -1,0 +1,14 @@
+// expect: E4012
+// run: 1
+package app
+
+import /lib/util
+import /prism/collections
+
+fun visit(n: &Int) {}
+
+fun f(xs: &List<Int>) {
+    xs.forEach(visit)
+}
+
+fun main() {}

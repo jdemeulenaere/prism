@@ -1,0 +1,5 @@
+error[E4001]: unresolved symbol 'println'
+  --> main.prism:3:14
+    3 | fun main() { println(1) }
+      |              ^
+   = help: 'println' is declared by the library module '/prism/core': add 'import /prism/core'

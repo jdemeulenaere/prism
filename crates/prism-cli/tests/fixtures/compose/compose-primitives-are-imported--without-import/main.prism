@@ -1,0 +1,10 @@
+// expect: E4001
+// run: 1
+compose fun Counter() {
+    val id = remember { 7 }
+    val s = currentRecomposeScope()
+}
+
+fun main() {
+    val c = composition { Counter() }
+}

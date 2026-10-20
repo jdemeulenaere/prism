@@ -448,7 +448,7 @@ fn polymorphic_calls_are_instantiated_with_their_caller() {
             ),
             (
                 "app/main.prism",
-                "package app\nimport a\nfun main() { println(wrap(1)) }\n",
+                "package app\nimport /prism/core\nimport a\nfun main() { println(wrap(1)) }\n",
             ),
         ],
     );
@@ -482,7 +482,7 @@ fn transitive_instances_through_a_module_the_caller_does_not_import() {
             ),
             (
                 "app/main.prism",
-                "package app\nimport /lib/box\nfun main() { println(first(7)) }\n",
+                "package app\nimport /prism/core\nimport /lib/box\nfun main() { println(first(7)) }\n",
             ),
         ],
     );
@@ -525,7 +525,7 @@ fn two_callers_of_one_instance() {
             ),
             (
                 "app/main.prism",
-                "package app\nimport a\nimport b\nfun main() { println(a() + b()) }\n",
+                "package app\nimport /prism/core\nimport a\nimport b\nfun main() { println(a() + b()) }\n",
             ),
         ],
     );
@@ -807,7 +807,8 @@ const GEO_CORE: &str = "package geo\n\
 const GEO_SHAPES: &str = "package geo\nimport /geo/core\n\
      public struct Circle : Copy { val center: Vec, val r: Int }\n\
      public fun unit(): Circle = Circle(origin(), 1)\n";
-const GEO_MAIN: &str = "package app\nimport /geo/shapes\nfun main() { println(unit().r) }\n";
+const GEO_MAIN: &str =
+    "package app\nimport /prism/core\nimport /geo/shapes\nfun main() { println(unit().r) }\n";
 
 fn geo_workspace(name: &str) -> Workspace {
     let workspace = Workspace::new(
@@ -879,7 +880,8 @@ fn a_body_change_in_the_defining_file() {
 // --- prism run with the cache (D9 of `instance-cache`)
 
 const KEEP: &str = "package lib\npublic fun <T> keep(x: T): T = x\n";
-const KEEP_MAIN: &str = "package app\nimport /lib/box\nfun main() { println(keep(1)) }\n";
+const KEEP_MAIN: &str =
+    "package app\nimport /prism/core\nimport /lib/box\nfun main() { println(keep(1)) }\n";
 const COLD: [&str; 3] = [
     "checked lib/box.prism",
     "checked app/main.prism",
@@ -912,12 +914,8 @@ fn explaining_a_warm_check() {
     let output = workspace.run(&["check", "--explain-cache", "app/main.prism"]);
     let all = all_explanation_lines(&output);
     assert_eq!(
-        all[..3],
-        lines(&[
-            "reused prism/collections.prism",
-            "reused prism/compose/runtime.prism",
-            "reused prism/core.prism",
-        ])
+        all[..2],
+        lines(&["reused prism/collections.prism", "reused prism/core.prism"])
     );
 }
 
@@ -948,11 +946,94 @@ fn unreached_modules_are_not_parsed() {
         all_explanation_lines(&output),
         lines(&[
             "checked prism/collections.prism",
+            "checked prism/core.prism",
+            "checked main.prism",
+        ])
+    );
+    fs::remove_dir_all(&base).ok();
+}
+
+/// standard-library: "An imported module is parsed" (`explicit-library`): an imported library
+/// module is parsed beside the member modules, and no other.
+#[test]
+fn an_imported_module_is_parsed() {
+    let base = unique_temp_dir("imported_module");
+    fs::write(
+        base.join("main.prism"),
+        "import /prism/compose/runtime\n\nfun main() {}\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_prism"))
+        .current_dir(&base)
+        .env("PRISM_CACHE", base.join("cache"))
+        .args(["check", "--explain-cache", "main.prism"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        all_explanation_lines(&output),
+        lines(&[
+            "checked prism/collections.prism",
             "checked prism/compose/runtime.prism",
             "checked prism/core.prism",
             "checked main.prism",
         ])
     );
+    fs::remove_dir_all(&base).ok();
+}
+
+/// build-cache: "Reordering imports changes only the key" (`explicit-library`, D9 and D14):
+/// swapping a file's two imports checks that file again, reuses its importer, and keeps its
+/// diagnostics and ABI hash.
+#[test]
+fn reordering_imports_changes_only_the_key() {
+    let base = unique_temp_dir("reordered_imports");
+    fs::create_dir_all(base.join("lib")).unwrap();
+    fs::write(
+        base.join("lib/text.prism"),
+        "package lib\n\nimport /prism/collections\nimport /prism/core\n\npublic fun shout(n: Int): Int {\n    println(listOf(n).size)\n    return n\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        base.join("main.prism"),
+        "import /lib/text\n\nfun main() { val n = shout(1) }\n",
+    )
+    .unwrap();
+    let check = || {
+        Command::new(env!("CARGO_BIN_EXE_prism"))
+            .current_dir(&base)
+            .env("PRISM_CACHE", base.join("cache"))
+            .args(["check", "--explain-cache", "main.prism"])
+            .output()
+            .unwrap()
+    };
+    let abi_of = |output: &Output| -> String {
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find(|line| line.contains("lib/text.prism (package"))
+            .unwrap_or_else(|| panic!("{:?}", output))
+            .to_string()
+    };
+    let first = check();
+    assert_success(&first);
+    fs::write(
+        base.join("lib/text.prism"),
+        "package lib\n\nimport /prism/core\nimport /prism/collections\n\npublic fun shout(n: Int): Int {\n    println(listOf(n).size)\n    return n\n}\n",
+    )
+    .unwrap();
+    let second = check();
+    let lines_of = all_explanation_lines(&second);
+    assert!(
+        lines_of.contains(&"checked lib/text.prism".to_string()),
+        "{:?}",
+        lines_of
+    );
+    assert!(
+        lines_of.contains(&"reused main.prism".to_string()),
+        "{:?}",
+        lines_of
+    );
+    assert_eq!(abi_of(&first), abi_of(&second));
+    assert_eq!(String::from_utf8_lossy(&second.stderr), "");
     fs::remove_dir_all(&base).ok();
 }
 
@@ -979,8 +1060,9 @@ fn the_composer_module_is_not_in_the_prelude() {
     fs::remove_dir_all(&base).ok();
 }
 
-/// standard-library: "The UI modules are not in the prelude" (`ui-toolkit`): a file without
-/// imports reaches no toolkit module, and one importing material3 reaches all four.
+/// standard-library: "The UI modules are not in the prelude" (`ui-toolkit`,
+/// `explicit-library`): a file without imports reaches no module of `prism/compose/`, and one
+/// importing material3 reaches the four toolkit modules and not the runtime module.
 #[test]
 fn the_ui_modules_are_not_in_the_prelude() {
     let base = unique_temp_dir("ui_modules");
@@ -1003,7 +1085,7 @@ fn the_ui_modules_are_not_in_the_prelude() {
             .collect()
     };
     let without = explain("fun main() {}\n");
-    assert_eq!(modules(&without), ["prism/compose/runtime.prism"]);
+    assert!(modules(&without).is_empty(), "{:?}", without);
     let with = explain("import /prism/compose/material3\n\nfun main() {}\n");
     let mut reached = modules(&with);
     reached.sort();
@@ -1013,7 +1095,6 @@ fn the_ui_modules_are_not_in_the_prelude() {
             "prism/compose/foundation.prism",
             "prism/compose/layout.prism",
             "prism/compose/material3.prism",
-            "prism/compose/runtime.prism",
             "prism/compose/ui.prism",
         ]
     );
@@ -1031,7 +1112,10 @@ fn library_entries_are_shared_between_workspaces() {
         fs::create_dir_all(&root).unwrap();
         fs::write(
             root.join("main.prism"),
-            format!("fun main() {{ println(listOf(\"{}\").size) }}\n", name),
+            format!(
+                "import /prism/collections\nimport /prism/compose/runtime\nimport /prism/core\n\nfun main() {{ println(listOf(\"{}\").size) }}\n",
+                name
+            ),
         )
         .unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_prism"))
@@ -1227,7 +1311,7 @@ fn a_missing_record_is_rebuilt_from_its_file() {
     assert_eq!(removed, 1);
     workspace.write(
         "app/main.prism",
-        "package app\nimport /lib/box\nfun main() { println(keep(1)); println(keep(\"a\")) }\n",
+        "package app\nimport /prism/core\nimport /lib/box\nfun main() { println(keep(1)); println(keep(\"a\")) }\n",
     );
     assert_eq!(
         workspace.run_explain("app/main.prism"),
@@ -1284,7 +1368,7 @@ fn two_generics_workspace(name: &str, a: &str) -> Workspace {
             ),
             (
                 "app/main.prism",
-                "package app\nimport a\nimport b\nfun main() { println(a()); println(b()) }\n",
+                "package app\nimport /prism/core\nimport a\nimport b\nfun main() { println(a()); println(b()) }\n",
             ),
         ],
     )
@@ -1345,7 +1429,7 @@ fn a_type_argument_gains_a_field() {
             ("lib/box.prism", KEEP),
             (
                 "app/main.prism",
-                "package app\nimport /lib/box\nstruct Thing(val a: Int)\n\
+                "package app\nimport /prism/core\nimport /lib/box\nstruct Thing(val a: Int)\n\
                  fun main() { println(keep(Thing(1)).a); println(keep(2)) }\n",
             ),
         ],
@@ -1353,7 +1437,7 @@ fn a_type_argument_gains_a_field() {
     workspace.run_explain("app/main.prism");
     workspace.write(
         "app/main.prism",
-        "package app\nimport /lib/box\nstruct Thing(val b: Int, val a: Int)\n\
+        "package app\nimport /prism/core\nimport /lib/box\nstruct Thing(val b: Int, val a: Int)\n\
          fun main() { println(keep(Thing(0, 1)).a); println(keep(2)) }\n",
     );
     assert_eq!(
@@ -1384,7 +1468,7 @@ fn helper_workspace(name: &str, helper: &str) -> Workspace {
             ),
             (
                 "app/main.prism",
-                "package app\nimport /lib/box\nfun main() { println(outer(\"a\", 1)) }\n",
+                "package app\nimport /prism/core\nimport /lib/box\nfun main() { println(outer(\"a\", 1)) }\n",
             ),
         ],
     )
@@ -1443,7 +1527,7 @@ fn a_body_edit_regenerates_one_files_code() {
             ("lib/text.prism", TEXT),
             (
                 "app/main.prism",
-                "package app\nimport /lib/text\nfun main() { println(shout(\"a\")) }\n",
+                "package app\nimport /prism/core\nimport /lib/text\nfun main() { println(shout(\"a\")) }\n",
             ),
         ],
     );
@@ -1478,7 +1562,7 @@ fn cached_units_run_as_fresh_ones() {
             ),
             (
                 "app/main.prism",
-                "package app\nimport /lib/text\n\
+                "package app\nimport /prism/core\nimport /prism/collections\nimport /lib/text\n\
                  fun apply(f: (String) -> String, s: String): String = f(s)\n\
                  fun main() {\n\
                      val n = label(1, shout(greeting))\n\

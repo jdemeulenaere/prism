@@ -296,7 +296,7 @@ type ArgumentChecker<'a, 'b> =
     dyn FnMut(&mut TypeChecker, usize, &'a Expr) -> Option<ExpressionId> + 'b;
 
 /// An extension function known to the file (the `extension-functions` spec): declared in it, or
-/// exported by a direct import or a prelude module. Extensions live in their own tables, keyed
+/// exported by a direct import. Extensions live in their own tables, keyed
 /// by receiver type and name, apart from the name scopes, so `fun greet()` and
 /// `fun User.greet()` coexist. An intrinsic extension of the bundled library is a member of its
 /// receiver type instead (D7 of `standard-library`), in the members table.
@@ -325,7 +325,7 @@ pub(crate) struct Extension {
 }
 
 /// The extensions of one receiver type constructor and name in one layer (the file's own, the
-/// imports', the prelude's), by context type, `None` for the one without a context, each with
+/// imports'), by context type, `None` for the one without a context, each with
 /// the modules declaring it (D8 of `receiver-lambdas`). A call finds its extension with one map
 /// lookup per context candidate, whatever the number of contexts.
 #[derive(Debug, Clone, Default)]
@@ -616,17 +616,18 @@ pub struct TypeChecker {
     /// candidate per exporting module.
     imported_extensions: HashMap<(ReceiverKey, String), ExtensionsOfName>,
     /// The intrinsic extensions of the bundled library the file declares or imports, members of
-    /// their receiver types (D7 of `standard-library`), by receiver type and name. The
-    /// prelude's members are in [`Self::prelude`].
+    /// their receiver types (D7 of `standard-library`), by receiver type and name. The members
+    /// of the built-in types every workspace file sees are in [`Self::member_scope`].
     members: HashMap<(ReceiverKey, String), Extension>,
     /// The plain intrinsic functions the file declares or imports, by defining module and name,
     /// with the built-in their calls lower to (D6 of `standard-library`).
     intrinsic_functions: HashMap<(String, String), BuiltinFunction>,
     /// The external functions the file declares or imports (D5 of `standard-library`).
     externals: Vec<DeclarationPath>,
-    /// The prelude every workspace file sees without an import, consulted after the file's own
-    /// declarations and its imports (D4 of `standard-library`); `None` for a library file.
-    prelude: Option<std::sync::Arc<crate::prelude::PreludeScope>>,
+    /// The members of the built-in types the member modules declare, which every workspace
+    /// file sees without an import, consulted after the file's own and imported members (D2 of
+    /// `explicit-library`); `None` for a library file.
+    member_scope: Option<std::sync::Arc<crate::members::MemberScope>>,
     /// Module paths of the file's direct imports, whose ABIs this checker has ingested.
     direct_imports: HashSet<String>,
     /// Every struct and enum named by an ingested ABI, by bare name. Some are defined in modules
@@ -707,7 +708,7 @@ impl TypeChecker {
             members: HashMap::new(),
             intrinsic_functions: HashMap::new(),
             externals: Vec::new(),
-            prelude: None,
+            member_scope: None,
             direct_imports: HashSet::new(),
             seen_nominals: HashMap::new(),
             exported_nominals: HashSet::new(),
@@ -731,66 +732,39 @@ impl TypeChecker {
         }
     }
 
-    /// The checker, with `prelude` in scope after the file's own declarations and its imports
-    /// (D4 of `standard-library`). Installing it costs a pointer copy, plus the definitions of
-    /// the types the prelude declares, of which today's prelude has none.
-    pub fn with_prelude(mut self, prelude: std::sync::Arc<crate::prelude::PreludeScope>) -> Self {
-        self.env.set_prelude(prelude.names());
-        prelude.install_types(&mut self.types);
-        for module in prelude.modules() {
-            self.direct_imports.insert(module.clone());
-        }
-        for (name, ids) in prelude.seen_nominals() {
-            self.seen_nominals
-                .entry(name.clone())
-                .or_default()
-                .extend(ids.iter().cloned());
-        }
-        self.exported_nominals
-            .extend(prelude.exported_nominals().iter().cloned());
-        self.prelude = Some(prelude);
+    /// The checker, with the members of the built-in types in `members` in scope after the
+    /// file's own and imported members (D2 of `explicit-library`). Installing it copies a
+    /// pointer: no name, extension or type comes with it.
+    pub fn with_members(mut self, members: std::sync::Arc<crate::members::MemberScope>) -> Self {
+        self.member_scope = Some(members);
         self
     }
 
-    /// The parts of this checker's ingested imports that [`crate::prelude::PreludeScope`]
-    /// keeps: the import layer's names, the extensions, the members, the plain intrinsics, the
-    /// externals and the type table.
-    #[allow(clippy::type_complexity)]
-    pub(crate) fn into_prelude_parts(
-        self,
-    ) -> (
-        HashMap<String, Symbol>,
-        HashMap<(ReceiverKey, String), ExtensionsOfName>,
-        HashMap<(ReceiverKey, String), Extension>,
-        HashMap<(String, String), BuiltinFunction>,
-        Vec<DeclarationPath>,
-        TypeTable,
-        HashMap<String, Vec<NominalId>>,
-        HashSet<NominalId>,
-        HashSet<String>,
-    ) {
-        let names = self.env.imported_names();
-        let extensions = self.imported_extensions;
-        (
-            names,
-            extensions,
-            self.members,
-            self.intrinsic_functions,
-            self.externals,
-            self.types,
-            self.seen_nominals,
-            self.exported_nominals,
-            self.direct_imports,
-        )
+    /// The checker, with the ABIs of `/prism/core`, `/prism/collections` and
+    /// `/prism/compose/runtime` ingested as direct imports and the member scope installed, as a
+    /// workspace file importing those modules sees them: for tests that build a checker
+    /// directly (D11 of `explicit-library`).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_library_imports(mut self) -> Self {
+        for abi in crate::members::test_library_imports() {
+            self.ingest_file_abi(abi);
+        }
+        self.with_members(crate::members::test_members())
+    }
+
+    /// The intrinsic extensions and properties this checker has ingested, which
+    /// [`crate::members::MemberScope`] keeps.
+    pub(crate) fn into_members(self) -> HashMap<(ReceiverKey, String), Extension> {
+        self.members
     }
 
     /// The intrinsic member named `name` of the type constructor of `receiver`, declared or
-    /// imported by the file, else of the prelude (D7 of `standard-library`).
+    /// imported by the file, else of the member modules (D2 of `explicit-library`).
     fn member(&self, receiver: &Type, name: &str) -> Option<&Extension> {
         let key = (ReceiverKey::of(receiver), name.to_string());
         self.members
             .get(&key)
-            .or_else(|| self.prelude.as_ref()?.member(&key))
+            .or_else(|| self.member_scope.as_ref()?.member(&key))
     }
 
     /// Whether `receiver` has an intrinsic property named `name` (`length` of `String`, `size`
@@ -807,27 +781,20 @@ impl TypeChecker {
     }
 
     /// The built-in a call of the plain function `module::name` lowers to, when that function
-    /// is an intrinsic the file declares or imports, or one of the prelude.
+    /// is an intrinsic the file declares or imports.
     fn intrinsic_function(&self, module: &str, name: &str) -> Option<BuiltinFunction> {
         let key = (module.to_string(), name.to_string());
-        self.intrinsic_functions
-            .get(&key)
-            .copied()
-            .or_else(|| self.prelude.as_ref()?.intrinsic_function(&key))
+        self.intrinsic_functions.get(&key).copied()
     }
 
     /// Whether the plain function `path` is an external function the file declares or imports.
     fn is_external(&self, path: &DeclarationPath) -> bool {
         self.externals.contains(path)
-            || self
-                .prelude
-                .as_ref()
-                .is_some_and(|prelude| prelude.externals().contains(path))
     }
 
-    /// The built-in a bare callee names when it resolves to an intrinsic function: the file's
-    /// own, an import's or the prelude's, found as any name is (D4 of `standard-library`), so a
-    /// local, parameter, declaration or import of the name shadows the prelude's.
+    /// The built-in a bare callee names when it resolves to an intrinsic function, the file's
+    /// own or an import's, found as any name is, so a local or parameter of the name shadows
+    /// it.
     fn intrinsic_callee(&self, callee: &Expr) -> Option<BuiltinFunction> {
         let ExprKind::Ident(name) = &callee.kind else {
             return None;
@@ -3163,10 +3130,7 @@ impl TypeChecker {
                 Declaration::ExtensionProperty(_) => {}
             }
         }
-        let mut externals = self.externals.clone();
-        if let Some(prelude) = &self.prelude {
-            externals.extend(prelude.externals().iter().cloned());
-        }
+        let externals = self.externals.clone();
         TypedFile {
             module: self.module_path.clone(),
             package: self.current_package.clone(),
@@ -6053,10 +6017,9 @@ impl TypeChecker {
         if let Some(member) = self.implicit_this_callee(callee) {
             return self.infer_call_expr(&member, type_arguments, args, span, expected);
         }
-        // A call of a rule-typed intrinsic of the library, found as any name is, so a local,
-        // parameter, declaration or import of the name shadows the prelude's (D4 and D6 of
-        // `standard-library`): `print` and `println` take any argument with a text form, and
-        // `listOf` any number of elements.
+        // A call of a rule-typed intrinsic of the library, found as any name is, so a local or
+        // parameter of the name shadows it (D6 of `standard-library`): `print` and `println`
+        // take any argument with a text form, and `listOf` any number of elements.
         match self.intrinsic_callee(callee) {
             Some(builtin @ (BuiltinFunction::Print | BuiltinFunction::PrintLine)) => {
                 return self.infer_output_call(builtin, type_arguments, args, span);
@@ -8356,7 +8319,7 @@ impl TypeChecker {
     }
 
     /// The extension named `name` on receiver type `receiver` visible in this file: its own one,
-    /// which shadows imported ones, else the single import exporting one, else the prelude's.
+    /// which shadows imported ones, else the single import exporting one.
     /// Within the first of these layers that declares an extension of the key, the one whose
     /// context is a candidate of the current context is chosen, else the one without a context
     /// (D8 of `receiver-lambdas`).
@@ -8365,12 +8328,7 @@ impl TypeChecker {
         if let Some(extensions) = self.own_extensions.get(&key) {
             return self.choose_by_context(extensions, true);
         }
-        // A prelude extension is found last, so the file's own and imported ones shadow it
-        // without `E4012` (D4 of `standard-library`).
-        if let Some(extensions) = self.imported_extensions.get(&key) {
-            return self.choose_by_context(extensions, false);
-        }
-        match self.prelude.as_ref().and_then(|p| p.extensions(&key)) {
+        match self.imported_extensions.get(&key) {
             Some(extensions) => self.choose_by_context(extensions, false),
             None => ExtensionLookup::None,
         }

@@ -1,6 +1,7 @@
-// The core of the bundled library: the functions and members every file uses without an
-// import. It is a prelude module, so a file's own declaration or import of a name shadows it.
-// Every declaration here is an intrinsic: the compiler types and lowers its calls itself.
+// The core of the bundled library: printing, and the members of the scalars and of `String`.
+// The members belong to their types, so every file sees them without an import; `print` and
+// `println` are used after `import /prism/core`. Every declaration here is an intrinsic: the
+// compiler types and lowers its calls itself.
 package prism
 
 // Writes the text form of `value` to the standard output: an `Int` in decimal, a `Double`, a

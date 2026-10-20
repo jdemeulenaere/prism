@@ -1,0 +1,5 @@
+// expect: ok
+// library: lib
+import /prism/test
+
+fun f(): Int = width(&"abc")

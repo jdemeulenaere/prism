@@ -1,0 +1,10 @@
+// expect: ok
+package app
+
+import /lib/util
+
+fun visit(n: &Int) {}
+
+fun f(xs: &List<Int>) {
+    xs.forEach(visit)
+}

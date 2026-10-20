@@ -110,7 +110,7 @@ fn hashes(name: &str, box_source: &str) -> (Vec<(String, prism_abi::ContentHash)
             ("lib/box.prism", box_source),
             (
                 "app/main.prism",
-                "package app\nimport /lib/box\nfun main() { println(1) }\n",
+                "package app\nimport /prism/core\nimport /lib/box\nfun main() { println(1) }\n",
             ),
         ],
     );

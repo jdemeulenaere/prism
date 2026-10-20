@@ -1,0 +1,15 @@
+error[E4001]: unresolved symbol 'remember'
+  --> main.prism:4:14
+    4 |     val id = remember { 7 }
+      |              ^
+   = help: 'remember' is declared by the library module '/prism/compose/runtime': add 'import /prism/compose/runtime'
+error[E4001]: unresolved symbol 'currentRecomposeScope'
+  --> main.prism:5:13
+    5 |     val s = currentRecomposeScope()
+      |             ^
+   = help: 'currentRecomposeScope' is declared by the library module '/prism/compose/runtime': add 'import /prism/compose/runtime'
+error[E4001]: unresolved symbol 'composition'
+  --> main.prism:9:13
+    9 |     val c = composition { Counter() }
+      |             ^
+   = help: 'composition' is declared by the library module '/prism/compose/runtime': add 'import /prism/compose/runtime'

@@ -21,14 +21,14 @@ A file MUST see a public function, extension, struct, enum or value of a library
 - **THEN** the first is rejected with `E4006` for `invalidate`, with help naming `import /prism/compose/runtime`, and the second typechecks
 
 ### Requirement: Library Names Follow the Rules of Imports
-A library name a file imports MUST behave as a name of any imported module: a top-level declaration of the same name in the file MUST be `E4010`, a name or extension exported by two of its imports MUST be `E4012` at use, and the file's own extension MUST shadow an imported one. A file that does not import a library module MUST be free to declare any of its names as its own.
+A library name a file imports MUST behave as a name of any imported module: a top-level declaration of the same name in the file MUST shadow it (type-system, "Top-level declarations shadow imports"), a name or extension exported by two of its imports MUST be `E4012` at use, and the file's own extension MUST shadow an imported one. A file that does not import a library module MUST be free to declare any of its names as its own.
 
 #### Scenario: A file's own declaration of a library name
 - **WHEN** a file without imports declares `fun listOf(n: Int): Int = n` and `fun f(): Int = listOf(3)`, and another file declares the same with `import /prism/collections`
-- **THEN** the first typechecks, the call resolving to `main::listOf`, and the second is rejected with `E4010` for `listOf`
+- **THEN** both typecheck, the call resolving to `main::listOf` in each
 
 #### Scenario: An imported extension beside the library's
-- **WHEN** `lib/util.prism` exports `public fun <T> List<T>.forEach(action: (&T) -> Unit): Unit {}`, a file importing only `/lib/util` declares `fun f(xs: &List<Int>) { xs.forEach { n -> } }`, and a file importing `/lib/util` and `/prism/collections` declares the same
+- **WHEN** `lib/util.prism` exports `public fun <T> List<T>.forEach(action: (&T) -> Unit): Unit {}`, a file importing only `/lib/util` declares `fun visit(n: &Int) {}` and `fun f(xs: &List<Int>) { xs.forEach(visit) }`, and a file importing `/lib/util` and `/prism/collections` declares the same
 - **THEN** the first typechecks, the call resolving to `lib/util`'s extension, and the second is rejected with `E4012` naming `lib/util` and `prism/collections`
 
 ### Requirement: Built-In Types and Their Members Need No Import

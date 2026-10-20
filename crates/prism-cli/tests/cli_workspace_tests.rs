@@ -1208,7 +1208,11 @@ fn test_cli_binary_function_value_conversion_help() {
 #[test]
 fn replacement_files_of_edit_scripts_are_not_sources() {
     let temp = create_temp_dir("replacement_files");
-    fs::write(temp.join("main.prism"), "fun main() { println(1) }\n").unwrap();
+    fs::write(
+        temp.join("main.prism"),
+        "import /prism/core\nfun main() { println(1) }\n",
+    )
+    .unwrap();
     fs::write(temp.join("main.prism.v2"), "this is not Prism (\n").unwrap();
     for target in [temp.clone(), temp.join("main.prism")] {
         let output = prism()
@@ -1237,7 +1241,11 @@ fn a_check_report_without_library_lines() {
             .as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("main.prism"), "fun main() { println(1) }\n").unwrap();
+    std::fs::write(
+        dir.join("main.prism"),
+        "import /prism/core\nfun main() { println(1) }\n",
+    )
+    .unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_prism"))
         .current_dir(&dir)
         .args(["check", "--no-cache", "main.prism"])

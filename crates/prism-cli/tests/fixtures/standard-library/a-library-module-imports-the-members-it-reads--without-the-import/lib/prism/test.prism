@@ -1,0 +1,4 @@
+package prism
+
+// The number of characters of `s`.
+public fun width(s: &String): Int = s.length

@@ -1,10 +1,10 @@
 //! The bundled library's own checks (the `standard-library` spec, "The Library Passes Its Own
 //! Checks"; D13 of `standard-library`): every embedded module passes the compiler's checks and
 //! compiles, every external matches the runtime's entry point, every module is formatted, the
-//! prelude modules export distinct names, and the embedded module list is exactly the library
-//! directory.
+//! member modules declare members of built-in types only, and the embedded module list is
+//! exactly the library directory.
 
-use prism_library::{Library, MODULES, PRELUDE};
+use prism_library::{Library, MEMBER_MODULES, MODULES};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -74,12 +74,14 @@ fn every_declaration_says_what_it_does() {
     }
 }
 
+/// The member modules declare the members of the built-in types (D2 of `explicit-library`):
+/// every intrinsic extension they declare has a built-in receiver, since the member scope gives
+/// every workspace file each of them.
 #[test]
-fn the_prelude_modules_export_distinct_names() {
+fn the_member_modules_declare_members_of_built_in_types() {
     let library = Library::bundled();
-    let mut owners: BTreeMap<String, Vec<&str>> = BTreeMap::new();
-    for module in PRELUDE {
-        let source = &library.module(module).expect("a prelude module").source;
+    for module in MEMBER_MODULES {
+        let source = &library.module(module).expect("a member module").source;
         let file = prism_parser::parse_source(source).expect("the module parses");
         let no_definition = |_: &str, _: &str| None;
         let abi = prism_abi::FileAbi::extract_with_origin(
@@ -90,41 +92,31 @@ fn the_prelude_modules_export_distinct_names() {
             true,
         )
         .expect("the module's ABI");
-        let mut names = BTreeSet::new();
+        let mut members = 0;
         for symbol in &abi.symbols {
-            // An extension is named with its receiver: `List.map`.
-            let name = match symbol {
+            let receiver = match symbol {
                 prism_abi::ExportedSymbol::Function {
                     receiver: Some(receiver),
-                    name,
+                    kind: prism_abi::FunctionKind::Intrinsic,
                     ..
-                } => format!("{}.{}", prism_abi::receiver_constructor(&receiver.ty), name),
-                prism_abi::ExportedSymbol::ExtensionProperty { receiver, name, .. } => {
-                    format!("{}.{}", prism_abi::receiver_constructor(receiver), name)
+                } => prism_abi::receiver_constructor(&receiver.ty),
+                prism_abi::ExportedSymbol::ExtensionProperty { receiver, .. } => {
+                    prism_abi::receiver_constructor(receiver)
                 }
-                prism_abi::ExportedSymbol::Function { name, .. }
-                | prism_abi::ExportedSymbol::Struct { name, .. }
-                | prism_abi::ExportedSymbol::Enum { name, .. }
-                | prism_abi::ExportedSymbol::Var { name, .. } => name.clone(),
+                _ => continue,
             };
-            // The prelude layer keeps one symbol per name, so no prelude module may give a
-            // struct a companion value (D4 of `ui-toolkit`), whose struct it would lose.
+            // `List<T>` without its type arguments.
+            let receiver = receiver.split('<').next().unwrap_or_default().to_string();
             assert!(
-                names.insert(name.clone()),
-                "{} exports '{}' twice",
+                ["Int", "Double", "Bool", "Char", "String", "List"].contains(&receiver.as_str()),
+                "{} declares a member of '{}', which is not a built-in type",
                 module,
-                name
+                receiver
             );
+            members += 1;
         }
-        for name in names {
-            owners.entry(name).or_default().push(module);
-        }
+        assert!(members > 0, "{} declares no member", module);
     }
-    let shared: Vec<_> = owners
-        .iter()
-        .filter(|(_, modules)| modules.len() > 1)
-        .collect();
-    assert!(shared.is_empty(), "names exported twice: {:?}", shared);
 }
 
 #[test]
@@ -162,7 +154,7 @@ fn the_embedded_modules_are_the_library_directory() {
         "MODULES must list every file of library/prism"
     );
     assert_eq!(embedded, on_disk);
-    for module in PRELUDE {
+    for module in MEMBER_MODULES {
         assert!(embedded.contains_key(*module), "{} is a module", module);
     }
 }
@@ -328,7 +320,6 @@ fn signatures_of_the_compose_module() {
         );
     }
     assert_eq!(texts.len(), 21, "{:?}", texts);
-    assert!(PRELUDE.contains(&"prism/compose/runtime"));
 }
 
 /// `ui-toolkit` task 11.1: `prism-ui`'s mirrors of `Modifier`, `ModifierElements` and

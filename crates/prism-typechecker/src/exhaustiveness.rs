@@ -472,8 +472,7 @@ mod tests {
     /// `E4009` errors.
     fn check(src: &str) -> (TypedFile, Vec<String>) {
         let file = prism_parser::parse_source(src).expect("source must parse");
-        let mut checker =
-            TypeChecker::new(None, "main").with_prelude(crate::prelude::test_prelude());
+        let mut checker = TypeChecker::new(None, "main").with_library_imports();
         let tree = checker.check_module(&file);
         let mut missing = Vec::new();
         for error in &checker.errors {

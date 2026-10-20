@@ -1,0 +1,5 @@
+error[E4001]: unresolved symbol 'listOf'
+  --> main.prism:4:16
+    4 | fun g(): Int = listOf(1).size
+      |                ^
+   = help: 'listOf' is declared by the library module '/prism/collections': add 'import /prism/collections'

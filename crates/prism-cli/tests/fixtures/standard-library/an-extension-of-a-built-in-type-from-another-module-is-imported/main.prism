@@ -1,0 +1,8 @@
+// expect: E4006
+// run: 1
+fun f(): Int {
+    val d = 16.dp
+    return 0
+}
+
+fun main() {}

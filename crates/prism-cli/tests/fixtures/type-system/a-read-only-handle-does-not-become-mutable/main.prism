@@ -1,2 +1,4 @@
 // expect: E4005
+import /prism/compose/runtime
+
 fun f(s: &State<Int>): &MutableState<Int> = s

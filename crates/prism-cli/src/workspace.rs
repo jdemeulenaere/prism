@@ -11,19 +11,19 @@ use prism_library::Library;
 use prism_mir::{FileSummary, GenericRecord, MirFile};
 use prism_parser::ParseError;
 use prism_resolver::{scan_directory, DependencyGraph, ResolveError, SourceNode};
-use prism_typechecker::{PreludeScope, TypedFile};
+use prism_typechecker::{MemberScope, TypedFile};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Phase 1 of a program: the ABI of every file, by path, and the prelude scope built once
-/// from the prelude modules' ABIs, which every workspace file's checker shares (D4 of
-/// `standard-library`).
+/// Phase 1 of a program: the ABI of every file, by path, and the member scope built once from
+/// the member modules' ABIs, which every workspace file's checker shares (D2 of
+/// `explicit-library`).
 pub(crate) struct ProgramAbis {
     pub files: HashMap<PathBuf, FileAbi>,
     /// `None` when the graph has no workspace file, as the library's own graph.
-    pub prelude: Option<Arc<PreludeScope>>,
+    pub members: Option<Arc<MemberScope>>,
 }
 
 impl std::ops::Deref for ProgramAbis {
@@ -514,7 +514,7 @@ fn validate_and_extract_abi(
 
 /// The key of the check entry of the file at `file_path`: its module path, its source and its
 /// direct imports' ABI hashes, which cover no body (D3 of `instance-cache`), then for a
-/// workspace file the prelude modules' (D4 of `standard-library`). A library module is keyed
+/// workspace file the member modules' (D14 of `explicit-library`). A library module is keyed
 /// by the same inputs, so its entries are shared by every workspace.
 pub(crate) fn file_check_key(
     keys: &crate::cache::CacheKeys,
@@ -524,7 +524,7 @@ pub(crate) fn file_check_key(
 ) -> ContentHash {
     let node = graph.get_node(file_path).expect("node must exist in graph");
     let import_hashes: Vec<ContentHash> = node
-        .imports_with_prelude()
+        .imports_with_member_modules()
         .filter_map(|dep| abis.get(dep))
         .map(|abi| abi.abi_hash)
         .collect();
@@ -743,8 +743,8 @@ pub(crate) fn extract_abis(
         .map(|(path, node)| (path.as_path(), declared_types(&node.source_file, true)))
         .collect();
 
-    // The binder of each file: its type names bound to the one direct import that exports
-    // them, else to the prelude module that does (D4 of `standard-library`).
+    // The binder of each file: its type names bound to the one direct import that exports them
+    // (no library module is an implicit import, D1 of `explicit-library`).
     let bind_from = |imports: &[PathBuf], name: &str| {
         let mut found = imports.iter().filter_map(|dep| {
             let header = exported_types.get(dep.as_path())?.get(name)?;
@@ -757,10 +757,8 @@ pub(crate) fn extract_abis(
             _ => None,
         }
     };
-    let bind_import = |node: &SourceNode, name: &str| match bind_from(&node.direct_imports, name) {
-        Some(binding) => binding.ok(),
-        None => bind_from(&node.prelude_imports, name).and_then(Result::ok),
-    };
+    let bind_import =
+        |node: &SourceNode, name: &str| bind_from(&node.direct_imports, name).and_then(Result::ok);
 
     // Phase 1a, continued: the definition of every struct and enum of every file, private ones
     // included, bound as Phase 1b binds signature types (D3 of `codegen-aggregates`).
@@ -802,24 +800,24 @@ pub(crate) fn extract_abis(
         })?;
         abis.insert(file_path.clone(), abi);
     }
-    // The prelude scope, built once from the prelude modules' ABIs for every workspace file
-    // (D4 of `standard-library`).
-    let prelude = graph
+    // The member scope, built once from the member modules' ABIs for every workspace file (D2
+    // of `explicit-library`).
+    let members = graph
         .nodes
         .values()
         .find(|node| !node.is_library())
         .map(|node| {
-            let prelude: Vec<&FileAbi> = node
-                .prelude_imports
+            let modules: Vec<&FileAbi> = node
+                .member_imports
                 .iter()
                 .filter_map(|module| abis.get(module))
                 .collect();
-            Arc::new(PreludeScope::from_abis(&prelude))
+            Arc::new(MemberScope::from_abis(&modules))
         });
     Ok((
         ProgramAbis {
             files: abis,
-            prelude,
+            members,
         },
         definitions,
     ))
@@ -841,11 +839,11 @@ fn typecheck_file(
     };
 
     let mut checker = prism_typechecker::TypeChecker::new(package_name, module_path(node));
-    // A workspace file sees the prelude after its imports; a library file imports what it
-    // uses (D4 of `standard-library`).
+    // A workspace file sees the members of the built-in types without an import; a library
+    // file imports what it uses (D2 and D7 of `explicit-library`).
     if !node.is_library() {
-        if let Some(prelude) = &abis.prelude {
-            checker = checker.with_prelude(Arc::clone(prelude));
+        if let Some(members) = &abis.members {
+            checker = checker.with_members(Arc::clone(members));
         }
     }
 
@@ -1319,7 +1317,7 @@ mod tests {
         .unwrap();
         fs::write(
             temp.join("app/main.prism"),
-            "package app\nimport /lib/shapes\nstruct Thing(val p: Pair<Int, String>, val c: Chain)\n\
+            "package app\nimport /lib/shapes\nimport /prism/core\nstruct Thing(val p: Pair<Int, String>, val c: Chain)\n\
              enum Chain { End, Link(Int, Heap<Chain>) }\n\
              fun main() { val s: Shape<Int> = Shape.Dot; println(holder().n) }\n",
         )
@@ -1347,11 +1345,11 @@ mod tests {
     }
 
     /// build-cache: "Cache Keys Cover Exactly the Compilation Inputs": a workspace file's key
-    /// covers the prelude modules' ABI hashes after its imports', and a library module's key
-    /// its own inputs only (D3 and D4 of `standard-library`).
+    /// covers the member modules' ABI hashes after its imports', and a library module's key
+    /// its own inputs only (D3 of `standard-library`, D14 of `explicit-library`).
     #[test]
-    fn keys_cover_the_prelude() {
-        let temp = create_temp_dir("prelude_keys");
+    fn keys_cover_the_member_modules() {
+        let temp = create_temp_dir("member_keys");
         let main = temp.join("main.prism");
         fs::write(&main, "fun main() {}\n").unwrap();
         let keys = crate::cache::CacheKeys::in_process();
@@ -1362,7 +1360,7 @@ mod tests {
         };
         let bundled = Library::bundled();
         let collections = &bundled.module("prism/collections").unwrap().source;
-        // A new public helper changes the prelude's ABI hash.
+        // A new public helper changes the ABI hash of a member module.
         let grown = Library::with_modules(vec![(
             "prism/collections".to_string(),
             format!(

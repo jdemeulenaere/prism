@@ -1041,8 +1041,7 @@ mod tests {
     /// errors must be well formed.
     fn check(src: &str) -> (Vec<&'static str>, String) {
         let file = prism_parser::parse_source(src).expect("source must parse");
-        let mut checker =
-            TypeChecker::new(None, "main").with_prelude(crate::prelude::test_prelude());
+        let mut checker = TypeChecker::new(None, "main").with_library_imports();
         let tree = checker.check_module(&file);
         let codes: Vec<&'static str> = checker.errors.iter().map(|e| e.code()).collect();
         if codes.is_empty() {
@@ -1358,8 +1357,7 @@ mod tests {
     fn taking_apart_through_a_safe_navigation_suggests_the_nullables_borrow() {
         let src = "struct User { val name: String, val id: Int }\nstruct Box { val u: User? }\nfun f(b: Box?): Int = when (b?.u) { null -> 0; User(name = val s) -> 1 }\n";
         let file = prism_parser::parse_source(src).expect("source must parse");
-        let mut checker =
-            TypeChecker::new(None, "main").with_prelude(crate::prelude::test_prelude());
+        let mut checker = TypeChecker::new(None, "main").with_library_imports();
         checker.check_module(&file);
         let codes: Vec<&'static str> = checker.errors.iter().map(|e| e.code()).collect();
         assert_eq!(codes, ["E4017"]);

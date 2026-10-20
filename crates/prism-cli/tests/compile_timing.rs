@@ -1082,13 +1082,14 @@ fn contract_fingerprints(n: usize) -> String {
     source
 }
 
-/// `n` statements calling the prelude's intrinsics and helpers (`standard-library`): the
-/// front end looks each name and member up in the shared prelude scope. Not compiled here: the
-/// helpers' instances need the library's records, which `prelude_costs_a_lookup_per_file`
-/// leaves out too.
-fn prelude_calls(n: usize) -> String {
+/// `n` statements calling `println`, `listOf` (once), `map`, `sumOf` and `size`, after the
+/// imports of `/prism/collections` and `/prism/core`: the front end looks each name up among
+/// the imports and each member in the member scope (D1 and D2 of `explicit-library`). Not
+/// compiled here: the helpers' instances need the library's records, which
+/// `library_imports_cost_per_file` leaves out too.
+fn library_calls(n: usize) -> String {
     format!(
-        "fun main() {{\n    val xs = listOf(1, 2, 3)\n{}}}\n",
+        "import /prism/collections\nimport /prism/core\n\nfun main() {{\n    val xs = listOf(1, 2, 3)\n{}}}\n",
         join(n, "", |i| format!(
             "    println(xs.map {{ x -> x + {} }}.sumOf {{ x -> x }} + xs.size)\n",
             i
@@ -1096,11 +1097,11 @@ fn prelude_calls(n: usize) -> String {
     )
 }
 
-/// A small workspace file of the shape of `prelude_costs_a_lookup_per_file`: calls of
-/// `println`, `listOf` and two helpers.
-fn prelude_file(i: usize) -> String {
+/// A small workspace file of the shape of `library_imports_cost_per_file`: calls of `println`,
+/// `listOf` and two helpers, after the imports of the two modules declaring them.
+fn library_file(i: usize) -> String {
     format!(
-        "fun f{i}(): Int {{\n    val xs = listOf({i}, 2)\n    println(xs.size)\n    return xs.map {{ x -> x * 2 }}.count {{ x -> x > {i} }}\n}}\n"
+        "import /prism/collections\nimport /prism/core\n\nfun f{i}(): Int {{\n    val xs = listOf({i}, 2)\n    println(xs.size)\n    return xs.map {{ x -> x * 2 }}.count {{ x -> x > {i} }}\n}}\n"
     )
 }
 
@@ -1223,7 +1224,7 @@ fn shapes() -> Vec<Shape> {
         shape("list-element-types", true, SIZES, list_element_types),
         shape("nested-lists", true, DEPTHS, nested_lists),
         shape("contract-fingerprints", true, SIZES, contract_fingerprints),
-        shape("prelude-calls", false, SIZES, prelude_calls),
+        shape("library-calls", false, SIZES, library_calls),
         shape("receiver-lambdas", true, SIZES, receiver_lambdas),
         shape(
             "nested-receiver-lambdas",
@@ -1293,8 +1294,8 @@ fn compile(program: &Generated, compiled: bool) -> [Option<Duration>; 10] {
     abi.unwrap_or_else(|error| panic!("ABI error: {:?}", error));
     let package = file.package.as_ref().map(|p| p.package_string());
     let ((tree, errors), time) = timed(|| {
-        let mut checker = prism_typechecker::TypeChecker::new(package, "bench")
-            .with_prelude(prism_typechecker::test_prelude());
+        let mut checker =
+            prism_typechecker::TypeChecker::new(package, "bench").with_library_imports();
         // A UI program sees the toolkit modules' ABIs, which a cached build loads.
         if source.contains("import /prism/compose/") {
             for abi in toolkit_abis() {
@@ -1603,81 +1604,96 @@ fn every_stage_compiles_in_linear_time() {
         .unwrap();
 }
 
-/// D4 of `standard-library`: Phase 2 of `n` small workspace files, each calling `println`,
-/// `listOf` and two helpers, with the prelude scope built once and shared, and, for comparison,
-/// with the prelude modules' ABIs ingested into each file's checker instead. The time per file
-/// of the shared scope must stay flat as `n` grows (within x2 of the smallest size's, under
-/// `PRISM_ASSERT_TIMING=1`): the prelude costs each file a pointer copy and a lookup per name,
-/// never a check of the library.
-fn prelude_benchmark() {
+/// D1, D2 and D14 of `explicit-library`: Phase 2 of `n` small workspace files, each importing
+/// `/prism/collections` and `/prism/core` and calling `println`, `listOf` and two helpers, as
+/// the driver checks them: each checker ingests its two imports' ABIs and shares the member
+/// scope built once. The time per file must stay flat as `n` grows (at 4,096 files within x1.2
+/// of 256 files', under `PRISM_ASSERT_TIMING=1`): a file pays for what it imports, never for
+/// the rest of the library. Beside it, the time per file of the member scope alone (a file
+/// importing nothing, calling members only).
+fn library_imports_benchmark() {
     let library = prism_library::Library::bundled();
-    let prelude_abis: Vec<prism_abi::FileAbi> = library
-        .prelude()
-        .iter()
-        .map(|module| {
-            let file = prism_parser::parse_source(&library.module(module).unwrap().source).unwrap();
-            let no_definition = |_: &str, _: &str| None;
-            prism_abi::FileAbi::extract_with_origin(
-                &file,
-                module,
-                &prism_abi::no_imports,
-                &no_definition,
-                true,
-            )
-            .unwrap()
-        })
-        .collect();
-    let (scope, build_time) = timed(|| {
-        std::sync::Arc::new(prism_typechecker::PreludeScope::from_abis(
-            &prelude_abis.iter().collect::<Vec<_>>(),
+    let abis = |modules: &[&str]| -> Vec<prism_abi::FileAbi> {
+        modules
+            .iter()
+            .map(|module| {
+                let file =
+                    prism_parser::parse_source(&library.module(module).unwrap().source).unwrap();
+                let no_definition = |_: &str, _: &str| None;
+                prism_abi::FileAbi::extract_with_origin(
+                    &file,
+                    module,
+                    &prism_abi::no_imports,
+                    &no_definition,
+                    true,
+                )
+                .unwrap()
+            })
+            .collect()
+    };
+    let imported = abis(&["prism/collections", "prism/core"]);
+    let member_abis = abis(prism_library::MEMBER_MODULES);
+    let (members, build_time) = timed(|| {
+        std::sync::Arc::new(prism_typechecker::MemberScope::from_abis(
+            &member_abis.iter().collect::<Vec<_>>(),
         ))
     });
     println!(
-        "prelude scope built once in {:.3} ms",
+        "member scope built once in {:.3} ms",
         milliseconds(build_time)
     );
     println!(
         "  {:<12} {:>14} {:>14} {:>18}",
-        "files", "shared ms", "us per file", "ingested us/file"
+        "files", "imports ms", "us per file", "members only us"
     );
     let mut per_file = Vec::new();
     for files in [256, 1024, 4096] {
         let parsed: Vec<_> = (0..files)
-            .map(|i| prism_parser::parse_source(&prelude_file(i)).unwrap())
+            .map(|i| prism_parser::parse_source(&library_file(i)).unwrap())
             .collect();
-        let check_all = |ingest: bool| {
+        let members_only: Vec<_> = (0..files)
+            .map(|i| {
+                prism_parser::parse_source(&format!(
+                    "fun f{i}(xs: &List<Int>): Int = xs.size + {i}.toString().length\n"
+                ))
+                .unwrap()
+            })
+            .collect();
+        let check_all = |files: &[prism_ast::SourceFile], import: bool| {
             let start = Instant::now();
-            for (i, file) in parsed.iter().enumerate() {
-                let mut checker = prism_typechecker::TypeChecker::new(None, format!("f{}", i));
-                if ingest {
-                    for abi in &prelude_abis {
+            for (i, file) in files.iter().enumerate() {
+                let mut checker = prism_typechecker::TypeChecker::new(None, format!("f{}", i))
+                    .with_members(std::sync::Arc::clone(&members));
+                if import {
+                    for abi in &imported {
                         checker.ingest_file_abi(abi);
                     }
-                } else {
-                    checker = checker.with_prelude(std::sync::Arc::clone(&scope));
                 }
                 checker.check_module(file);
                 assert!(checker.errors.is_empty(), "{:?}", checker.errors);
             }
             start.elapsed()
         };
-        let shared = (0..3).map(|_| check_all(false)).min().unwrap();
-        let ingested = (0..3).map(|_| check_all(true)).min().unwrap();
-        let micros = shared.as_secs_f64() * 1e6 / files as f64;
+        let with_imports = (0..5).map(|_| check_all(&parsed, true)).min().unwrap();
+        let alone = (0..5)
+            .map(|_| check_all(&members_only, false))
+            .min()
+            .unwrap();
+        let micros = with_imports.as_secs_f64() * 1e6 / files as f64;
         println!(
             "  {:<12} {:>14.1} {:>14.2} {:>18.2}",
             files,
-            milliseconds(shared),
+            milliseconds(with_imports),
             micros,
-            ingested.as_secs_f64() * 1e6 / files as f64
+            alone.as_secs_f64() * 1e6 / files as f64
         );
         per_file.push(micros);
     }
     if std::env::var_os("PRISM_ASSERT_TIMING").is_some_and(|value| value == "1") {
         let (first, last) = (per_file[0], per_file[per_file.len() - 1]);
         assert!(
-            last <= 2.0 * first,
-            "the prelude's cost per file grows: {:.2} us at 256 files, {:.2} us at 4096",
+            last <= 1.2 * first,
+            "the cost of library imports per file grows: {:.2} us at 256 files, {:.2} us at 4096",
             first,
             last
         );
@@ -1686,10 +1702,10 @@ fn prelude_benchmark() {
 
 #[test]
 #[ignore = "a benchmark: run it with --ignored --nocapture"]
-fn prelude_costs_a_lookup_per_file() {
+fn library_imports_cost_per_file() {
     std::thread::Builder::new()
         .stack_size(8 << 20)
-        .spawn(prelude_benchmark)
+        .spawn(library_imports_benchmark)
         .unwrap()
         .join()
         .unwrap();
@@ -1699,8 +1715,7 @@ fn prelude_costs_a_lookup_per_file() {
 fn composed_file(source: &str) -> prism_mir::MirFile {
     let file = prism_parser::parse_source(source).unwrap_or_else(|error| panic!("{:?}", error));
     let package = file.package.as_ref().map(|p| p.package_string());
-    let mut checker = prism_typechecker::TypeChecker::new(package, "bench")
-        .with_prelude(prism_typechecker::test_prelude());
+    let mut checker = prism_typechecker::TypeChecker::new(package, "bench").with_library_imports();
     let tree = checker.check_module(&file);
     assert!(
         checker.errors.is_empty(),

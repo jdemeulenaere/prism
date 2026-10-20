@@ -1,0 +1,5 @@
+// expect: E4006
+// library: lib
+import /prism/test
+
+fun f(): Int = width(&"abc")

@@ -7,8 +7,7 @@ use prism_typed_tree::BuiltinFunction;
 /// The composed MIR of `source`, a file `main` that must check and borrow-check.
 fn compose(source: &str) -> MirFile {
     let file = prism_parser::parse_source(source).expect("the source parses");
-    let mut checker = prism_typechecker::TypeChecker::new(None, "main")
-        .with_prelude(prism_typechecker::test_prelude());
+    let mut checker = prism_typechecker::TypeChecker::new(None, "main").with_library_imports();
     let tree = checker.check_module(&file);
     assert!(
         checker.errors.is_empty(),

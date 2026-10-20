@@ -39,7 +39,7 @@ const SKIPPED: &str =
 const IMPORTS: &str = "import /prism/compose/ui\nimport /prism/compose/foundation\nimport /prism/compose/layout\nimport /prism/compose/material3\n";
 
 /// The `ui` spec's counter screen, printing each count.
-const COUNTER: &str = "compose fun Counter() {
+const COUNTER: &str = "import /prism/core\nimport /prism/compose/runtime\ncompose fun Counter() {
     val c = remember { mutableStateOf(0) }
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(\"Count: ${c.value}\")
@@ -209,7 +209,7 @@ impl Driver {
 fn scenario(name: &str) -> (String, Box<dyn FnOnce(Driver) + Send>) {
     let counter_app = |after: &str| {
         format!(
-            "{}{}fun main() {{ runApp(title = \"Counter\", width = 400, height = 300) {{ Counter() }}; println(\"closed\"){} }}\n",
+            "import /prism/core\n{}{}fun main() {{ runApp(title = \"Counter\", width = 400, height = 300) {{ Counter() }}; println(\"closed\"){} }}\n",
             IMPORTS, COUNTER, after
         )
     };
@@ -260,7 +260,7 @@ fn scenario(name: &str) -> (String, Box<dyn FnOnce(Driver) + Send>) {
         // 8.3: a second window opens after the first closes, on the same event loop.
         "two-apps" => (
             format!(
-                "{}fun main() {{ runApp(title = \"One\", width = 200, height = 100) {{ Text(\"1\") }}; println(\"one closed\"); runApp(title = \"Two\", width = 220, height = 120) {{ Text(\"2\") }}; println(\"two closed\") }}\n",
+                "import /prism/core\n{}fun main() {{ runApp(title = \"One\", width = 200, height = 100) {{ Text(\"1\") }}; println(\"one closed\"); runApp(title = \"Two\", width = 220, height = 120) {{ Text(\"2\") }}; println(\"two closed\") }}\n",
                 IMPORTS
             ),
             Box::new(|driver: Driver| {
@@ -276,7 +276,7 @@ fn scenario(name: &str) -> (String, Box<dyn FnOnce(Driver) + Send>) {
         // 8.4: typing, Backspace, key repeat, and shortcuts and arrows that type nothing.
         "text-field" => (
             format!(
-                "{}compose fun Form() {{
+                "import /prism/core\nimport /prism/compose/runtime\n{}compose fun Form() {{
     val name = remember {{ mutableStateOf(\"\") }}
     Column {{
         TextField(value = name.value, onValueChange = {{ println(\"value ${{it}}\"); name.value = it }})
@@ -309,7 +309,7 @@ fun main() {{ runApp(title = \"Form\", width = 400, height = 300) {{ Form() }}; 
         // 8.6: a runtime error in a handler ends the run with status 101 and its window.
         "runtime-error" => (
             format!(
-                "{}fun zero(): Int = 0
+                "import /prism/core\n{}fun zero(): Int = 0
 compose fun Divider() {{ Button(onClick = {{ println(1 / zero()) }}) {{ Text(\"/\") }} }}
 fun main() {{ runApp(title = \"Divider\", width = 200, height = 100) {{ Divider() }}; println(\"closed\") }}
 ",
@@ -336,7 +336,7 @@ fn watch_driver(directory: PathBuf) -> Box<dyn FnOnce(Driver) + Send> {
         std::fs::write(
             directory.join("main.prism"),
             format!(
-                "{}fun zero(): Int = 0\ncompose fun Counter() {{ Column(modifier = Modifier.padding(16.dp)) {{ Text(\"Count\"); Button(onClick = {{ println(1 / zero()) }}) {{ Text(\"+\") }} }} }}\nfun main() {{ runApp(title = \"Counter\", width = 400, height = 300) {{ Counter() }}; println(\"closed\") }}\n",
+                "import /prism/core\n{}fun zero(): Int = 0\ncompose fun Counter() {{ Column(modifier = Modifier.padding(16.dp)) {{ Text(\"Count\"); Button(onClick = {{ println(1 / zero()) }}) {{ Text(\"+\") }} }} }}\nfun main() {{ runApp(title = \"Counter\", width = 400, height = 300) {{ Counter() }}; println(\"closed\") }}\n",
                 IMPORTS
             ),
         )
@@ -368,7 +368,7 @@ fn reload_driver(directory: PathBuf) -> Box<dyn FnOnce(Driver) + Send> {
         std::fs::write(
             directory.join("main.prism"),
             format!(
-                "{}{}fun main() {{ runApp(title = \"Counter\", width = 400, height = 300) {{ Counter() }}; println(\"closed\") }}\n",
+                "import /prism/core\n{}{}fun main() {{ runApp(title = \"Counter\", width = 400, height = 300) {{ Counter() }}; println(\"closed\") }}\n",
                 IMPORTS,
                 COUNTER
                     .replace("Count: ", "Clicks: ")
@@ -397,7 +397,7 @@ fn child(name: &str, directory: &Path) -> i32 {
         windows: windows.clone(),
     };
     if name == "watch" || name == "watch-reload" {
-        std::fs::write(&entry, format!("{}{}fun main() {{ runApp(title = \"Counter\", width = 400, height = 300) {{ Counter() }}; println(\"closed\") }}\n", IMPORTS, COUNTER)).unwrap();
+        std::fs::write(&entry, format!("import /prism/core\n{}{}fun main() {{ runApp(title = \"Counter\", width = 400, height = 300) {{ Counter() }}; println(\"closed\") }}\n", IMPORTS, COUNTER)).unwrap();
         let drive = match name {
             "watch" => watch_driver(directory.to_path_buf()),
             _ => reload_driver(directory.to_path_buf()),

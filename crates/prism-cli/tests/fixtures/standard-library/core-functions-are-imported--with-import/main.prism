@@ -1,0 +1,8 @@
+// expect: ok
+// run: 0
+import /prism/core
+
+fun main() {
+    val s = 42.toString()
+    println(s.length)
+}

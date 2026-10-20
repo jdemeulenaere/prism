@@ -1,0 +1,5 @@
+error[E4012]: 'List<Int>.forEach' is exported by more than one import ('/lib/util', '/prism/collections'); remove one of the imports or rename the symbol
+  --> app/main.prism:11:5
+   11 |     xs.forEach(visit)
+      |     ^
+   = help: import only one of the modules that export this name

@@ -31,7 +31,7 @@ const TARGET_MILLISECONDS: f64 = 50.0;
 /// The counter app, whose text shows `label` before its count.
 fn counter(label: &str) -> String {
     format!(
-        "import /prism/compose/ui\nimport /prism/compose/foundation\nimport /prism/compose/layout\nimport /prism/compose/material3\n\
+        "import /prism/compose/runtime\nimport /prism/compose/ui\nimport /prism/compose/foundation\nimport /prism/compose/layout\nimport /prism/compose/material3\n\
          compose fun Counter() {{\n    val c = remember {{ mutableStateOf(0) }}\n    \
          Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {{\n        \
          Text(\"{}: ${{c.value}}\")\n        Button(onClick = {{ c.value += 1 }}) {{ Text(\"+\") }}\n    }}\n}}\n\

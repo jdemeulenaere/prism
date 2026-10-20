@@ -32,7 +32,7 @@ fn app() -> String {
         texts.push_str(&format!("        Text(\"row {}\")\n", index));
     }
     format!(
-        "import /prism/compose/ui\n\
+        "import /prism/compose/runtime\nimport /prism/compose/ui\n\
          import /prism/compose/layout\n\
          import /prism/compose/material3\n\
          compose fun Screen() {{\n\

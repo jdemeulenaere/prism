@@ -1,0 +1,6 @@
+error[E4006]: unknown field 'any' on type 'List<Int>'
+  --> main.prism:3:31
+    3 | fun f(xs: &List<Int>): Bool = xs.any { x -> x > 2 }
+      |                               ^
+   = help: no field or extension function 'any' is declared on 'List<Int>' in this file or exported by its imports
+   = help: 'any' is declared by the library module '/prism/collections': add 'import /prism/collections'

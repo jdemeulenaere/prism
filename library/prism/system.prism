@@ -1,5 +1,4 @@
-// The process: how a program ends itself. It is not a prelude module; import it with
-// `import /prism/system`.
+// The process: how a program ends itself. Import it with `import /prism/system`.
 package prism
 
 // Ends the process with exit status `status & 255`, after writing out the output printed so

@@ -1,0 +1,6 @@
+error[E4006]: unknown field 'invalidate' on type 'RecomposeScope'
+  --> main.prism:3:32
+    3 | fun f(scope: RecomposeScope) { scope.invalidate() }
+      |                                ^
+   = help: no field or extension function 'invalidate' is declared on 'RecomposeScope' in this file or exported by its imports
+   = help: 'invalidate' is declared by the library module '/prism/compose/runtime': add 'import /prism/compose/runtime'

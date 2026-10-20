@@ -1,9 +1,0 @@
-// expect: ok
-// run: 0
-package app
-
-import /lib/util
-
-fun main() {
-    listOf(1).forEach { n -> println(n) }
-}

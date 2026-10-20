@@ -1,0 +1,5 @@
+// expect: E4006
+// run: 1
+fun f(scope: RecomposeScope) { scope.invalidate() }
+
+fun main() {}

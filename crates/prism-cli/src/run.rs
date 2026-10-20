@@ -1054,6 +1054,7 @@ mod tests {
                 (
                     "app/main.prism",
                     "package app\nimport /lib/box\nimport /lib/shapes\nimport /lib/math\n\
+                     import /prism/core\n\
                      fun main() { println(keep(origin()).x); println(keep(2)); println(twice(3)) }\n",
                 ),
             ],
@@ -1110,7 +1111,7 @@ mod tests {
                 ("lib/box.prism", BOX),
                 (
                     "app/main.prism",
-                    "package app\nimport /lib/box\nfun main() { println(keep(1)); println(drop(\"s\")) }\n",
+                    "package app\nimport /lib/box\nimport /prism/core\nfun main() { println(keep(1)); println(drop(\"s\")) }\n",
                 ),
             ],
         );
@@ -1122,14 +1123,15 @@ mod tests {
         assert_eq!(warm.compiled_functions, 0, "a warm run compiles nothing");
         assert_eq!(warm.plan, before.plan);
         let before = before.plan.unwrap();
-        // The two files' units, and the prelude modules' (D3 of `standard-library`).
+        // The two files' units, and the member modules' (D3 of `standard-library`, D2 of
+        // `explicit-library`).
         let workspace_units = before
             .units
             .iter()
             .filter(|unit| !unit.module.starts_with("prism/"))
             .count();
         assert_eq!(workspace_units, 2);
-        assert_eq!(before.units.len(), 5);
+        assert_eq!(before.units.len(), 4);
         assert_eq!(before.instances.len(), 2);
         assert!(before.changed_since(&before).is_empty());
 

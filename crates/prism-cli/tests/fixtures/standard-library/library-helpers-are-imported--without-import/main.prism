@@ -1,0 +1,5 @@
+// expect: E4006
+// run: 1
+fun f(xs: &List<Int>): Int = xs.sumOf { x -> x }
+
+fun main() {}

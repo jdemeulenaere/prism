@@ -48,10 +48,10 @@ pub struct SourceNode {
     pub source_file: SourceFile,
     /// Resolved target paths of direct imports.
     pub direct_imports: Vec<PathBuf>,
-    /// The prelude modules a workspace file sees without importing them, by key, in prelude
-    /// order (D4 of `standard-library`); empty for a library file. Ordering and instance
-    /// planning treat them as direct imports.
-    pub prelude_imports: Vec<PathBuf>,
+    /// The member modules, by key, whose members of the built-in types a workspace file sees
+    /// without importing them, and nothing else (D2 of `explicit-library`); empty for a library
+    /// file. Ordering and check keys treat them as inputs of the file.
+    pub member_imports: Vec<PathBuf>,
 }
 
 impl SourceNode {
@@ -60,10 +60,10 @@ impl SourceNode {
         self.origin == SourceOrigin::Library
     }
 
-    /// The node's direct imports, then its prelude modules: every file whose ABI its Phase 2
-    /// sees.
-    pub fn imports_with_prelude(&self) -> impl Iterator<Item = &PathBuf> {
-        self.direct_imports.iter().chain(&self.prelude_imports)
+    /// The node's direct imports, then its member modules: every file whose ABI its Phase 2
+    /// reads.
+    pub fn imports_with_member_modules(&self) -> impl Iterator<Item = &PathBuf> {
+        self.direct_imports.iter().chain(&self.member_imports)
     }
 }
 
@@ -183,12 +183,12 @@ impl DependencyGraph {
             worklist.push_back(absolute_path(entry.as_ref()));
         }
 
-        let prelude: Vec<PathBuf> = library
-            .prelude()
+        let member_modules: Vec<PathBuf> = library
+            .member_modules()
             .iter()
             .map(|module| library_key(module))
             .collect();
-        let mut library_keys: HashSet<PathBuf> = prelude.iter().cloned().collect();
+        let mut library_keys: HashSet<PathBuf> = member_modules.iter().cloned().collect();
 
         while let Some(current_path) = worklist.pop_front() {
             if visited.contains(&current_path) {
@@ -274,8 +274,9 @@ impl DependencyGraph {
                 .map(|p| p.path.clone())
                 .unwrap_or_default();
 
-            // Every workspace file sees the prelude modules (D4 of `standard-library`).
-            for module in &prelude {
+            // Every workspace file sees the members of the member modules (D2 of
+            // `explicit-library`).
+            for module in &member_modules {
                 if !visited.contains(module) {
                     worklist.push_back(module.clone());
                 }
@@ -289,7 +290,7 @@ impl DependencyGraph {
                 source: content,
                 source_file,
                 direct_imports,
-                prelude_imports: prelude.clone(),
+                member_imports: member_modules.clone(),
             };
 
             nodes.insert(current_path, node);
@@ -464,7 +465,8 @@ impl SourceStore {
 
 /// The node of the library module whose key is `key`: its embedded source, parsed once per
 /// process for the bundled library, with its imports resolved within the library only (D2 of
-/// `standard-library`). A library file sees no prelude.
+/// `standard-library`). A library file sees no member module implicitly (D7 of
+/// `explicit-library`).
 fn library_node(
     key: &Path,
     library: &Library,
@@ -535,7 +537,7 @@ fn library_node(
         source,
         source_file,
         direct_imports,
-        prelude_imports: Vec::new(),
+        member_imports: Vec::new(),
     })
 }
 
@@ -580,7 +582,7 @@ fn compute_sccs(nodes: &HashMap<PathBuf, SourceNode>) -> Vec<SccCluster> {
 
     for (path, node) in nodes {
         if let Some(&u) = file_to_id.get(path) {
-            for imp in node.imports_with_prelude() {
+            for imp in node.imports_with_member_modules() {
                 if let Some(&v) = file_to_id.get(imp) {
                     adj[u].push(v);
                 }

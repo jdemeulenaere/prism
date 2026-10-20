@@ -66,7 +66,7 @@ fn many_files(n: usize) -> Generated {
     files.push((
         "app/main.prism".to_string(),
         format!(
-            "package app\nimport f{}\nfun main() {{ println(f{}c()) }}\n",
+            "package app\nimport /prism/core\nimport f{}\nfun main() {{ println(f{}c()) }}\n",
             n - 1,
             n - 1
         ),
@@ -128,7 +128,7 @@ fn instance_chains(n: usize) -> Generated {
     files.push((
         "app/main.prism".to_string(),
         format!(
-            "package app\nimport /lib/g{}\nfun main() {{ println(g{}(1)); println(g{}(true)) }}\n",
+            "package app\nimport /prism/core\nimport /lib/g{}\nfun main() {{ println(g{}(1)); println(g{}(true)) }}\n",
             n - 1,
             n - 1,
             n - 1

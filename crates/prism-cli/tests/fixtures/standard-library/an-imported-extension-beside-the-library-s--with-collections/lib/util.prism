@@ -1,0 +1,3 @@
+package lib
+
+public fun <T> List<T>.forEach(action: (&T) -> Unit): Unit {}

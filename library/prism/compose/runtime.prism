@@ -1,8 +1,7 @@
 // The compose runtime for application code, after Jetpack Compose's `androidx.compose.runtime`:
 // owned compositions, positional memoization with `remember`, keyed groups and restart scopes.
-// It is a prelude module, so a file's own declaration or import of a name shadows it. Every
-// declaration here is an intrinsic: the compiler lowers its calls to the compose runtime's
-// protocol itself.
+// A file uses it after `import /prism/compose/runtime`. Every declaration here is an intrinsic:
+// the compiler lowers its calls to the compose runtime's protocol itself.
 package prism.compose
 
 // A composition: the groups, slots and nodes of one tree of composables. It is owned, neither

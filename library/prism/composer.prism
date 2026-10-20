@@ -1,6 +1,6 @@
 // The composer protocol: the calls that composable functions are lowered to, for code written
-// by hand in that lowered form. It is not an application API, and not a prelude module; import
-// it with `import /prism/composer`. Composers, compositions and scopes are `Int` words, which
+// by hand in that lowered form. It is not an application API; import it with
+// `import /prism/composer`. Composers, compositions and scopes are `Int` words, which
 // the compose runtime validates: misusing them is the runtime error `composition misuse`.
 package prism
 

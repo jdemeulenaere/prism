@@ -638,8 +638,7 @@ mod tests {
         let (directory, cache) = temporary_cache("records");
         let source = "fun <T> keep(x: T): T = x\n";
         let file = prism_parser::parse_source(source).unwrap();
-        let mut checker = prism_typechecker::TypeChecker::new(None, "main")
-            .with_prelude(prism_typechecker::test_prelude());
+        let mut checker = prism_typechecker::TypeChecker::new(None, "main").with_library_imports();
         let tree = checker.check_module(&file);
         let record = GenericRecord::of_file(&prism_mir::lower_file(&tree)).remove(0);
         let bytes = record.encode();

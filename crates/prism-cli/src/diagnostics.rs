@@ -823,8 +823,7 @@ mod tests {
     /// Renders the type errors of `src`, checked as a single file.
     fn render_type_errors(src: &str) -> String {
         let file = prism_parser::parse_source(src).expect("source must parse");
-        let mut checker = prism_typechecker::TypeChecker::new(None, "main")
-            .with_prelude(prism_typechecker::test_prelude());
+        let mut checker = prism_typechecker::TypeChecker::new(None, "main").with_library_imports();
         checker.check_module(&file);
         checker
             .errors
@@ -1097,8 +1096,7 @@ mod tests {
     /// Renders the borrow errors of `src`, checked as a single file `main.prism`.
     fn render_borrow_errors(src: &str) -> String {
         let file = prism_parser::parse_source(src).expect("source must parse");
-        let mut checker = prism_typechecker::TypeChecker::new(None, "main")
-            .with_prelude(prism_typechecker::test_prelude());
+        let mut checker = prism_typechecker::TypeChecker::new(None, "main").with_library_imports();
         let tree = checker.check_module(&file);
         assert!(checker.errors.is_empty(), "{:?}", checker.errors);
         let mir = prism_mir::lower_file(&tree);

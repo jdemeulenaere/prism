@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/compose/runtime
+
 struct Point : Copy { val x: Int }
 compose fun A(n: Int, p: Point) { }
 compose fun B(s: String) { }

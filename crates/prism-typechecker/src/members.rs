@@ -1,185 +1,93 @@
-//! The prelude scope (D4 of `standard-library`): the public declarations of the prelude modules
-//! (`/prism/core` and `/prism/collections`), converted once per process into one shared scope
-//! that every workspace file's checker consults last, after its own declarations and its
-//! imports.
+//! The member scope (D2 of `explicit-library`): the intrinsic extensions the member modules
+//! (`/prism/core` and `/prism/collections`) declare on the built-in types, which are members of
+//! those types in every workspace file without an import (`42.toString()`, `s.length`,
+//! `xs.size`, `xs.add(1)`), converted once per program into one shared scope. Nothing else of
+//! the member modules is in scope without an import: `println`, `listOf` and the helpers are
+//! imported like any module's names.
 //!
-//! Building the scope is the conversion `ingest_file_abi` does, linear in the prelude's ABI and
-//! done once. A file then pays a pointer copy to install it, plus one hash lookup on each name
-//! or extension lookup that misses everything else: nothing proportional to the prelude's size.
+//! Building the scope is the conversion `ingest_file_abi` does, linear in the member modules'
+//! ABIs and done once. A file then pays a pointer copy to install it, plus one hash lookup on
+//! each member lookup its own and imported members miss.
 
-use crate::checker::{Extension, ExtensionsOfName, ReceiverKey, TypeChecker};
-use crate::scope::Symbol;
-use crate::types::{NominalId, BUILTIN_MODULE};
+use crate::checker::{Extension, ReceiverKey, TypeChecker};
 use prism_abi::FileAbi;
-use prism_typed_tree::types::NominalMarker;
-use prism_typed_tree::{BuiltinFunction, DeclarationPath, TypeDef, TypeTable};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 
-/// The names, extensions and members of the prelude modules, shared by every checker of a
-/// process.
+/// The members of the built-in types that the member modules declare, shared by every checker
+/// of a program.
 #[derive(Debug)]
-pub struct PreludeScope {
-    /// The prelude modules' paths (`prism/core`), in prelude order.
-    modules: Vec<String>,
-    /// Every public name of the prelude modules, by bare name.
-    names: Arc<HashMap<String, Symbol>>,
-    /// Their extensions that are not members, by receiver type constructor and name, one per
-    /// context (D8 of `receiver-lambdas`).
-    extensions: HashMap<(ReceiverKey, String), ExtensionsOfName>,
-    /// Their intrinsic extensions and properties, members of their receiver types.
+pub struct MemberScope {
+    /// The intrinsic extensions and properties, by receiver type constructor and name.
     members: HashMap<(ReceiverKey, String), Extension>,
-    /// Their plain intrinsic functions, by module and name, with their built-ins.
-    intrinsic_functions: HashMap<(String, String), BuiltinFunction>,
-    /// Their external functions.
-    externals: Vec<DeclarationPath>,
-    /// The structs and enums they declare or reach, with their definitions and markers.
-    types: Vec<(NominalId, Option<TypeDef>, Option<NominalMarker>)>,
-    /// Every struct and enum their ABIs name, by bare name.
-    seen_nominals: HashMap<String, Vec<NominalId>>,
-    /// Every struct and enum they export.
-    exported_nominals: HashSet<NominalId>,
-    /// The types their capture functions capture (D12 of `owned-state`).
-    capture_types: Vec<NominalId>,
 }
 
-impl PreludeScope {
-    /// The scope of the prelude modules whose ABIs are `abis`, in prelude order. Names the
-    /// modules share are kept from the first; the library's own test checks there are none.
+impl MemberScope {
+    /// The members declared by the member modules whose ABIs are `abis`.
     pub fn from_abis(abis: &[&FileAbi]) -> Self {
-        let mut checker = TypeChecker::new(None, "<prelude>");
+        let mut checker = TypeChecker::new(None, "<members>");
         for abi in abis {
             checker.ingest_file_abi(abi);
         }
-        let (
-            names,
-            extensions,
-            members,
-            intrinsic_functions,
-            externals,
-            table,
-            seen_nominals,
-            exported_nominals,
-            _,
-        ) = checker.into_prelude_parts();
         Self {
-            modules: abis.iter().map(|abi| abi.module.clone()).collect(),
-            names: Arc::new(names),
-            extensions,
-            members,
-            intrinsic_functions,
-            externals,
-            types: prelude_types(&table),
-            capture_types: table.capture_function_types().cloned().collect(),
-            seen_nominals,
-            exported_nominals,
+            members: checker.into_members(),
         }
     }
 
-    /// The prelude modules' paths, in prelude order.
-    pub fn modules(&self) -> &[String] {
-        &self.modules
-    }
-
-    /// The public names of the prelude modules.
-    pub fn names(&self) -> Arc<HashMap<String, Symbol>> {
-        Arc::clone(&self.names)
-    }
-
-    /// Whether the prelude has a name, a member or an extension named `name`.
+    /// Whether the scope has a member named `name`, on any receiver.
     pub fn declares(&self, name: &str) -> bool {
-        self.names.contains_key(name)
-            || self.members.keys().any(|(_, member)| member == name)
-            || self
-                .extensions
-                .keys()
-                .any(|(_, extension)| extension == name)
-    }
-
-    pub(crate) fn extensions(&self, key: &(ReceiverKey, String)) -> Option<&ExtensionsOfName> {
-        self.extensions.get(key)
+        self.members.keys().any(|(_, member)| member == name)
     }
 
     pub(crate) fn member(&self, key: &(ReceiverKey, String)) -> Option<&Extension> {
         self.members.get(key)
     }
-
-    pub(crate) fn intrinsic_function(&self, key: &(String, String)) -> Option<BuiltinFunction> {
-        self.intrinsic_functions.get(key).copied()
-    }
-
-    pub(crate) fn externals(&self) -> &[DeclarationPath] {
-        &self.externals
-    }
-
-    pub(crate) fn seen_nominals(&self) -> &HashMap<String, Vec<NominalId>> {
-        &self.seen_nominals
-    }
-
-    pub(crate) fn exported_nominals(&self) -> &HashSet<NominalId> {
-        &self.exported_nominals
-    }
-
-    /// Records the prelude's structs and enums in `table`: work proportional to the number of
-    /// types the prelude declares, none today.
-    pub(crate) fn install_types(&self, table: &mut TypeTable) {
-        for (id, definition, marker) in &self.types {
-            if let Some(definition) = definition {
-                table.insert_definition(id.clone(), definition.clone());
-            }
-            if let Some(marker) = marker {
-                table.insert_marker(id.clone(), marker.marker, marker.parameters.clone());
-            }
-        }
-        for id in &self.capture_types {
-            table.insert_capture_function(id.clone());
-        }
-    }
 }
 
-/// The structs and enums of `table` other than the built-in ones.
-fn prelude_types(table: &TypeTable) -> Vec<(NominalId, Option<TypeDef>, Option<NominalMarker>)> {
-    table
-        .ids()
-        .filter(|id| id.module != BUILTIN_MODULE)
-        .map(|id| {
-            (
-                id.clone(),
-                table.definition(id).cloned(),
-                table.marker_entry(id).cloned(),
+/// The ABIs of the bundled library's modules `modules`, parsed and extracted with no import
+/// bound, for tests that build a checker directly rather than through the CLI's driver.
+#[cfg(any(test, feature = "test-support"))]
+fn bundled_abis(modules: &[&str]) -> Vec<FileAbi> {
+    let library = prism_library::Library::bundled();
+    modules
+        .iter()
+        .map(|module| {
+            let source = &library.module(module).expect("a bundled module").source;
+            let file = prism_parser::parse_source(source).expect("the module parses");
+            let no_definition = |_: &str, _: &str| None;
+            FileAbi::extract_with_origin(
+                &file,
+                module,
+                &prism_abi::no_imports,
+                &no_definition,
+                true,
             )
+            .expect("the module's ABI")
         })
         .collect()
 }
 
-/// The prelude scope of the bundled library, built once per process: its prelude modules
-/// parsed and their ABIs extracted, for tests that build a checker directly rather than
-/// through the CLI's driver.
+/// The member scope of the bundled library, built once per process.
 #[cfg(any(test, feature = "test-support"))]
-pub fn test_prelude() -> Arc<PreludeScope> {
-    static PRELUDE: std::sync::OnceLock<Arc<PreludeScope>> = std::sync::OnceLock::new();
-    Arc::clone(PRELUDE.get_or_init(|| {
-        let library = prism_library::Library::bundled();
-        let abis: Vec<FileAbi> = library
-            .prelude()
-            .iter()
-            .map(|module| {
-                let source = &library.module(module).expect("a prelude module").source;
-                let file = prism_parser::parse_source(source).expect("the prelude parses");
-                let no_definition = |_: &str, _: &str| None;
-                FileAbi::extract_with_origin(
-                    &file,
-                    module,
-                    &prism_abi::no_imports,
-                    &no_definition,
-                    true,
-                )
-                .expect("the prelude's ABI")
-            })
-            .collect();
+pub fn test_members() -> Arc<MemberScope> {
+    static MEMBERS: std::sync::OnceLock<Arc<MemberScope>> = std::sync::OnceLock::new();
+    Arc::clone(MEMBERS.get_or_init(|| {
+        let abis = bundled_abis(prism_library::MEMBER_MODULES);
         let abis: Vec<&FileAbi> = abis.iter().collect();
-        Arc::new(PreludeScope::from_abis(&abis))
+        Arc::new(MemberScope::from_abis(&abis))
     }))
+}
+
+/// The library modules that tests building a checker directly import (D11 of
+/// `explicit-library`): `/prism/core`, `/prism/collections` and `/prism/compose/runtime`, the
+/// modules of the former prelude, whose ABIs are parsed once per process. Their inline sources
+/// test the checker and the stages after it, not name resolution, which the fixtures cover with
+/// real imports.
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_library_imports() -> &'static [FileAbi] {
+    static ABIS: std::sync::OnceLock<Vec<FileAbi>> = std::sync::OnceLock::new();
+    ABIS.get_or_init(|| bundled_abis(&["prism/core", "prism/collections", "prism/compose/runtime"]))
 }
 
 #[cfg(test)]
@@ -187,44 +95,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn building_the_scope_twice_gives_equal_scopes() {
-        let first = test_prelude();
-        let library = prism_library::Library::bundled();
-        let abis: Vec<FileAbi> = library
-            .prelude()
-            .iter()
-            .map(|module| {
-                let file =
-                    prism_parser::parse_source(&library.module(module).unwrap().source).unwrap();
-                let no_definition = |_: &str, _: &str| None;
-                FileAbi::extract_with_origin(
-                    &file,
-                    module,
-                    &prism_abi::no_imports,
-                    &no_definition,
-                    true,
-                )
-                .unwrap()
-            })
-            .collect();
-        let second = PreludeScope::from_abis(&abis.iter().collect::<Vec<_>>());
-        let mut first_names: Vec<&String> = first.names.keys().collect();
-        let mut second_names: Vec<&String> = second.names.keys().collect();
-        first_names.sort();
-        second_names.sort();
-        assert_eq!(first_names, second_names);
-        assert_eq!(first.names, second.names);
-        assert_eq!(first.members.len(), second.members.len());
-        assert_eq!(first.intrinsic_functions, second.intrinsic_functions);
-        assert!(first.declares("println") && first.declares("size"));
+    fn the_member_scope_holds_the_members_of_built_in_types_only() {
+        let members = test_members();
+        assert!(members.declares("size") && members.declares("toString"));
+        assert!(members.declares("length") && members.declares("add"));
+        // Functions and helpers are imported, not members.
+        assert!(!members.declares("println") && !members.declares("listOf"));
+        assert!(!members.declares("map") && !members.declares("forEach"));
     }
 
     #[test]
-    fn installing_the_scope_ingests_nothing() {
-        // A checker with the prelude shares its names: installing it copies a pointer.
-        let prelude = test_prelude();
-        let checker = TypeChecker::new(None, "main").with_prelude(Arc::clone(&prelude));
-        assert!(Arc::strong_count(&prelude.names) >= 2);
+    fn installing_the_scope_copies_a_pointer() {
+        let members = test_members();
+        let checker = TypeChecker::new(None, "main").with_members(Arc::clone(&members));
+        assert!(Arc::strong_count(&members) >= 2);
         drop(checker);
     }
 }

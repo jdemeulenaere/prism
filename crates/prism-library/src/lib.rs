@@ -7,8 +7,10 @@
 //! reserved root package `prism`, or of a package below it, whose module path is `prism/<name>`
 //! (`prism/compose/runtime` for the file `compose/runtime.prism` of the package `prism.compose`)
 //! and which a root-anchored import `/prism/<name>` reaches.
-//! The prelude modules' public names are in scope in every workspace file without an import
-//! (D4).
+//! No module is imported implicitly (D1 of `explicit-library`): a file imports every library
+//! module it uses. The member modules ([`MEMBER_MODULES`]) only give every workspace file the
+//! members of the built-in types they declare (`toString()`, `length`, `size`, `add`, ...), and
+//! nothing else (D2 of `explicit-library`).
 //!
 //! The crate has no dependencies, and no build script: `library_tests.rs` checks that
 //! [`MODULES`] lists exactly the files of `library/prism/` and its subdirectories.
@@ -62,19 +64,21 @@ pub const MODULES: &[(&str, &str)] = &[
     ),
 ];
 
-/// The prelude modules, in the order a workspace file sees them after its explicit imports.
-pub const PRELUDE: &[&str] = &["prism/core", "prism/collections", "prism/compose/runtime"];
+/// The member modules: the modules declaring the members of the built-in types (the scalars'
+/// and `String`'s in `/prism/core`, `List`'s in `/prism/collections`), which every workspace
+/// file sees without an import, and only those members (D2 of `explicit-library`).
+pub const MEMBER_MODULES: &[&str] = &["prism/core", "prism/collections"];
 
 /// The root package that names the library, which no workspace file may declare (D2).
 pub const ROOT_PACKAGE: &str = "prism";
 
-/// A set of library modules and its prelude: the bundled library, or for tests that library
+/// A set of library modules and its member modules: the bundled library, or for tests that library
 /// with modules added or replaced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Library {
     /// Shared, so that cloning a library (as every dependency graph does) copies a pointer.
     modules: Arc<Vec<LibraryModule>>,
-    prelude: Vec<String>,
+    member_modules: Vec<String>,
 }
 
 impl Library {
@@ -91,7 +95,7 @@ impl Library {
                     })
                     .collect(),
             ),
-            prelude: PRELUDE.iter().map(|path| path.to_string()).collect(),
+            member_modules: MEMBER_MODULES.iter().map(|path| path.to_string()).collect(),
         })
     }
 
@@ -109,10 +113,7 @@ impl Library {
         let mut library = Library::bundled().clone();
         let modules = Arc::make_mut(&mut library.modules);
         for (path, source) in extra {
-            match modules
-                .iter_mut()
-                .find(|module| module.path == path)
-            {
+            match modules.iter_mut().find(|module| module.path == path) {
                 Some(module) => module.source = source,
                 None => modules.push(LibraryModule { path, source }),
             }
@@ -135,9 +136,9 @@ impl Library {
         &self.modules
     }
 
-    /// The prelude modules' paths, in prelude order.
-    pub fn prelude(&self) -> &[String] {
-        &self.prelude
+    /// The member modules' paths, in the order check keys hash them.
+    pub fn member_modules(&self) -> &[String] {
+        &self.member_modules
     }
 }
 
@@ -153,7 +154,7 @@ mod tests {
             assert_eq!(&module.source, source);
         }
         assert!(library.module("prism/nothing").is_none());
-        for path in library.prelude() {
+        for path in library.member_modules() {
             assert!(library.module(path).is_some(), "{}", path);
         }
     }

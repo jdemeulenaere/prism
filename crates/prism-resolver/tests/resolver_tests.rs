@@ -726,7 +726,7 @@ fn an_overlay_hides_the_disk_and_can_add_a_file() {
 }
 
 /// The number of workspace files of `graph`, without the library modules every workspace file
-/// reaches through the prelude (D4 of `standard-library`).
+/// reaches through its member modules (D2 of `explicit-library`).
 fn workspace_len(graph: &DependencyGraph) -> usize {
     graph
         .nodes
@@ -751,8 +751,8 @@ fn workspace_sccs(graph: &DependencyGraph) -> Vec<prism_resolver::SccCluster> {
 }
 
 #[test]
-fn a_file_without_imports_has_the_prelude_nodes_first() {
-    let ws = TestWorkspace::new("prelude_nodes");
+fn a_file_without_imports_has_the_member_module_nodes_first() {
+    let ws = TestWorkspace::new("member_nodes");
     let main = ws.write_file(
         "main.prism",
         "fun main() {}
@@ -762,22 +762,21 @@ fn a_file_without_imports_has_the_prelude_nodes_first() {
     let node = graph.get_node(&main).unwrap();
     assert!(node.direct_imports.is_empty());
     assert_eq!(
-        node.prelude_imports,
+        node.member_imports,
         vec![
             PathBuf::from("prism/core.prism"),
             PathBuf::from("prism/collections.prism"),
-            PathBuf::from("prism/compose/runtime.prism")
         ]
     );
-    assert_eq!(graph.len(), 4);
+    assert_eq!(graph.len(), 3);
     let order: Vec<PathBuf> = graph.sccs().iter().flat_map(|c| c.files.clone()).collect();
     assert_eq!(order.last(), Some(&main), "library nodes come first");
-    for key in &node.prelude_imports {
+    for key in &node.member_imports {
         let library = graph.get_node(key).unwrap();
         assert!(library.is_library());
         assert!(
-            library.prelude_imports.is_empty(),
-            "a library file has no prelude"
+            library.member_imports.is_empty(),
+            "a library file has no implicit input"
         );
     }
 }

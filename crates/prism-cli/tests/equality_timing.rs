@@ -57,7 +57,7 @@ fn nested_structs(depth: usize) -> Generated {
     let top = depth - 1;
     writeln!(
         source,
-        "fun main() {{ println(make{top}(1) == make{top}(1)); println(make{top}(1) == make{top}(2)) }}"
+        "import /prism/core\nfun main() {{ println(make{top}(1) == make{top}(1)); println(make{top}(1) == make{top}(2)) }}"
     )
     .unwrap();
     Generated {
@@ -74,7 +74,7 @@ fn wide_nullables(width: usize) -> Generated {
         .collect();
     let arguments = vec!["x"; width].join(", ");
     let source = format!(
-        "struct W : Copy {{ {} }}\n\
+        "import /prism/core\nstruct W : Copy {{ {} }}\n\
          fun make(x: Int?): W = W({})\n\
          fun main() {{ println(make(1) == make(1)); println(make(1) == make(null)) }}\n",
         fields.join(", "),
@@ -96,7 +96,7 @@ fn wide_strings(width: usize) -> Generated {
     let mut other = vec!["\"a\""; width];
     other[width - 1] = "\"b\"";
     let source = format!(
-        "struct W {{ {} }}\n\
+        "import /prism/core\nstruct W {{ {} }}\n\
          fun make(): W = W({})\n\
          fun other(): W = W({})\n\
          fun main() {{ println(make() == make()); println(make() == other()) }}\n",
@@ -135,7 +135,7 @@ fn nested_enums(depth: usize) -> Generated {
     let top = depth - 1;
     writeln!(
         source,
-        "fun main() {{ println(make{top}(1) == make{top}(1)); println(make{top}(1) == make{top}(2)) }}"
+        "import /prism/core\nfun main() {{ println(make{top}(1) == make{top}(1)); println(make{top}(1) == make{top}(2)) }}"
     )
     .unwrap();
     // E0 compares a tag and three payloads, and each level a tag and three of the one below.

@@ -1,4 +1,6 @@
 // expect: E5001
+import /prism/compose/runtime
+
 fun g(s: MutableState<Int>): Int {
     val a = s
     val b = s

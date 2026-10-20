@@ -1,0 +1,5 @@
+error[E4006]: unknown field 'dp' on type 'Int'
+  --> main.prism:4:13
+    4 |     val d = 16.dp
+      |             ^
+   = help: 'dp' is declared by the library module '/prism/compose/ui': add 'import /prism/compose/ui'

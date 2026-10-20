@@ -78,7 +78,10 @@ fn function_ir<'a>(dump: &'a str, symbol: &str) -> &'a str {
 
 #[test]
 fn arguments_after_the_separator() {
-    let directory = single_file("arguments", "fun main() { println(1) }\n");
+    let directory = single_file(
+        "arguments",
+        "import /prism/core\nfun main() { println(1) }\n",
+    );
     let output = prism(&["run", "main.prism", "--", "--timings", "x"], &directory);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(stdout(&output), "1\n");
@@ -87,7 +90,7 @@ fn arguments_after_the_separator() {
 
 #[test]
 fn reporting_timings() {
-    let directory = single_file("timings", "fun main() { println(1) }\n");
+    let directory = single_file("timings", "import /prism/core\nfun main() { println(1) }\n");
     let output = prism(&["run", "--timings", "main.prism"], &directory);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(stdout(&output), "1\n");
@@ -107,7 +110,10 @@ fn reporting_timings() {
 /// execution: "Cache options before the file".
 #[test]
 fn cache_options_before_the_file() {
-    let directory = single_file("cache_options", "fun main() { println(1) }\n");
+    let directory = single_file(
+        "cache_options",
+        "import /prism/core\nfun main() { println(1) }\n",
+    );
     let output = prism(
         &["run", "--no-cache", "--explain-cache", "main.prism"],
         &directory,
@@ -129,7 +135,7 @@ fn cache_options_before_the_file() {
 
 #[test]
 fn usage_errors_exit_with_status_1() {
-    let directory = single_file("usage", "fun main() { println(1) }\n");
+    let directory = single_file("usage", "import /prism/core\nfun main() { println(1) }\n");
     for arguments in [
         &["run"][..],
         &["run", "--timings"],
@@ -148,7 +154,7 @@ fn usage_errors_exit_with_status_1() {
 fn dumping_a_file_s_ir() {
     let directory = single_file(
         "dump_twice",
-        "val LIMIT: Int = 10\nfun twice(n: Int): Int = n * 2\nfun main() { println(twice(LIMIT)) }\n",
+        "import /prism/core\nval LIMIT: Int = 10\nfun twice(n: Int): Int = n * 2\nfun main() { println(twice(LIMIT)) }\n",
     );
     let first = prism(&["dump-clif", "main.prism"], &directory);
     let second = prism(&["dump-clif", "main.prism"], &directory);
@@ -165,7 +171,10 @@ fn dumping_a_file_s_ir() {
 /// with the location of `s.value` from a cold block.
 #[test]
 fn a_read_in_the_ir_dump() {
-    let directory = single_file("state_read", "fun f(s: &State<Int>): Int = s.value\n");
+    let directory = single_file(
+        "state_read",
+        "import /prism/compose/runtime\nfun f(s: &State<Int>): Int = s.value\n",
+    );
     let output = prism(&["dump-clif", "main.prism"], &directory);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let dump = stdout(&output);
@@ -188,9 +197,9 @@ fn a_read_in_the_ir_dump() {
         .skip(1)
         .find(|block| block.contains(&format!("call {}(", error)))
         .unwrap_or_else(|| panic!("no cold block calling the error in\n{}", ir));
-    // The location of `s.value`: line 1, column 30.
+    // The location of `s.value`: line 2, column 30.
     assert!(
-        cold.contains("iconst.i32 1\n") && cold.contains("iconst.i32 30\n"),
+        cold.contains("iconst.i32 2\n") && cold.contains("iconst.i32 30\n"),
         "{}",
         cold
     );
@@ -203,7 +212,7 @@ fn retiring_the_states_of_a_list_of_items() {
     let dump = clif_of(
         "retiring_list",
         &[],
-        "struct Todo { val title: String, val done: MutableState<Bool> }\nfun f(todos: List<Todo>) { }\n",
+        "import /prism/compose/runtime\nstruct Todo { val title: String, val done: MutableState<Bool> }\nfun f(todos: List<Todo>) { }\n",
     );
     let state_glue = "main#drop(prism/compose/runtime::MutableState<Bool>)";
     assert!(
@@ -241,7 +250,7 @@ fn a_handler_with_one_weak_capture_allocates_nothing() {
     let dump = clif_of(
         "weak_inline_environment",
         &[],
-        "fun keep(f: attached () -> Unit) {}\nfun f(count: &MutableState<Int>) { keep { count.value += 1 } }\n",
+        "import /prism/compose/runtime\nfun keep(f: attached () -> Unit) {}\nfun f(count: &MutableState<Int>) { keep { count.value += 1 } }\n",
     );
     assert!(!dump.contains("prism_rt_allocate"), "{}", dump);
     assert!(!dump.contains("drop-environment"), "{}", dump);
@@ -258,7 +267,7 @@ fn a_handler_with_one_weak_capture_allocates_nothing() {
 fn records_of_a_unit_s_cells() {
     let directory = single_file(
         "state_records",
-        "fun main() { val s = mutableStateOf(\"a\"); val l = mutableStateOf(listOf(1)); s.value = \"b\"; l.value = listOf(2) }\n",
+        "import /prism/collections\nimport /prism/compose/runtime\nfun main() { val s = mutableStateOf(\"a\"); val l = mutableStateOf(listOf(1)); s.value = \"b\"; l.value = listOf(2) }\n",
     );
     let output = prism(&["dump-clif", "main.prism"], &directory);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -286,13 +295,13 @@ fn records_of_a_unit_s_cells() {
     }
 }
 
-/// standard-library: "State handles need no import" (`state-handles`): the ABI writes the
-/// handle type of an exported signature by name.
+/// standard-library: "State declarations are imported" (`state-handles`, `explicit-library`):
+/// the ABI writes the handle type of an exported signature by name.
 #[test]
-fn state_handles_need_no_import() {
+fn state_declarations_are_imported() {
     let directory = single_file(
         "state_abi",
-        "compose fun Counter() { val count = remember { mutableStateOf(0) }; SideEffect { } }\npublic fun counter(): MutableState<Int> = mutableStateOf(0)\n",
+        "import /prism/compose/runtime\ncompose fun Counter() { val count = remember { mutableStateOf(0) }; SideEffect { } }\npublic fun counter(): MutableState<Int> = mutableStateOf(0)\n",
     );
     let output = prism(&["abi", "main.prism"], &directory);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -323,7 +332,7 @@ fn calls_within_and_across_files_are_indirect() {
     let directory = two_files(
         "indirect",
         "public fun twice(n: Int): Int = n * 2\n",
-        "fun helper(): Int = 1\nfun main() { println(twice(helper())) }\n",
+        "import /prism/core\nfun helper(): Int = 1\nfun main() { println(twice(helper())) }\n",
     );
     let dump = prism(&["dump-clif", "app/main.prism"], &directory);
     assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
@@ -442,7 +451,7 @@ fn compiling_independent_source_files() {
     let directory = two_files(
         "independent",
         "public fun twice(n: Int): Int = n * 2\n",
-        "fun main() { println(twice(2)) }\n",
+        "import /prism/core\nfun main() { println(twice(2)) }\n",
     );
     let dump = prism(&["dump-clif", "app/main.prism"], &directory);
     assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
@@ -468,7 +477,7 @@ fn code_generation_independent_of_dependency_bodies() {
     let directory = two_files(
         "independent_bodies",
         "public fun twice(n: Int): Int = n * 2\n",
-        "fun main() { println(twice(2)) }\n",
+        "import /prism/core\nfun main() { println(twice(2)) }\n",
     );
     let before = prism(&["dump-clif", "app/main.prism"], &directory);
     let run_before = prism(&["run", "app/main.prism"], &directory);
@@ -495,7 +504,7 @@ fn a_dependency_with_errors_stops_the_run() {
     );
     write(
         &directory.join("app/main.prism"),
-        "package app\nimport /lib/text\nfun main() { println(shout(1)) }\n",
+        "package app\nimport /prism/core\nimport /lib/text\nfun main() { println(shout(1)) }\n",
     );
     let dump = prism(&["dump-clif", "app/main.prism"], &directory);
     assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
@@ -724,7 +733,7 @@ fn signature_of_a_function_over_strings() {
 fn a_program_that_frees_what_it_allocates() {
     let directory = single_file(
         "frees",
-        "fun main() { val s = \"a\" + \"b\"; println(s) }\n",
+        "import /prism/core\nfun main() { val s = \"a\" + \"b\"; println(s) }\n",
     );
     let output = prism(&["run", "--check-allocations", "main.prism"], &directory);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -738,14 +747,14 @@ fn a_program_that_frees_what_it_allocates() {
 fn a_runtime_error_is_not_checked() {
     let directory = single_file(
         "runtime_error_unchecked",
-        "fun zero(): Int = 0\nfun main() { val s = \"a\" + \"b\"; println(1 / zero()) }\n",
+        "import /prism/core\nfun zero(): Int = 0\nfun main() { val s = \"a\" + \"b\"; println(1 / zero()) }\n",
     );
     let output = prism(&["run", "--check-allocations", "main.prism"], &directory);
     assert_eq!(output.status.code(), Some(101));
     assert_eq!(stdout(&output), "");
     assert_eq!(
         stderr(&output),
-        "panic: division by zero\n  at main.prism:2:41\n"
+        "panic: division by zero\n  at main.prism:3:41\n"
     );
     fs::remove_dir_all(&directory).ok();
 }
@@ -755,7 +764,7 @@ fn a_runtime_error_is_not_checked() {
 fn the_allocation_check_combines_with_the_other_options() {
     let directory = single_file(
         "check_and_timings",
-        "fun main() { println(1.toString()) }\n",
+        "import /prism/core\nfun main() { println(1.toString()) }\n",
     );
     let output = prism(
         &[
@@ -1015,7 +1024,7 @@ fn glue_of_an_imported_recursive_type() {
     );
     write(
         &directory.join("app/main.prism"),
-        "package app\nimport /lib/tree\nfun main() { val t = Tree.Node(Heap(leaf()), 1, Heap(leaf())); println(t == t) }\n",
+        "package app\nimport /prism/core\nimport /lib/tree\nfun main() { val t = Tree.Node(Heap(leaf()), 1, Heap(leaf())); println(t == t) }\n",
     );
     let run = prism(
         &["run", "--check-allocations", "app/main.prism"],
@@ -1132,7 +1141,7 @@ fn calls_of_an_instance_go_through_its_slot() {
     let directory = box_workspace(
         "instance_slot",
         "public fun <T> keep(x: T): T = x\n",
-        "fun main() { println(keep(1)) }\n",
+        "import /prism/core\nfun main() { println(keep(1)) }\n",
     );
     let dump = prism(&["dump-clif", "app/main.prism"], &directory);
     assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
@@ -1157,7 +1166,7 @@ fn one_instance_for_every_caller() {
     let directory = box_workspace(
         "one_instance",
         "public fun <T> keep(x: T): T = x\n",
-        "import /app/other\nfun main() { println(keep(1)); println(other()) }\n",
+        "import /prism/core\nimport /app/other\nfun main() { println(keep(1)); println(other()) }\n",
     );
     write(
         &directory.join("app/other.prism"),
@@ -1176,7 +1185,7 @@ fn one_instance_for_every_caller() {
 fn dumping_a_program_s_instances() {
     let directory = single_file(
         "instance_dump",
-        "fun <T> keep(x: T): T = x\nfun main() { println(keep(1)); println(keep(\"a\")) }\n",
+        "import /prism/core\nfun <T> keep(x: T): T = x\nfun main() { println(keep(1)); println(keep(\"a\")) }\n",
     );
     let first = prism(&["dump-clif", "--instances", "main.prism"], &directory);
     let second = prism(&["dump-clif", "--instances", "main.prism"], &directory);
@@ -1196,7 +1205,7 @@ fn instance_dumps_of_a_program_with_errors() {
     let directory = box_workspace(
         "instance_dump_errors",
         "public fun <T> keep(x: T): T = nope\n",
-        "fun main() { println(keep(1)) }\n",
+        "import /prism/core\nfun main() { println(keep(1)) }\n",
     );
     for flag in [["dump-mir", "--instances"], ["dump-clif", "--instances"]] {
         let output = prism(&[flag[0], flag[1], "app/main.prism"], &directory);
@@ -1213,7 +1222,7 @@ fn dumping_the_instances_of_a_program() {
     let directory = box_workspace(
         "instance_mir",
         "public fun <T> keep(x: T): T = x\n",
-        "fun main() { println(keep(1)); println(keep(true)) }\n",
+        "import /prism/core\nfun main() { println(keep(1)); println(keep(true)) }\n",
     );
     let first = prism(&["dump-mir", "--instances", "app/main.prism"], &directory);
     let second = prism(&["dump-mir", "--instances", "app/main.prism"], &directory);
@@ -1243,7 +1252,7 @@ fn symbols_of_instances() {
          public fun <T> keep(x: T): T = x\n\
          public fun <T> Box<T>.get(): &T = &v\n\
          public fun <T : Copy> pad(x: T, y: T = x): T = y\n",
-        "import /lib/user\n\
+        "import /prism/core\nimport /lib/user\n\
          fun main() { val u = keep(User(\"a\")); println(Box(1).get()); println(pad(2)) }\n",
     );
     write(
@@ -1275,7 +1284,7 @@ fn symbols_of_instances() {
 fn glue_of_an_instance() {
     let directory = single_file(
         "instance_glue",
-        "struct User : Clone { val name: String }\n\
+        "import /prism/core\nstruct User : Clone { val name: String }\n\
          fun <T> discard(x: T) {}\n\
          fun <T : Clone> copy(x: &T): T = x.clone()\n\
          fun main() { discard(User(\"a\")); val u = copy(&User(\"b\")); println(1) }\n",
@@ -1313,7 +1322,7 @@ fn a_generic_body_change_leaves_its_callers_code_unchanged() {
     let directory = box_workspace(
         "generic_body_change",
         "public fun <T> pick(a: T, b: T): T = a\n",
-        "fun main() { println(pick(1, 2)) }\n",
+        "import /prism/core\nfun main() { println(pick(1, 2)) }\n",
     );
     let before = prism(&["dump-clif", "app/main.prism"], &directory);
     let run_before = prism(&["run", "app/main.prism"], &directory);
@@ -1339,7 +1348,7 @@ fn a_generic_body_calls_private_helpers() {
         "fun helper(n: Int): Int = n + 1\n\
          fun <T> inner(x: T): T = x\n\
          public fun <T> outer(x: T, n: Int): Int { val y = inner(x); return helper(n) }\n",
-        "fun main() { println(outer(\"a\", 1)) }\n",
+        "import /prism/core\nfun main() { println(outer(\"a\", 1)) }\n",
     );
     let dump = prism(&["dump-clif", "--instances", "app/main.prism"], &directory);
     assert_eq!(dump.status.code(), Some(0), "{}", stderr(&dump));
@@ -1400,7 +1409,7 @@ fn closure_functions_and_descriptors_in_the_ir_dump() {
     let dump = clif_of(
         "closure_functions",
         &[],
-        "fun run(f: () -> Int): Int = f()\nfun main() { val a = 1; println(run { a + 1 }) }\n",
+        "import /prism/core\nfun run(f: () -> Int): Int = f()\nfun main() { val a = 1; println(run { a + 1 }) }\n",
     );
     assert_eq!(
         function_headers(&dump),
@@ -1469,7 +1478,7 @@ fn a_writing_closure_allocates_nothing() {
     let dump = clif_of(
         "writing_closure",
         &[],
-        "fun repeat(n: Int, f: () -> Unit) { var i = 0; while (i < n) { f(); i += 1 } }\n\
+        "import /prism/core\nfun repeat(n: Int, f: () -> Unit) { var i = 0; while (i < n) { f(); i += 1 } }\n\
          fun main() { var count = 0; repeat(3) { count += 1 }; println(count) }\n",
     );
     assert!(!dump.contains("prism_rt_allocate"), "{}", dump);
@@ -1481,7 +1490,7 @@ fn an_owning_closure_allocates_once() {
     let dump = clif_of(
         "owning_closure",
         &[],
-        "fun make(s: String): () -> Int = { s.length }\n\
+        "import /prism/core\nfun make(s: String): () -> Int = { s.length }\n\
          fun main() { val g = make(\"abc\"); println(g() + g()) }\n",
     );
     let make = function_ir(&dump, "main::make");
@@ -1529,7 +1538,7 @@ fn a_handler_capturing_one_handle_allocates_nothing() {
     let dump = clif_of(
         "inline_environment",
         &[],
-        "struct Handle : Copy { val id: Int }\n\
+        "import /prism/core\nstruct Handle : Copy { val id: Int }\n\
          struct Button { val onClick: () -> Int }\n\
          fun button(h: Handle): Button = Button({ h.id * 2 })\n\
          fun main() { val b = button(Handle(21)); println(b.onClick()) }\n",
@@ -1545,7 +1554,7 @@ fn a_handler_copying_a_field_through_a_borrow_allocates_nothing() {
     let dump = clif_of(
         "inline_path_environment",
         &[],
-        "struct Todo { val id: Int, val count: Int }\n\
+        "import /prism/core\nstruct Todo { val id: Int, val count: Int }\n\
          struct Button { val onClick: () -> Int }\n\
          fun button(t: &Todo): Button = Button({ t.id * 2 })\n\
          fun main() { val t = Todo(21, 3); val b = button(t); println(b.onClick()) }\n",
@@ -1572,7 +1581,7 @@ fn symbols_of_nested_and_default_closures() {
     let dump = clif_of(
         "closure_symbols",
         &[],
-        "fun run(f: () -> Int): Int = f()\n\
+        "import /prism/core\nfun run(f: () -> Int): Int = f()\n\
          fun pick(n: Int, f: () -> Int = { 3 }): Int = n + f()\n\
          fun main() { println(run { run { 1 } }); println(pick(1)) }\n",
     );
@@ -1615,7 +1624,7 @@ fn a_closure_in_an_instance() {
     let dump = clif_of(
         "instance_closure",
         &["--instances"],
-        "fun run(g: () -> Int): Int = g()\n\
+        "import /prism/core\nfun run(g: () -> Int): Int = g()\n\
          fun <T : Copy> count(x: T, f: (T) -> Int): Int = run { f(x) + 1 }\n\
          fun main() { println(count(2) { n -> n * 10 }) }\n",
     );
@@ -1632,7 +1641,10 @@ fn a_closure_in_an_instance() {
 /// execution: "Edits without watching".
 #[test]
 fn edits_without_watching() {
-    let directory = single_file("edits_without_watching", "fun main() { println(1) }\n");
+    let directory = single_file(
+        "edits_without_watching",
+        "import /prism/core\nfun main() { println(1) }\n",
+    );
     write(
         &directory.join("edits"),
         "after exit: edit main.prism main.prism\n",
@@ -1653,11 +1665,11 @@ fn edits_without_watching() {
 fn timing_a_reload() {
     let directory = single_file(
         "timing_a_reload",
-        "fun step(i: Int): Int = i\nfun main() { println(step(1)); println(step(2)) }\n",
+        "import /prism/core\nfun step(i: Int): Int = i\nfun main() { println(step(1)); println(step(2)) }\n",
     );
     write(
         &directory.join("main.prism.v2"),
-        "fun step(i: Int): Int = i * 10\nfun main() { println(step(1)); println(step(2)) }\n",
+        "import /prism/core\nfun step(i: Int): Int = i * 10\nfun main() { println(step(1)); println(step(2)) }\n",
     );
     write(
         &directory.join("edits"),
@@ -1897,7 +1909,7 @@ fn watch_sessions_in(directory: &Path) -> Vec<u32> {
 
 /// A program whose `main` loops calling `value` until it returns something else than 1.
 const LOOPING: &str =
-    "fun value(): Int = 1\nfun main() { var n = 0; while (value() == 1) { n += 1 }; println(value()) }\n";
+    "import /prism/core\nfun value(): Int = 1\nfun main() { var n = 0; while (value() == 1) { n += 1 }; println(value()) }\n";
 
 /// hot-reload: "Saving an edited body while the program runs".
 #[test]
@@ -1999,7 +2011,7 @@ fn a_syntax_error_in_an_imported_file_at_start() {
     let directory = two_files(
         "watch_syntax_error_at_start",
         "public fun twice(n: Int): Int = n *\n",
-        "fun main() { println(twice(2)) }\n",
+        "import /prism/core\nfun main() { println(twice(2)) }\n",
     );
     let mut session = WatchedProgram::start(&directory, "app/main.prism");
     session.wait_for(|line| line == "watch: waiting for changes");
@@ -2074,7 +2086,7 @@ fn signature_of_a_composable_taking_a_borrow() {
 fn a_version_read_in_the_ir_dump() {
     let directory = single_file(
         "version_read_ir",
-        "compose fun Show(s: &String) {}\n\
+        "import /prism/compose/runtime\ncompose fun Show(s: &String) {}\n\
          compose fun Screen(items: &State<List<String>>) { Show(items.value[0]) }\n",
     );
     let screen = clif_function(&directory, "main::Screen");
@@ -2177,7 +2189,7 @@ fn the_record_of_a_kept_borrow() {
 fn restart_groups_and_slot_type_records_in_the_ir_dump() {
     let directory = single_file(
         "restart_group_ir",
-        "struct Point : Copy { val x: Int }\n\
+        "import /prism/core\nimport /prism/compose/runtime\nstruct Point : Copy { val x: Int }\n\
          compose fun Badge(n: Int) { println(n) }\n\
          compose fun P(n: Int) { val p = remember { Point(n) } }\n",
     );
@@ -2217,7 +2229,7 @@ fn restart_groups_and_slot_type_records_in_the_ir_dump() {
 fn entries_of_closures() {
     let directory = single_file(
         "closure_entries",
-        "fun keep(f: escaping () -> Unit) {}\n\
+        "import /prism/core\nfun keep(f: escaping () -> Unit) {}\n\
          fun main() { val a = 1; val b = 2; keep { println(a + b) }; val s = \"x\" + \"y\"; keep { println(s) } }\n",
     );
     let output = prism(&["dump-clif", "main.prism"], &directory);
@@ -2234,7 +2246,7 @@ fn entries_of_closures() {
 fn events_without_headless_mode() {
     let directory = single_file(
         "events_without_headless",
-        "fun main() { println(\"ran\") }\n",
+        "import /prism/core\nfun main() { println(\"ran\") }\n",
     );
     write(&directory.join("script"), "dump\n");
     let output = prism(&["run", "--events", "script", "main.prism"], &directory);
@@ -2253,7 +2265,7 @@ fn events_without_headless_mode() {
 /// The counter screen of `ui-toolkit`, with `label` before its count.
 fn counter_app(label: &str) -> String {
     format!(
-        "import /prism/compose/ui\nimport /prism/compose/foundation\nimport /prism/compose/layout\nimport /prism/compose/material3\n\
+        "import /prism/compose/runtime\nimport /prism/compose/ui\nimport /prism/compose/foundation\nimport /prism/compose/layout\nimport /prism/compose/material3\n\
          compose fun Counter() {{\n    val c = remember {{ mutableStateOf(0) }}\n    \
          Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {{\n        \
          Text(\"{}${{c.value}}\")\n        Button(onClick = {{ c.value += 1 }}) {{ Text(\"+\") }}\n    }}\n}}\n\
@@ -2336,7 +2348,7 @@ fn timing_a_ui_reload() {
 }
 
 /// The counter screen of `ui`'s "Counter screen", in a 400 × 300 app.
-const COUNTER_SCREEN: &str = "import /prism/compose/ui
+const COUNTER_SCREEN: &str = "import /prism/compose/runtime\nimport /prism/compose/ui
 import /prism/compose/layout
 import /prism/compose/material3
 compose fun Counter() {
@@ -2385,7 +2397,10 @@ fn report_lines(stderr: &str) -> Vec<String> {
 /// execution: "Frame statistics without an app".
 #[test]
 fn frame_statistics_without_an_app() {
-    let directory = single_file("frame_stats_no_app", "fun main() { println(1) }\n");
+    let directory = single_file(
+        "frame_stats_no_app",
+        "import /prism/core\nfun main() { println(1) }\n",
+    );
     let output = prism(&["run", "--frame-stats", "main.prism"], &directory);
     let _ = fs::remove_dir_all(&directory);
     assert_eq!(stdout(&output), "1\n");

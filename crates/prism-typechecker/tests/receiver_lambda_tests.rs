@@ -7,8 +7,7 @@ use prism_typechecker::{TypeChecker, TypeError};
 /// Parses and checks a single source file, returning its diagnostics.
 fn check(src: &str) -> Vec<TypeError> {
     let file = prism_parser::parse_source(src).expect("source must parse");
-    let mut checker =
-        TypeChecker::new(None, "main").with_prelude(prism_typechecker::test_prelude());
+    let mut checker = TypeChecker::new(None, "main").with_library_imports();
     checker.check_module(&file);
     checker.errors
 }

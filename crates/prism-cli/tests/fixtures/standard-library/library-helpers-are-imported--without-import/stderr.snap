@@ -1,0 +1,6 @@
+error[E4006]: unknown field 'sumOf' on type 'List<Int>'
+  --> main.prism:3:30
+    3 | fun f(xs: &List<Int>): Int = xs.sumOf { x -> x }
+      |                              ^
+   = help: no field or extension function 'sumOf' is declared on 'List<Int>' in this file or exported by its imports
+   = help: 'sumOf' is declared by the library module '/prism/collections': add 'import /prism/collections'

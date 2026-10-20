@@ -3,8 +3,7 @@
 /// The MIR of `source`, a file `main` that must typecheck, after checking it is well formed.
 fn mir(source: &str) -> String {
     let file = prism_parser::parse_source(source).expect("the source parses");
-    let mut checker = prism_typechecker::TypeChecker::new(None, "main")
-        .with_prelude(prism_typechecker::test_prelude());
+    let mut checker = prism_typechecker::TypeChecker::new(None, "main").with_library_imports();
     let tree = checker.check_module(&file);
     assert!(
         checker.errors.is_empty(),
@@ -178,8 +177,7 @@ fun k(x: Int) { var i = 0; while (i < x) { i = i + 1; if (i == 2) continue; if (
 /// The MIR of `source` as data, a file `main` that must typecheck.
 fn lowered(source: &str) -> prism_mir::MirFile {
     let file = prism_parser::parse_source(source).expect("the source parses");
-    let mut checker = prism_typechecker::TypeChecker::new(None, "main")
-        .with_prelude(prism_typechecker::test_prelude());
+    let mut checker = prism_typechecker::TypeChecker::new(None, "main").with_library_imports();
     let tree = checker.check_module(&file);
     assert!(checker.errors.is_empty(), "{:?}", checker.errors);
     prism_mir::lower_file(&tree)
@@ -251,8 +249,7 @@ fn defaults_and_closures_of_a_generic_function_share_its_type_parameters() {
         "fun <T> pass(x: T, f: () -> Int = { 1 }, n: Int = 2): T = x\nfun g(): Int = pass(3)\n",
     )
     .expect("the source parses");
-    let mut checker = prism_typechecker::TypeChecker::new(None, "main")
-        .with_prelude(prism_typechecker::test_prelude());
+    let mut checker = prism_typechecker::TypeChecker::new(None, "main").with_library_imports();
     let tree = checker.check_module(&file);
     assert!(checker.errors.is_empty(), "{:?}", checker.errors);
     let mir = prism_mir::lower_file(&tree);

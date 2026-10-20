@@ -1,0 +1,5 @@
+// expect: ok
+import /prism/collections
+
+fun listOf(n: Int): Int = n
+fun f(): Int = listOf(3)

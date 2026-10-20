@@ -35,7 +35,7 @@ fn two_saves_before_the_program_calls_anything() {
     let _lock = one_at_a_time();
     let program = |value: i64| {
         format!(
-            "fun zero(): Int = 0\nfun value(): Int = {}\n\
+            "import /prism/core\nfun zero(): Int = 0\nfun value(): Int = {}\n\
              fun main() {{ println(0); if (value() != 3) {{ println(1 / zero()) }} }}\n",
             value
         )
@@ -89,14 +89,17 @@ fn wait_for_return(session: &mut WatchSession) -> i32 {
 #[test]
 fn changing_a_file_back_after_a_syntax_error() {
     let _lock = one_at_a_time();
-    let source = "fun main() { println(1) }\n";
+    let source = "import /prism/core\nfun main() { println(1) }\n";
     let root = workspace("syntax_error_reverted", source);
     let entry = prism_resolver::absolute_path(&root.join("main.prism"));
     let mut session = WatchSession::new(&entry, RunOptions::default());
     session.install_stop_handler();
     assert_eq!(session.start(), ReloadOutcome::Started);
     assert_eq!(wait_for_return(&mut session), 0);
-    session.overlay(entry.clone(), "fun main() { println(1 }\n".to_string());
+    session.overlay(
+        entry.clone(),
+        "import /prism/core\nfun main() { println(1 }\n".to_string(),
+    );
     assert_eq!(
         session.reload(std::slice::from_ref(&entry), Instant::now()),
         ReloadOutcome::Failed
@@ -117,7 +120,7 @@ fn changing_a_file_back_after_a_syntax_error() {
 #[test]
 fn a_file_imported_again_is_read_again() {
     let _lock = one_at_a_time();
-    let importing = "import helper\nfun main() { println(value()) }\n";
+    let importing = "import /prism/core\nimport helper\nfun main() { println(value()) }\n";
     let root = workspace("imported_again", importing);
     std::fs::write(root.join("helper.prism"), "public fun value(): Int = 1\n").unwrap();
     let entry = prism_resolver::absolute_path(&root.join("main.prism"));
@@ -127,7 +130,10 @@ fn a_file_imported_again_is_read_again() {
     assert_eq!(session.start(), ReloadOutcome::Started);
     assert_eq!(wait_for_return(&mut session), 0);
     assert!(session.watched().contains(&helper));
-    session.overlay(entry.clone(), "fun main() { println(0) }\n".to_string());
+    session.overlay(
+        entry.clone(),
+        "import /prism/core\nfun main() { println(0) }\n".to_string(),
+    );
     assert_eq!(
         session.reload(std::slice::from_ref(&entry), Instant::now()),
         ReloadOutcome::Started

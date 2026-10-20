@@ -1,4 +1,6 @@
 // expect: ok
+import /prism/compose/runtime
+
 struct Todo(val title: String)
 
 fun f(s: MutableState<List<Todo>>, r: WeakReference<MutableState<Int>>) { }

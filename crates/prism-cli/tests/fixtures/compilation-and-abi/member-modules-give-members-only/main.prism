@@ -1,0 +1,6 @@
+// expect: E4001
+// run: 1
+fun f(xs: &List<Int>): Int = xs.size
+fun g(): Int = listOf(1).size
+
+fun main() {}

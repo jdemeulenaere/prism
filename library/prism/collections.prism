@@ -1,6 +1,6 @@
-// Lists: `listOf`, the members of `List<T>` and the higher-order helpers written over them. It
-// is a prelude module, so a file's own declaration or import of a name shadows it, except the
-// members, which belong to the list type and always take precedence over extensions.
+// Lists: `listOf`, the members of `List<T>` and the higher-order helpers written over them. The
+// members belong to the list type: every file sees them without an import, and they always take
+// precedence over extensions. `listOf` and the helpers are used after `import /prism/collections`.
 package prism
 
 // A list of the given elements, in order. It takes any number of elements, all of one type.

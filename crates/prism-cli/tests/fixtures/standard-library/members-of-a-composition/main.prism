@@ -1,2 +1,4 @@
 // expect: E4010
+import /prism/compose/runtime
+
 fun Composition.recompose(): Bool = false
