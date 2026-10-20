@@ -1,7 +1,0 @@
-// expect: ok
-// run: 0
-compose fun Empty() { }
-
-fun main() {
-    val s = mutableStateOf(composition { Empty() })
-}

@@ -284,6 +284,13 @@ The formatter MUST print a function type's receiver as written, with no space ar
 - **WHEN** `prism fmt -` reads `public  intrinsic var<T>MutableState<T>.value:T`
 - **THEN** it prints `public intrinsic var <T> MutableState<T>.value: T` and a newline
 
+### Requirement: Attached and Capture Modifiers Are Kept
+The formatter MUST print `attached` before each parameter type that has it, in declarations and in function types, followed by one space and keeping `compose` after it, and `capture` directly before `fun` after `intrinsic`.
+
+#### Scenario: Attached parameters and a capture function formatted
+- **WHEN** formatting `fun b(o:attached ()->Unit,c:attached compose ()->Unit,r:(attached ()->Unit)->Unit){}` and `public  intrinsic capture fun<T>MutableState<T>.weak():WeakReference<MutableState<T>>`
+- **THEN** the results are `fun b(o: attached () -> Unit, c: attached compose () -> Unit, r: (attached () -> Unit) -> Unit) {}` and `public intrinsic capture fun <T> MutableState<T>.weak(): WeakReference<MutableState<T>>`
+
 ## Design Rationale
 
 Decisions from `prism-fmt` (planned autonomously on 2026-10-17, reviewed on 2026-10-18, and logged in `docs/decisions-for-review.md`):

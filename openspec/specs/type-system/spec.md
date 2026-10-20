@@ -899,25 +899,25 @@ A parameter's default value MUST be checked outside any composable context, also
 - **THEN** the file typechecks
 
 ### Requirement: Mutable State Handles Convert to Read-Only Ones
-A `MutableState<T>` MUST be assignable where a `State<T>` of the same `T` is expected, as a subtype step that keeps the handle, wherever `&mut T` converts to `&T`. A `State<T>` MUST NOT convert to `MutableState<T>`, and `MutableState<A>` MUST NOT convert to `State<B>` for another `B`.
+A `MutableState<T>` MUST be assignable where a `State<T>` of the same `T` is expected, by value and behind a shared reference (`&MutableState<T>` as `&State<T>`), as a subtype step that keeps the state object, and an argument of type `MutableState<T>` MUST be borrowed implicitly for a `&State<T>` parameter. A `State<T>` MUST NOT convert to `MutableState<T>`, and `MutableState<A>` MUST NOT convert to `State<B>` for another `B`.
 
 #### Scenario: Passing a mutable handle as a read-only one
-- **WHEN** `fun show(s: State<Int>): Int = s.value` and `fun main() { val m = mutableStateOf(7); println(show(m)) }` run
+- **WHEN** `fun show(s: &State<Int>): Int = s.value` and `fun main() { val m = mutableStateOf(7); println(show(m)) }` run
 - **THEN** stdout is `7`
 
 #### Scenario: Type arguments inferred through the conversion
-- **WHEN** `fun <T : Copy> get(s: State<T>): T = s.value` and `fun main() { println(get(mutableStateOf(5))) }` run
-- **THEN** stdout is `5`: the `MutableState<Int>` argument solves `T` as `Int`
+- **WHEN** `fun <T : Copy> get(s: &State<T>): T = s.value` and `fun main() { println(get(mutableStateOf(5))) }` run
+- **THEN** stdout is `5`: the `MutableState<Int>` argument, borrowed as a temporary, solves `T` as `Int`
 
 #### Scenario: A read-only handle does not become mutable
-- **WHEN** `fun f(s: State<Int>): MutableState<Int> = s` is checked
+- **WHEN** `fun f(s: &State<Int>): &MutableState<Int> = s` is checked
 - **THEN** the type checker emits `E4005`
 
 ### Requirement: Lookups on a Mutable Handle Fall Back to State
 A member or extension looked up on a `MutableState<T>` receiver and not found for `MutableState` MUST be looked up for `State<T>`, with the receiver converted, so the members and extensions of `State<T>` apply to both handles.
 
 #### Scenario: Reading through a mutable handle
-- **WHEN** `fun <T> State<T>.describe(): String = "state"` and `fun main() { val m = mutableStateOf(2); println(m.read { n -> n + 1 }); println(m.describe()) }` run
+- **WHEN** `fun <T> State<T>.describe(): String = "state"` and `fun main() { val m = mutableStateOf(2); println(m.value + 1); println(m.describe()) }` run
 - **THEN** stdout is `3` and `state`
 
 ### Requirement: A Struct May Have a Companion Value
@@ -948,6 +948,17 @@ Importing a module MUST bring a public struct and its public companion value und
 #### Scenario: Using an imported companion value
 - **WHEN** `lib/shape.prism` declares `public struct Size : Copy { val w: Int }`, `public struct Sizes : Copy { val Zero: Size }` and `public val Size: Sizes = Sizes(Size(0))`, and `app/main.prism` imports `/lib/shape` and declares `fun main() { val s: Size = Size.Zero; println(s.w + Size(2).w) }`
 - **THEN** `prism run app/main.prism` prints `2`
+
+### Requirement: Attached Parameters Are Part of Function Types
+Whether each parameter of a function or function type is `attached` MUST be part of its type, rendered `(attached () -> Unit) -> Unit`. A function type MUST be assignable to one equal to it except that a parameter unmarked in it is `attached`, or one `attached` in it is `escaping`, keeping its representation. Any other difference of the flags MUST be a type mismatch.
+
+#### Scenario: Attached parameters in conversions
+- **WHEN** `fun runNow(f: () -> Unit) { f() }`, `fun keepIt(f: attached () -> Unit) {}`, `fun store(f: escaping () -> Unit) {}`, `fun register(r: (attached () -> Unit) -> Unit) {}` and `fun registerEscaping(r: (escaping () -> Unit) -> Unit) {}` are declared, and `fun f() { register(runNow); register(keepIt); registerEscaping(keepIt) }` and `fun h() { register(store) }` are checked
+- **THEN** the type checker accepts `f`, and emits `E4004` for `h`, saying that `(escaping () -> Unit) -> Unit` is not assignable to `(attached () -> Unit) -> Unit`
+
+#### Scenario: An escaping value given to an attached parameter
+- **WHEN** `fun keepIt(f: attached () -> Unit) {}` is declared and `fun g(h: escaping () -> Unit) { keepIt(h) }` is checked
+- **THEN** the file passes `prism check`
 
 ## Design Rationale
 Decisions from `type-checker-core` and `resolve-nominal-type-annotations`:
@@ -1068,3 +1079,7 @@ Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by 
 
 - **Companion values** (D4). A top-level `val` may share its name with a struct of the same file: a type position or a call means the struct, any other value position the value, so `Modifier.padding(16.dp)`, `Color.Red` beside `Color(0xFF336699)` and `TextStyle.Default` read as in Compose without Kotlin's `companion object`. Every other same-name pair stays `E4010`, a pair across files included, so an import never silently changes what a local struct name means; a `val` and an extension of one name coexist, as an extension is a member of its receiver. The checker defines the pair through `define_companion`, the value being the name's innermost binding, and a call or struct pattern finds the struct through `lookup_constructor`; the cost is one filtered lookup and one kind compare. A prelude module cannot give a struct a companion, since the prelude layer keeps one symbol per name. Rejected: struct field defaults (`Modifier()`), enum colours, static members, pairs across files.
 - **Intrinsic properties of `Int`** (apply). `n.dp` and `n.sp` are found through the member table of the file and its imports, as `String` and `List` members are, and typed as a call of their built-in with the `Int` copied, so any later unit property needs no new rule. Rejected: special-casing `dp` and `sp` by name.
+
+Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **`attached` in function types converts contravariantly** (D9). A function type converts to one where an unmarked parameter is `attached`, or an `attached` one `escaping`, and nothing else converts; `MutableState<T>` converts to `State<T>` by value and behind a shared reference, keeping the representation (D5). `remember`'s result is typed by the catalog's rule: a copy of a `Copy` value, else a shared borrow (D6).

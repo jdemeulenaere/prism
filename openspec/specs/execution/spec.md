@@ -668,7 +668,7 @@ A closure MUST read and write the captured variables themselves, not copies: it 
 - **THEN** it prints `3`, reports no live allocation and exits with status 0
 
 ### Requirement: Closures Use the Paths They Capture
-A closure that borrows a captured path MUST read and write that place where it lives each time it is called, and a closure that copies a captured path MUST read the value the path held when the closure was built. Neither MUST take the path's binding, which its owner frees exactly once.
+A closure that borrows a captured path MUST read and write that place where it lives each time it is called, a closure that copies a captured path MUST read the value the path held when the closure was built, and one that captures a state path weakly MUST reach the state the path held then. None MUST take the path's binding, which its owner frees exactly once.
 
 #### Scenario: A closure writes one field while another is written
 - **WHEN** `struct P { var x: Int, var y: Int }` is declared and `fun main() { var p = P(1, 2); val bump = { p.x += 10 }; p.y += 1; bump(); bump(); println(p.x); println(p.y) }` runs with `--check-allocations`
@@ -683,8 +683,8 @@ A closure that borrows a captured path MUST read and write that place where it l
 - **THEN** stdout is `14` and then `ab`, no live allocation is reported, and the exit status is 0
 
 #### Scenario: A handler writes a state field of a borrowed item
-- **WHEN** `struct Todo { val id: Int, val done: MutableState<Bool> }`, `struct Toggle { val onToggle: (Bool) -> Unit }` and `fun toggle(todo: &Todo): Toggle = Toggle({ todo.done.value = it })` are declared and `fun main() { val t = Todo(1, mutableStateOf(false)); val g = toggle(t); g.onToggle(true); println(t.done.value) }` runs with `--check-allocations`
-- **THEN** stdout is `true`, and the exit status is 0: the handler owns a copy of the handle `todo.done`
+- **WHEN** `struct Todo { val id: Int, val done: MutableState<Bool> }`, `fun deliver(v: Bool, f: attached (Bool) -> Unit) { f(v) }` and `fun toggle(todo: &Todo) { deliver(true, { todo.done.value = it }) }` are declared and `fun main() { val t = Todo(1, mutableStateOf(false)); toggle(t); println(t.done.value) }` runs with `--check-allocations`
+- **THEN** stdout is `true`, and the exit status is 0: the handler holds a weak handle of `todo.done`, and `t` frees the state once
 
 ### Requirement: Function Names and Variant Constructors Are Function Values
 A top-level function, of the file or of an import, and a variant constructor used as a value MUST behave as a closure that calls the function, or builds the variant, with its arguments converted to the declared parameter types.
@@ -943,13 +943,6 @@ The runtime errors of state, `stale state handle`, `state accessed while borrowe
 - **WHEN** `app/main.prism` reads a stale handle with `println(kept.value)` on line 9, `kept.value` starting at column 13
 - **THEN** stderr is exactly `panic: stale state handle` and `  at app/main.prism:9:13`, each followed by a newline, and the exit status is 101
 
-### Requirement: Program Cells Are Released Before the Allocation Check
-Under `--check-allocations`, every cell that the program owns MUST be freed, its value dropped, when `main` returns, before compositions still live are reported and before the allocation check reports. Without the check, program cells MUST NOT be freed.
-
-#### Scenario: A program cell holding a composition
-- **WHEN** `compose fun Empty() { }` and `fun main() { val s = mutableStateOf(composition { Empty() }) }` run with `--check-allocations`
-- **THEN** the program exits with status 0: releasing the cell disposes the composition before live compositions are counted
-
 ### Requirement: Headless Runs
 `prism run --headless[=<width>x<height>] [--events <script>] <file.prism>` MUST run the program with no window: `runApp` runs headless, in a window of the given size when one is given and of its own `width` and `height` otherwise. Without `--events`, `runApp` MUST compose and lay out its content and return. The options MUST come before the file, and `--events` without `--headless` MUST be a usage error with status 1.
 
@@ -985,6 +978,24 @@ Under `--check-allocations`, every cell that the program owns MUST be freed, its
 #### Scenario: A screenshot that cannot be written
 - **WHEN** `prism run --headless --screenshot missing/shot.png main.prism` runs an app, and the directory `missing` does not exist
 - **THEN** stderr ends with `panic: display error: cannot write the screenshot missing/shot.png (` followed by the platform's reason, `)` and a newline, and the exit status is 101
+
+### Requirement: States Owned by Data Run
+A state object held by a struct, a list element or a local MUST be created, read, written and borrowed in place like any value, and its state MUST be retired exactly once, when its owner drops it, and freed exactly once.
+
+#### Scenario: Items holding their own states
+- **WHEN** `struct Todo { val id: Int, val done: MutableState<Bool> }` is declared and `main` builds `val todos = mutableStateOf(listOf(Todo(1, mutableStateOf(false)), Todo(2, mutableStateOf(true))))`, runs `todos.value[0].done.value = true`, `val removed = todos.value.removeAt(1)`, `println(removed.done.value)`, `var left = 0`, `for (t in todos.value) { if (!t.done.value) { left += 1 } }` and `println(left)`, with `--check-allocations`
+- **THEN** stdout is `true` and `0`, one per line, and the exit status is 0
+
+### Requirement: Retired Cells Are Freed Before the Allocation Check
+Under `--check-allocations`, when `main` returns, every retired cell MUST be freed, its value dropped, after the top-level values are released and before compositions still live are reported and the allocation check reports. Without the check, cells still retired at exit MUST NOT be freed.
+
+#### Scenario: A state holding a composition
+- **WHEN** `compose fun Empty() { }` and `fun main() { val s = mutableStateOf(composition { Empty() }) }` run with `--check-allocations`
+- **THEN** the program exits with status 0: freeing the retired cell disposes the composition before live compositions are counted
+
+#### Scenario: A top-level state
+- **WHEN** `val Count: MutableState<Int> = mutableStateOf(1)` and `fun main() { Count.value += 1; println(Count.value) }` run with `--check-allocations`
+- **THEN** stdout is `2`, and the exit status is 0
 
 ## Design Rationale
 

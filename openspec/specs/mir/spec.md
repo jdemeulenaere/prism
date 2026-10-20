@@ -623,22 +623,22 @@ A generic composable MUST be composed once, in its polymorphic MIR, and its reco
 - **THEN** it prints `main::Show<Bool>` and `main::Show<Int>`, each keeping its argument in a slot of its own type argument, each with its restart closure
 
 ### Requirement: State Operations Are Calls
-Every state operation MUST lower to `Call` terminators of state operations, each with the value type as its type argument and the handle passed by copy: creating a cell; reading it, which gives a shared reference to its value; writing it; borrowing it shared, moving its value out or borrowing it mutably, and ending each of those. A state place MUST be the dereference of the reference a read gives.
+Every state operation MUST lower to `Call` terminators of state operations, each with the value type as its type argument and the state object passed by shared borrow: creating a state; reading it, which gives a shared reference to its value tied to that borrow; writing it; taking a shared or exclusive flag and ending it; moving its value out and putting one back; making a weak handle and resolving one. A state place MUST be the dereference of the reference a read gives.
 
 #### Scenario: A compound assignment through a handle
-- **WHEN** `prism dump-mir` runs on `fun f(s: MutableState<Int>) { s.value += 1 }`
-- **THEN** the body copies `s` into a temporary once, calls `state read<Int>` with it, adds 1 to a copy of the referent with an overflow check, and calls `state write<Int>` with the temporary and the sum
+- **WHEN** `prism dump-mir` runs on `fun f(s: &MutableState<Int>) { s.value += 1 }`
+- **THEN** the body borrows `*s` into a temporary once, calls `state read<Int>` with it, adds 1 to a copy of the referent with an overflow check, and calls `state write<Int>` with the temporary and the sum
 
 #### Scenario: An update call
-- **WHEN** `prism dump-mir` runs on `fun f(s: MutableState<Int>) { s.update { n -> n * 2 } }`
+- **WHEN** `prism dump-mir` runs on `fun f(s: &MutableState<Int>) { s.update { n -> n * 2 } }`
 - **THEN** the body calls `state take<Int>`, calls the closure value with the taken value moved, and calls `state put<Int>` with the result moved
 
 ### Requirement: Composed MIR Marks Remember Windows and Side Effects
-In composed MIR, the calculation of a `remember` that misses its slot MUST run between a `begin_remember` and an `end_remember` composer operation, the end after the result's slot is written, and a call of `SideEffect` MUST be a `side_effect` composer operation taking the effect moved.
+In composed MIR, the calculation of a `remember` that misses its slot MUST run between a `begin_remember` and an `end_remember` composer operation, the end after the result's slot is written, and `remember` of a non-`Copy` type MUST give a shared reference to the slot's value. A call of `SideEffect` MUST be a `side_effect` composer operation taking the effect moved.
 
 #### Scenario: Composed remember of a state
 - **WHEN** `prism dump-mir --composed` runs on `compose fun C() { val s = remember { mutableStateOf(0) } }`
-- **THEN** the missing path calls `composer begin_remember`, then the calculation, then `composer set_slot<MutableState<Int>>`, then `composer end_remember`
+- **THEN** the missing path calls `composer begin_remember`, then the calculation, then `composer set_slot<MutableState<Int>>`, then `composer end_remember`, and `s` holds a shared reference to the slot's `MutableState<Int>` on both paths
 
 ### Requirement: Node Calls Start Node Groups
 In composed MIR, a call of the intrinsic composable `Node` or `LeafNode` MUST start a node group with its kind, keyed by its position among the node calls of its region. It MUST call `update` with the node the group returns, call `content` (for `Node`) with the caller's composer, and end the group. A node call MUST add no other group.
@@ -660,6 +660,24 @@ A read of the intrinsic property `n.dp` or `n.sp` MUST lower to the construction
 #### Scenario: A unit in MIR
 - **WHEN** `prism dump-mir` runs on `fun f(n: Int): Dp = n.dp` with `import /prism/compose/ui`
 - **THEN** the body of `f` builds the aggregate `Dp` from `n` and calls nothing
+
+### Requirement: Flags Outside Composition End With Their Scope
+A borrow of a state's value that holds the state's flag (compose, "Borrows of a State's Value Outside Composition Hold Its Flag") MUST lower to a call taking the flag, shared or exclusive, before the borrow, and a call ending it where the temporary scope of its statement ends, or where the block of the binding it initializes ends, on every path out of that scope.
+
+#### Scenario: A flag around a call that changes a list state
+- **WHEN** `prism dump-mir` runs on `fun f(s: &MutableState<List<Int>>) { s.value.add(1); println(1) }`
+- **THEN** the body calls `state begin exclusive<List<Int>>` with a borrow of `*s` and a borrow of the guard's local before the call of `add`, and `state end exclusive<List<Int>>` after it, before the call of `println`
+
+#### Scenario: A borrow bound to a val ends its flag with its block
+- **WHEN** `prism dump-mir` runs on `fun g(s: &MutableState<List<Int>>): Int { val items = &s.value; println(items.size); return 1 }`
+- **THEN** the body calls `state begin shared<List<Int>>` before `items` is initialized and `state end shared<List<Int>>` once, when the block's locals end, on the path that returns
+
+### Requirement: Weak Captures Are Words of the Closure Value
+A weak capture MUST be a capture local of the weak reference's type. The enclosing body MUST build the closure value from a weak capture of the captured path's place, which makes the word by the capture function's operation and which the borrow checker sees as a shared borrow held by the closure value. A use of the path in the closure's body MUST be a place that views the local as the state object, never moved or dropped.
+
+#### Scenario: A handler's weak capture in MIR
+- **WHEN** `prism dump-mir` runs on a file declaring `struct Todo { val id: Int, val done: MutableState<Bool> }`, `fun keep(f: attached (Bool) -> Unit) {}` and `fun row(todo: &Todo) { keep({ todo.done.value = it }) }`
+- **THEN** `row` builds the closure value from `weak (*_1).done`, a weak capture of the place `(*todo).done`, and the closure's body calls `state write<Bool>` on a borrow of a view of its capture local `todo.done`
 
 ## Design Rationale
 Decisions from `mir-lowering` (the shape agreed with the user in the borrow-checker roadmap exploration, 2026-10-17: a `prism-mir` crate lowering the typed tree to a place-based control-flow graph, with `prism dump-mir` for snapshot tests; the rest decided while proposing, implementing and reviewing the change and logged in `docs/decisions-for-review.md`). The consumers are the borrow checker (`borrowck-moves`, `borrowck-exclusivity`, `borrowck-elision`), drop elaboration, closure conversion, the Cranelift backend, `hot-reload` and `compose-transform`.
@@ -783,3 +801,7 @@ Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by 
 - **Unit properties are constructions** (D7). `n.dp` and `n.sp` lower to the aggregates `Dp(n)` and `TextUnit(n)`, so a unit costs a constructor and no call.
 - **Default generators borrow only what their default reads** (D26, review). A generator used to borrow the context, the receiver and every earlier argument, so `Modifier.padding(16.dp)` borrowed 27 arguments for its six defaults and the borrow check of a screen of toolkit calls cost about 0.17 ms per call. Its inputs are now decided syntactically (`prism_ast::default_inputs`): an earlier parameter or the context when its name appears, the receiver and the context when `this` or another name appears (a member of the implicit receiver, or a call needing the context), and every input for blocks, closures, `when` and jumps, which bind names or hold statements; a parameter whose type may hold a borrow (a reference, a function type, a type parameter) still takes every input, so the elision rules tie its result as before. Phase 1 stores the answer in the ABI and the checker computes it for the file's own functions, so both sides of a call agree. No program is accepted or rejected differently and no diagnostic changes; the borrow check fell to 0.07 ms per call. Rejected: resolving reads from the typed tree (another file sees only the ABI), skipping loans in the borrow checker alone (every later stage would keep the arguments), inlining constant defaults (a default may call the callee's private declarations).
 - **One capture local per captured path** (D7 of `path-captures`). A closure's capture local has the path's type and is named by its path (`p.x`), a place chain in its body maps onto the captured prefix's local and the rest of the chain in one walk, and the enclosing body builds the closure value from each path's place: a borrow of a borrowed path, a copy of a copied one, a move only of a whole binding. The borrow checker needs no new rule, since loans, overlap and capture-mode inference already work on places. Rejected: one capture local per binding with a partial environment, which MIR's types cannot express.
+
+Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **Guards and weak captures in MIR** (D3, D10). A guarded state access lowers to `state begin shared|exclusive` with the state object's borrow, lowered straight into the guard's local, and a borrow of that local of origin `state guard`, whose loan every reference the call gives keeps; the guard's scope ends it with `state end` on every path. A weak capture is a capture local of type `WeakReference<S>` built from `Capture::Weak(place)`, and uses of the path read the `View` projection of that local, never moved or dropped.

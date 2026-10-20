@@ -819,27 +819,94 @@ A function type with a receiver MUST elide by rules 1, 3 and 4 as every function
 - **WHEN** `struct Team { val lead: String }`, `struct RowScope { val name: String }`, `context(s: RowScope) fun Team.leader(): &String = &lead` and `context(s: RowScope) fun Team.scopeName(): &String = &s.name` are checked
 - **THEN** the borrow checker accepts `leader` and emits `E5009` at `&s.name` in `scopeName`, because rule 2 ties the result to the receiver only
 
-### Requirement: Borrows of a State's Value Hold No Loan
-A borrow of a state place, taken in a composable context, MUST hold no loan of any local and MUST be valid until the body that took it ends, as a borrow of a top-level `val` is: no write of a local conflicts with it, and a body MAY return it under any elision rule. The runtime keeps it valid, since no state is written and no cell is freed while a pass runs.
-
-#### Scenario: A borrow of a state outlives later calls
-- **WHEN** `compose fun Leaf() { }` and `compose fun C(s: State<String>) { val r = &s.value; Leaf(); println(r) }` are declared and `fun main() { val s = mutableStateOf("a" + "b"); val c = composition { C(s) } }` runs with `--check-allocations`
-- **THEN** stdout is `ab`, and the exit status is 0
-
-#### Scenario: A composable returns a borrow of a state's value
-- **WHEN** `compose fun items(s: State<List<Int>>): &List<Int> = &s.value` and `compose fun C(s: State<List<Int>>) { println(items(s).size) }` are checked
-- **THEN** the file typechecks and passes the borrow checker
-
 ### Requirement: Values Written Into a State Escape
-A value written into a state, by `mutableStateOf`, `value =`, the result of `update`'s transform or a compound assignment, MUST be at an owning position: a closure written there owns its captures, and a function value that may hold a borrow is `E5007`, as for a generic parameter.
+A value written into a state, by `mutableStateOf`, `value =`, the result of `update`'s transform or a compound assignment, MUST be at an owning position: a closure written there owns its captures, without weak handles, and a function value that may hold a borrow is `E5007`, and an `attached` one `E5010`, as for a generic parameter.
 
 #### Scenario: A borrowing closure stored in a state rejected
-- **WHEN** `fun f(s: MutableState<() -> Int>, r: &String) { s.value = { r.length + 1 } }` is checked
+- **WHEN** `fun f(s: &MutableState<() -> Int>, r: &String) { s.value = { r.length + 1 } }` is checked
 - **THEN** the borrow checker emits `E5007`, labelling the capture of `r`
 
 #### Scenario: A handler stored in a state owns its captures
-- **WHEN** `fun main() { val n = 2; val s = mutableStateOf({ 0 }); s.value = { n * 3 }; s.read { f -> println(f()) } }` runs with `--check-allocations`
+- **WHEN** `fun main() { val n = 2; val s = mutableStateOf({ 0 }); s.value = { n * 3 }; val f = &s.value; println(f()) }` runs with `--check-allocations`
 - **THEN** stdout is `6`, and the exit status is 0
+
+### Requirement: Closures Given to Attached Parameters Capture States Through Weak Handles
+A closure that owns its captures because its value reaches an `attached` parameter, and no escaping position, MUST capture each path whose type has a capture function (a state object) through a weak handle made where the closure is built, when the path's binding is a `val`, it dereferences no `&mut` reference and every field it reads after a reference is a `val` field. A weak handle MUST hold no borrow and own nothing.
+
+#### Scenario: A row's handler captures its item's state
+- **WHEN** `struct Todo { val id: Int, val done: MutableState<Bool> }` and `fun keep(f: attached (Bool) -> Unit) {}` are declared and `fun row(todo: &Todo) { keep({ todo.done.value = it }) }` is checked and its typed tree dumped
+- **THEN** the file passes `prism check`, and the closure's only capture is `weak todo.done`
+
+#### Scenario: A state binding captured by root content stays usable
+- **WHEN** `fun main() { val s = mutableStateOf(0); val c = composition { println(s.value) }; s.value = 1; println(c.recompose()) }` runs with `--check-allocations`
+- **THEN** stdout is `0`, `1` and `true`, one per line, and the exit status is 0: the content captured `s` through a weak handle, so `main` still owns and writes it
+
+#### Scenario: A state behind a var field is not captured weakly
+- **WHEN** `struct Holder { var s: MutableState<Int> }` and `fun keep(f: attached () -> Unit) {}` are declared and `fun row(h: &Holder) { keep({ h.s.value += 1 }) }` is checked
+- **THEN** the borrow checker emits `E5007`, saying that a closure that captures the reference `h` cannot escape, with help suggesting `val sRef = h.s.weak()` before the closure and `sRef.get()` inside it: a closure captures a state read through a reference weakly only when every field on the way is a `val`
+
+### Requirement: Attached Function Values Stay Attached
+A value of an `attached` parameter, and a closure holding weak handles, MAY be called, borrowed, captured by a closure that is itself given to an `attached` parameter or does not escape, and passed to an `attached` parameter. Any other escape (returned, stored in a struct, state, list or top-level value, or passed to an `escaping` or generic parameter) MUST be rejected with `AttachedFunctionEscapes` (`E5010`).
+
+#### Scenario: Forwarding an attached handler
+- **WHEN** `fun keep(f: attached () -> Unit) {}` is declared and `fun forward(onClick: attached () -> Unit) { keep(onClick) }` and `fun wrap(onClick: attached () -> Unit) { keep { println("x"); onClick() } }` are checked
+- **THEN** the file passes `prism check`
+
+#### Scenario: Keeping an attached handler elsewhere rejected
+- **WHEN** `struct Button { val onClick: () -> Unit }` and `fun store(f: escaping () -> Unit) {}` are declared and `fun a(onClick: attached () -> Unit): Button = Button(onClick)` and `fun b(onClick: attached () -> Unit) { store(onClick) }` are checked
+- **THEN** the borrow checker emits `E5010` at `onClick` in each, saying that an attached function value is kept only by the composition, with help suggesting to declare the receiving parameter `attached`
+
+### Requirement: Borrows of Remembered Values Hold No Loan
+A borrow that `remember` gives MUST hold no loan of any local and MUST be valid until the body that took it ends, as a borrow of a top-level `val` is: no write of a local conflicts with it, and a composable MAY return it under any elision rule. The runtime keeps it valid, since no slot is released before its pass ends.
+
+#### Scenario: A composable returns a remembered borrow
+- **WHEN** `compose fun items(): &List<Int> = remember { listOf(1, 2) }` and `compose fun C() { println(items().size) }` are declared and `fun main() { val c = composition { C() } }` runs with `--check-allocations`
+- **THEN** stdout is `2`, and the exit status is 0
+
+### Requirement: An Escaping Closure Using a Borrowed State Suggests a Weak Reference
+When a closure that owns its captures and reaches no `attached` parameter uses a state object through a reference, the `EscapingClosure` (`E5007`) it gets MUST have help suggesting a weak reference made before the closure and resolved inside it.
+
+#### Scenario: A handler kept in a plain function
+- **WHEN** `fun later(f: escaping () -> Unit) {}` is declared and `fun f(count: &MutableState<Int>) { later { count.value += 1 } }` is checked
+- **THEN** the borrow checker emits `E5007`, saying that a closure that captures the reference `count` cannot escape, with help suggesting `val countRef = count.weak()` before the closure and `countRef.get()` inside it
+
+### Requirement: Weak Captures Keep Their States Borrowed
+A weak capture MUST be a shared borrow of the captured path's place, held by the closure value. A call's result whose type contains a keeper (`Composition`) MUST also hold the borrows of the arguments given to its `attached` parameters, and a call MUST write them, and the borrows its other operands hold, through each argument that is a reference to a keeper, shared or mutable, as through a `&mut` argument. No other call MUST keep them past it.
+
+#### Scenario: Moving a state its composition shows rejected
+- **WHEN** `fun consume(s: MutableState<Int>) {}` is declared and `fun main() { val s = mutableStateOf(0); val c = composition { println(s.value) }; consume(s); println(c.recompose()) }` is checked
+- **THEN** the borrow checker emits `E5005` at `s` in `consume(s)`, labelling the content's weak capture of `s` and the later use `c.recompose()`, with a note that the composition keeps `s` borrowed through its content's weak capture
+
+#### Scenario: A state that ends before its composition is used rejected
+- **WHEN** `fun main() { val c = composition { }; if (true) { val s = mutableStateOf(0); c.setContent { println(s.value) } }; println(c.recompose()) }` is checked
+- **THEN** the borrow checker emits `E5006`, saying that `s` does not live long enough, at the content's weak capture of `s`, with the end of the `if` block and the later use `c.recompose()` as related locations
+
+#### Scenario: A composition returned with its state's borrow
+- **WHEN** `fun show(s: &MutableState<Int>): Composition = composition { println(s.value) }` is declared and `fun main() { val s = mutableStateOf(1); val c = show(s); s.value = 2; println(c.recompose()) }` runs with `--check-allocations`
+- **THEN** stdout is `1`, `2` and `true`, one per line, and the exit status is 0
+
+#### Scenario: A helper setting a composition's content keeps its arguments borrowed
+- **WHEN** `fun show(c: &Composition, s: &MutableState<Int>) { c.setContent { println(s.value) } }` and `fun consume(s: MutableState<Int>) {}` are declared and `fun main() { val c = composition { }; val s = mutableStateOf(0); show(c, s); consume(s); println(c.recompose()) }` is checked
+- **THEN** the borrow checker emits `E5005` at `s` in `consume(s)`, labelling the borrow of `s` in `show(c, s)` and the later use `c.recompose()`: `show` may have given `c` content that captures `s`
+
+#### Scenario: An app keeps nothing past its call
+- **WHEN** `fun consume(s: MutableState<Int>) {}` is declared and `fun main() { val s = mutableStateOf(0); runApp { Text("${s.value}") }; consume(s) }` is checked with `import /prism/compose/ui` and `import /prism/compose/material3`
+- **THEN** the file passes `prism check`: `runApp` returns once its app has ended, so its content keeps `s` borrowed only during the call
+
+### Requirement: Compositions Holding Weak Captures Stay Tracked
+A value whose type contains a keeper and holds borrows MUST NOT be stored in a field, a payload, a box, a list, a state or a top-level value, or passed to a generic or `escaping` parameter, and a keeper held in one of those MUST NOT be given content holding weak captures (`app.c.setContent { }`): the borrow checker MUST reject both with `E5010`. A function returning a keeper MUST have its result tied to its `attached` parameters as well as to the inputs its elision rule names.
+
+#### Scenario: Storing a composition that holds a weak capture rejected
+- **WHEN** `struct App { val c: Composition }` is declared and `fun main() { val s = mutableStateOf(0); val app = App(composition { println(s.value) }) }` is checked
+- **THEN** the borrow checker emits `E5010` at the composition stored in `App`, saying that a composition whose content captures states weakly cannot be stored there
+
+#### Scenario: Setting the content of a stored composition rejected
+- **WHEN** `struct App { val c: Composition }` is declared and `fun main() { val s = mutableStateOf(0); val app = App(composition { }); app.c.setContent { println(s.value) } }` is checked
+- **THEN** the borrow checker emits `E5010` at `app.c`, saying that a composition whose content captures `s` weakly cannot be stored there
+
+#### Scenario: A composition wrapping attached content
+- **WHEN** `fun wrap(content: attached compose () -> Unit): Composition = composition(content)` is declared and `fun main() { val s = mutableStateOf(1); val c = wrap { println(s.value) }; s.value = 2; println(c.recompose()) }` runs with `--check-allocations`
+- **THEN** stdout is `1`, `2` and `true`, one per line, and the exit status is 0
 
 ## Design Rationale
 Decisions from `reference-access` (agreed with the user in the borrow-checker roadmap exploration and while proposing the change, 2026-10-17):
@@ -935,7 +1002,7 @@ Decisions from `receiver-lambdas` (planned autonomously on 2026-10-19 for `ui-to
 
 Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
 
-- **Borrows of a state's value are free references** (D18). A reference from `state read`, `begin read` or `begin edit` is derived from a call with no borrowed input, so it holds no loan, as a top-level value's does, and a composable may return a borrow of `s.value` under any rule. The runtime keeps it valid: no state is written and no cell freed during a pass (compose D5, D11, D12). Values written into a state are at owning positions, so a closure written there owns its captures and a function value that may hold a borrow is `E5007`.
+- **Borrows of a state's value are free references** (D18; superseded by `owned-state` D3 and D6, below: a borrow of a state object's value borrows the object, and only the borrows `remember` gives hold no loan). A reference from `state read`, `begin read` or `begin edit` is derived from a call with no borrowed input, so it holds no loan, as a top-level value's does, and a composable may return a borrow of `s.value` under any rule. The runtime keeps it valid: no state is written and no cell freed during a pass (compose D5, D11, D12). Values written into a state are at owning positions, so a closure written there owns its captures and a function value that may hold a borrow is `E5007`.
 
 Decisions from `path-captures` (review item A2b, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: closures capture paths such as `todo.done`, like Rust 2021's disjoint captures, decided syntactically at no inference cost; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
 
@@ -944,3 +1011,10 @@ Decisions from `path-captures` (review item A2b, agreed with the user on 2026-10
 - **`{ r }` for `r: &Int` copies the `Int`** (D4). Copy-out is a dereference in the typed tree, so the closure reads the path `*r`, as `{ t.id }` reads `t.id`; stopping before a final dereference would make the two differ for the same kind of read. The scenarios whose point was `E5007` for a closure capturing a reference use non-`Copy` referents (`r: &String`).
 - **Paths are decided in the existing capture pass** (D5). The checker still records whole bindings while it checks, since a name's enclosing field chain is built after the name is resolved; the capture pass, which already walks every node of a body with closures, reads each place chain once, then merges each closure's paths with its children's innermost first and copies or widens them after the unchanged ownership decision. On closure-dense bodies it takes 8% to 15% of `prism check` (measured at review against a 20% ceiling), and `compile_timing.rs` has the linear shapes `field-path-captures` and `nested-path-captures`. Rejected: recording paths in `use_local`; deciding in MIR or the borrow checker; a flow-sensitive analysis.
 - **Diagnostics name the path; no new code** (D10). An `E5007` for a reference an owning closure took because it could not copy a path suggests copying or cloning that path into a `val` named after its last field (`val n = c.n`, `val title = t.title.clone()`), with a note when a `var` field or a `&mut` reference kept the path from being copied; closure borrow labels name the captured path ("'u.name' is captured here"). Rejected: a new code whose fixes are those of `E5007` and `E4028`.
+
+Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **`attached`: function values the composition keeps** (D9, user direction for the kind; the name autonomous). A parameter kind beside `escaping`, part of function types, recorded in the ABI: the callee keeps the value only where the composition keeps it (a node's handler table, kept arguments, side effects, root content). An `escaping` value may be passed to an `attached` parameter; an `attached` one may be called, borrowed, captured by a closure that does not escape or is itself attached, or passed to another `attached` parameter, and anything else is `E5010`. Rejected names: `handler`, `bound`, `composed`, `retained`, `kept`; rejected designs: implicit weak captures for every escaping closure (stale errors anywhere) and inferring which parameters the composition keeps (whole-program).
+- **Attached closures capture states through weak handles** (D10, R3). In the existing capture pass, a closure whose owning roots are all `attached` captures each path whose type has a capture function weakly when nothing could re-point it (a `val` binding, no `&mut` on the way, `val` fields after a reference), whole bindings included; the handle is one `Copy` word, so the closure stays keepable and its environment compares by words. A reference binding's copy is rewritten to a weak capture of its referent. Other owning closures keep `path-captures`' rules, and `E5007` for a state through a reference suggests `val ref = s.weak()`. Holder structs of states are not captured weakly (D21: handlers name the states they use). Rejected: moving owned state bindings into attached closures, weak captures for every owning closure, reference-counted handlers.
+- **Weak captures keep their states borrowed while a composition keeps them** (D24, orchestrator, to keep the user's guarantee). A weak capture is a shared loan of its path held by the closure value; `Composition`, the catalog's only keeper, carries loans, a call's keeper result holds what its `attached` arguments hold, and a call writes them, with its other operands' borrows, through every reference to a keeper, as through a `&mut` argument (the second part a review fix: a helper setting `c.setContent` let its caller drop the state). Moving or dropping a state while a composition showing it is used later is `E5005`/`E5006`; a composition holding such loans may move between locals and be returned under the elision rules, never stored where loans are not tracked, nor given such content there (`app.c.setContent`), `E5010`. Rejected: the run-time check alone (stale errors in code that owns a composition), testing the name `Composition`, making every call with an attached argument carry loans.
+- **Explicit weak references outside the UI tree** (D11, user direction for the API). `s.weak()` copies the state's word into a `WeakReference`; `ref.get()` gives `null` once the state is retired, else the reference's own word viewed as the state object, tied to `ref` by elision rule 2. Every access validates the handle, so a borrow from `get()` held across a pass that frees its cell is `stale state handle`, never a dangling read. Rejected: a closure API, two weak types.

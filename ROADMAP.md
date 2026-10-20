@@ -408,15 +408,26 @@ Follow-ups of `receiver-lambdas`:
 
 Follow-ups of `state-handles`:
 - [ ] `derivedStateOf`, a memoized computed state (D2, `compose-architecture` D25), and `snapshotFlow` once Prism has coroutines or another asynchronous form (D2).
-- [ ] `mutableStateListOf`, with per-element tracking; `edit` invalidates every reader of a list today (D2).
+- [ ] `mutableStateListOf`, with per-element tracking; a mutable borrow of a list state's value invalidates every reader of the list today (D2; `edit` is gone since `owned-state`).
 - [ ] Mutation policies (`SnapshotMutationPolicy`): equal-write skipping is fixed to `==` (D2, D10).
 - [ ] `by` delegation of `value` (`var count by remember { mutableStateOf(0) }`), with delegated properties as a language feature (D2).
 - [ ] Clearing a scope's old reads when it recomposes, so a scope that stopped reading a cell does not recompose once more at its next write, if the todo app's measurements ask for it (D9).
-- [ ] Releasing cells made in handlers before their composition ends, by an explicit release or by cells owned by data structures (D12, risk of the change).
+- [x] Releasing cells made in handlers before their composition ends, by an explicit release or by cells owned by data structures (D12, risk of the change). Done in `owned-state` (D1, D7): a state is an owned object, retired when dropped and freed after the next pass.
 - [ ] `LaunchedEffect` and `DisposableEffect` (D13, `compose-architecture` D25).
 - [ ] A niche for `State<T>?` in the zero word, which is never a handle (D8, open question of the change).
 - [ ] Snapshots and state across threads (D16, `compose-architecture` D16).
 - [ ] A static `E4031` for writes in a `remember` calculation or a default value written in a composable, which are no composable contexts and fail only at run time with `state written during composition` (found in the review of `state-handles`).
+
+Follow-ups of `owned-state`:
+- [ ] Forwarding an attached handler from inside a nested content lambda (`Row { Button(onClick = onRemove) }` is `E4017`, `{ onRemove() }` `E4028`): the content lambda may run more than once, so it never gives a capture away; an `attached` function value captured by borrow into an attached closure, the composition keeping both, would allow it. The todo row takes `todos` instead of `onRemove` meanwhile. Related to C1 (shareable function values); needs the user's decision (Implementation Notes of the change, review notes "Open").
+- [ ] Weak captures of holder structs whose fields are states (`{ state.add() }` with `state: &TodoState` is `E5007`; handlers name the states they use): a declared marker for such structs, captured as a weak image, or weak references to remembered slots (D21, non-goal of the change).
+- [ ] `Clone` for state objects (a new cell with a clone of the value), which needs conditional catalog markers (D1, non-goal of the change).
+- [ ] Assignment through a safe navigation (`ref.get()?.value = 1`), which Prism has no syntax for (D11, non-goal of the change).
+- [ ] Snapshot isolation (`Snapshot.withMutableSnapshot`) and state across threads; state is observation only (user, non-goal of the change).
+- [ ] A guard-free read of `Copy` projections of a state's value (`todos.value.size` in a handler), if `app_frame_timing` shows guards in handlers (open question of the change).
+- [ ] Several compositions sharing a state: a cell retired by one composition's data may be freed by another's pass, which the generational check reports (risk of the change; apps run one composition).
+- [ ] A handler registered by `Modifier.clickable` or `toggleable` outside composition and kept in a stored `Modifier` can outlive the states it captured weakly; the generational check reports it (D24, the run-time safety net).
+- [ ] The borrow check of bodies keeping many heavy items live grows a little faster than linearly (x4.6 to x4.8 per x4 at 256 to 4,096 items for `guarded-state-accesses` and plain borrows of the same weight): memory effects of large bodies and per-statement allocations; cheaper types (interned `NominalId`s, so a `Type` clone allocates nothing) and fewer allocations per statement would help (found while speeding up guarded accesses at review).
 
 Follow-ups of `ui-toolkit`:
 - [ ] A public `Layout` with measure policies in Prism and a `ModifierNodeElement`-style API for custom modifiers, which would make `NodeId` public (D3, D11, D25, non-goals of the change).

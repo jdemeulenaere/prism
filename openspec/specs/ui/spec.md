@@ -69,7 +69,7 @@ A toolkit composable composed in a composition that `runApp` did not start MUST 
 `Text(text: &String, modifier = Modifier, color = Color.Unspecified, fontSize = TextUnit.Unspecified, style = MaterialTheme.typography.bodyLarge)` MUST show its text in one text node, through `BasicText`. The text MUST be borrowed, so literals, templates and a state's contents in a composable context pass without a clone. A specified `color` or `fontSize` MUST take precedence over the style's, and an unspecified font size MUST be 16.
 
 #### Scenario: Text of a state's string
-- **WHEN** `compose fun Name(name: State<String>) { Text(name.value); Text("Hello ${name.value}") }` is checked
+- **WHEN** `compose fun Name(name: &State<String>) { Text(name.value); Text("Hello ${name.value}") }` is checked
 - **THEN** the file typechecks, without `E4017`
 
 #### Scenario: An explicit colour wins over the style
@@ -91,7 +91,7 @@ A toolkit composable composed in a composition that `runApp` did not start MUST 
 - **THEN** stdout is the lines `clear 400x300 #FFFFFFFF`, `rect 0,0 58x40 #FF6750A4 radius 20` and `text 25,10 size 16 #FFFFFFFF "+"`
 
 ### Requirement: Checkboxes
-`Checkbox(checked, onCheckedChange: escaping (Bool) -> Unit, modifier = Modifier, enabled = true)` MUST be a box node with the caller's modifier, `toggleable` with the role `Checkbox` and `size(20.dp)`, then a background and a border of 2 in `#FF6750A4` when checked, or a border of 2 in `#FF49454F`, with corners of 2. A click on an enabled checkbox MUST call `onCheckedChange` with the opposite of `checked`, and the box MUST NOT change until the program passes a new `checked`.
+`Checkbox(checked, onCheckedChange: attached (Bool) -> Unit, modifier = Modifier, enabled = true)` MUST be a box node with the caller's modifier, `toggleable` with the role `Checkbox` and `size(20.dp)`, then a background and a border of 2 in `#FF6750A4` when checked, or a border of 2 in `#FF49454F`, with corners of 2. A click on an enabled checkbox MUST call `onCheckedChange` with the opposite of `checked`, and the box MUST NOT change until the program passes a new `checked`.
 
 #### Scenario: Toggling a checkbox
 - **WHEN** a headless app of 400 × 300 composes `compose fun Task() { val done = remember { mutableStateOf(false) }; Row { Checkbox(checked = done.value, onCheckedChange = { done.value = it }); Text("milk") } }`, and its script is `click 10 10` then `dump`
@@ -369,11 +369,11 @@ Events MUST be dispatched one at a time, outside composition. After each event, 
 - **THEN** the dump shows the text field reading `ab`: the second character is appended to the value that the first one's recomposition passed
 
 ### Requirement: Handlers Run Outside Composition
-Handlers MUST run as handlers of the app's composition, outside any pass, so they may write states, and the cells they create belong to the composition.
+Handlers MUST run as handlers of the app's composition, outside any pass, so they may write states and create them; a state a handler creates belongs to whatever holds its state object.
 
 #### Scenario: A handler creates and writes a state
 - **WHEN** a headless app composes `Button(onClick = { val s = mutableStateOf(41); s.value += 1; println(s.value) }) { Text("go") }` under `--check-allocations`, and its script is `click "go"`
-- **THEN** stdout is `42` and a newline, and the exit status is 0: the cell is freed with the composition
+- **THEN** stdout is `42` and a newline, and the exit status is 0: the state, retired when the handler's local is dropped, is freed after the next pass or with the composition
 
 ### Requirement: Idle Apps Do No Work
 When no scope is invalid, no layout is dirty and no event arrives, the frame loop MUST run no pass, no layout and no display list build.
@@ -599,8 +599,25 @@ Without frame statistics, the frame loop MUST do no timing and the `prism` binar
 - **WHEN** a Rust test of `prism-ui` drives an app with a counting allocator through 100 frames with frame statistics on, whose handlers write nothing
 - **THEN** no allocation happens after the first frame, as with frame statistics off
 
-## Design Rationale
+### Requirement: Handler Parameters Are Attached
+The toolkit's handler parameters MUST be `attached`: `onClick` of `Button` and `clickable`, `onCheckedChange` of `Checkbox`, `onValueChange` of `toggleable`, `TextField` and `BasicTextField`, and `runApp`'s `content`, as must the parameters of the externals that register handlers. Composable content parameters of composables MUST stay unmarked.
 
+#### Scenario: A row's checkbox writes its item's own state
+- **WHEN** a headless app composes `compose fun ItemRow(item: &Item) { Row { Checkbox(checked = item.done.value, onCheckedChange = { item.done.value = it }); Text(item.title) } }` and `compose fun Screen() { val items = remember { mutableStateOf(listOf(Item("a", mutableStateOf(false)), Item("b", mutableStateOf(false)))) }; Column { for (item in items.value) { key(item.id) { ItemRow(item) } } } }`, with `struct Item { val id: Int, val title: String, val done: MutableState<Bool> }` built with ids 1 and 2, under `--check-allocations`, and its script is `click checkbox 2` then `dump`
+- **THEN** the dump shows the second checkbox checked and the first one not, and the exit status is 0
+
+#### Scenario: The toolkit's handler parameters in the ABI
+- **WHEN** `prism abi` prints the ABIs of `/prism/compose/material3` and `/prism/compose/foundation`
+- **THEN** `onClick` of `Button` and `clickable`, `onCheckedChange` of `Checkbox` and `onValueChange` of `toggleable`, `TextField` and `BasicTextField` are shown as `attached`
+
+### Requirement: A Removed Item's Handlers Never Reach Its Freed State
+When a pass removes the groups of an item whose handlers captured the item's states, their nodes and the handlers those own MUST be released before the item's states are freed, so no event reaches a handler of a freed state and no stale state is reported.
+
+#### Scenario: Removing an item with its own state
+- **WHEN** the app of "A row's checkbox writes its item's own state" also composes `Button(onClick = { items.value.removeAt(0) }) { Text("remove first") }` below its rows, runs under `--check-allocations`, and its script is `click checkbox 1`, `click "remove first"`, `click checkbox 1` and `dump`
+- **THEN** stderr is empty, the exit status is 0, and the dump shows one row, `b`, with its checkbox checked
+
+## Design Rationale
 
 Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by user direction to follow Jetpack Compose's APIs and modules, implemented and reviewed on 2026-10-19, and logged in `docs/decisions-for-review.md`):
 
@@ -632,3 +649,7 @@ Decisions from `reactive-app-verification` (planned autonomously on 2026-10-18 a
 - **Script targets by kind** (D5). Checkboxes and empty text fields show no text, and coordinates break with every layout edit, so a target may be `<kind> [<n>]`: the n-th node in tree order of a dump kind (`column`, `row`, `box`, `text`, `spacer`, `textfield`) or of a role (`button`, `checkbox`, the node whose `clickable` or `toggleable` element has it), acted on at its centre. The forms do not overlap: a text target is quoted, a position two integers, a kind an identifier. An unknown word is a parse error (status 1), too few matches a script failure (status 101). Cost: one tree walk per command, as for text targets. Rejected: coordinates, node numbers (they encode the tree's history), `Modifier.testTag` (a `Copy` modifier holds no `String`), targets relative to a text.
 - **Frames between presents, busy time only** (D7). A frame is the program thread's work from `runApp`'s start, or the end of the previous present, through the next present; headless, the script's `frame` command is the present and work after the last one forms a last frame. Waiting, `dump`, `edit` and `wait reload` are not measured, nor the dumps' allocations, and an event alone (a press) belongs to the frame it precedes, so a click is one frame. Rejected: a frame per loop iteration (a click would be two frames and the medians would measure presses), a periodic report or live overlay (a follow-up).
 - **Fixed histograms** (D7). Each stage keeps a binary log-linear histogram, exact below 128 and 64 buckets per power of two up to 2^37 ns, held inline (2,112 `u32` counters), so the app's statistics are one allocation before its first frame and measuring allocates nothing after; percentiles are nearest-rank, within 1 %, and kept between the exact smallest and largest value, so one frame, or equal frames, read exactly (fixed at review). Off, each stage costs one branch; on, two `Instant::now()` and two thread-local reads per frame. The report is printed when `runApp` returns, after its composition is dropped. Rejected: sample vectors sorted at the end (they allocate inside frames).
+
+Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **The toolkit's handlers are `attached`** (D9). `onClick` of `Button` and `clickable`, `onCheckedChange`, `onValueChange` of `toggleable`, `TextField` and `BasicTextField`, `runApp`'s content and the registration externals; content lambdas stay unmarked (they borrow). With R1 and R2, a removed item's handlers are released before its states are freed, so UI code never reaches a stale state.

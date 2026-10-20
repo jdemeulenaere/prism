@@ -100,7 +100,7 @@ A call of an intrinsic MUST be checked as a call of its declared signature, exce
 - **THEN** the file typechecks, although `println` and `listOf` are declared with one parameter
 
 ### Requirement: Remember Takes Up to Three Keys
-A call of `remember` (`fun <T : Copy> remember(calculation: () -> T): T`) MUST also accept up to three keys before the calculation, each typed by a type parameter of its own bounded by `Copy` and borrow-free (compose, "Remembering With Keys").
+A call of `remember` (`fun <T> remember(calculation: () -> T): T`, whose result the catalog types as a copy of a `Copy` `T` and as a shared borrow of any other `T`) MUST also accept up to three keys before the calculation, each typed by a type parameter of its own bounded by `Copy` and borrow-free (compose, "Remembering With Keys").
 
 #### Scenario: Keys of remember
 - **WHEN** `compose fun f(a: Int, b: Bool) { val x = remember(a, b) { 1 }; val y = remember(a, b, 'c', 1.5) { 2 } }` is checked
@@ -183,22 +183,15 @@ An `intrinsic struct` MUST declare a type whose representation, glue and operati
 - **THEN** the type checker emits `E4010`, saying that the member of `/prism/compose/runtime` always takes precedence
 
 ### Requirement: The State Declarations of the Compose Module
-`/prism/compose/runtime` MUST declare, as intrinsics, the structs `State<T> : Copy` and `MutableState<T> : Copy`, the function `mutableStateOf`, the property `value` of `State<T>` and the writable property `value` of `MutableState<T>`, the members `read` of `State<T>` and `update` and `edit` of `MutableState<T>`, and the composable `SideEffect`.
+`/prism/compose/runtime` MUST declare, as intrinsics, the structs `State<T>`, `MutableState<T>` and `WeakReference<T> : Copy`, the function `mutableStateOf`, the property `value` of `State<T>` and the writable property `value` of `MutableState<T>`, the member `update` of `MutableState<T>`, the capture functions `weak` of `State<T>` and of `MutableState<T>`, the member `get` of `WeakReference<T>`, and the composable `SideEffect`.
 
 #### Scenario: Signatures of the state declarations
 - **WHEN** `prism abi` prints the ABI of `/prism/compose/runtime`
-- **THEN** it holds `public intrinsic struct State<T> : Copy`, `public intrinsic struct MutableState<T> : Copy`, `public intrinsic fun <T> mutableStateOf(value: T): MutableState<T>`, `public intrinsic val <T> State<T>.value: T`, `public intrinsic var <T> MutableState<T>.value: T`, `public intrinsic fun <T, R> State<T>.read(reader: (&T) -> R): R`, `public intrinsic fun <T> MutableState<T>.update(transform: (T) -> T)`, `public intrinsic fun <T> MutableState<T>.edit(editor: (&mut T) -> Unit)` and `public intrinsic compose fun SideEffect(effect: escaping () -> Unit)`
+- **THEN** it holds `public intrinsic struct State<T>`, `public intrinsic struct MutableState<T>`, `public intrinsic struct WeakReference<T> : Copy`, `public intrinsic fun <T> mutableStateOf(value: T): MutableState<T>`, `public intrinsic val <T> State<T>.value: T`, `public intrinsic var <T> MutableState<T>.value: T`, `public intrinsic fun <T> MutableState<T>.update(transform: (T) -> T)`, `public intrinsic capture fun <T> State<T>.weak(): WeakReference<State<T>>`, `public intrinsic capture fun <T> MutableState<T>.weak(): WeakReference<MutableState<T>>`, `public intrinsic fun <T> WeakReference<T>.get(): (&T)?` and `public intrinsic compose fun SideEffect(effect: attached () -> Unit)`
 
 #### Scenario: State handles need no import
 - **WHEN** a file without imports declares `compose fun Counter() { val count = remember { mutableStateOf(0) }; SideEffect { } }` and `public fun counter(): MutableState<Int> = mutableStateOf(0)`
 - **THEN** it typechecks, and `prism abi` writes the signature of `counter` as `public fun counter(): MutableState<Int>`
-
-### Requirement: Intrinsic Struct Markers Hold for Every Type Argument
-The markers the catalog gives a generic intrinsic struct MUST hold for every type argument, unlike the conditional markers of declared generic structs: `State<String>` and `MutableState<List<Int>>` are `Copy`.
-
-#### Scenario: A state of a String is Copy
-- **WHEN** `fun f(s: MutableState<String>): Int { val a = s; val b = s; return 1 }` is checked
-- **THEN** the file typechecks
 
 ### Requirement: Writable Intrinsic Properties
 An `intrinsic var` property MUST be an intrinsic extension property that can also be assigned, as the catalog lowers it. It MUST be checked against the catalog like an `intrinsic val`, and declaring as `var` a property the catalog lists as read-only, or the reverse, MUST be `E4029`.
@@ -208,11 +201,11 @@ An `intrinsic var` property MUST be an intrinsic extension property that can als
 - **THEN** the type checker emits `E4029`, saying that the compiler provides `length` as a read-only property
 
 ### Requirement: The Value of a State Is Typed by Its Own Rule
-`value` of `State<T>` and `MutableState<T>` MUST be typed by the catalog's rule rather than as a computed property: a copy for a `Copy` `T`, a place for any other `T`, and an assignment target on `MutableState<T>` (compose, "Reading a Copy Value", "Borrowing a Non-Copy Value in Composable Contexts", "Writing a Value").
+`value` of `State<T>` and `MutableState<T>` MUST be typed by the catalog's rule rather than as a computed property: a copy for a `Copy` `T`, a place for any other `T`, and an assignment target on a `MutableState<T>` reached by value or through any reference (compose, "Reading a Copy Value", "A State's Value Is a Place", "Writing a Value").
 
 #### Scenario: Assigning the value of a read-only handle
-- **WHEN** `fun f(s: State<Int>) { s.value = 1 }` is checked
-- **THEN** the type checker emits `E4003`, saying that a `State<Int>` is read-only, with help suggesting a `MutableState<Int>` parameter
+- **WHEN** `fun f(s: &State<Int>) { s.value = 1 }` is checked
+- **THEN** the type checker emits `E4003`, saying that a `State<Int>` is read-only, with help suggesting a `&MutableState<Int>` parameter
 
 ### Requirement: The UI Modules Are Bundled Outside the Prelude
 The compiler MUST ship `/prism/compose/ui`, `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3` as bundled modules that are not in the prelude, all files of the package `prism.compose` beside `/prism/compose/runtime`. Their files MUST be checked, formatted and compiled by the library tests like every bundled module, and their externals MUST match `prism-ui`'s entry points.
@@ -246,6 +239,28 @@ The catalog MUST hold the public intrinsic properties `val Int.dp: Dp` and `val 
 #### Scenario: Unit properties are members of Int
 - **WHEN** a file declares `import /prism/compose/ui` and `fun Int.dp(): Int = 0`
 - **THEN** the type checker emits `E4010`, saying that the member of `/prism/compose/ui` always takes precedence
+
+### Requirement: Intrinsic Struct Markers Are Unconditional
+The markers the catalog gives a generic intrinsic struct MUST hold for every type argument, unlike the conditional markers of declared generic structs: `WeakReference<MutableState<String>>` is `Copy`, and `MutableState<Int>` is not, although `Int` is.
+
+#### Scenario: A weak reference of a String state is Copy
+- **WHEN** `fun f(s: &MutableState<String>): Int { val r = s.weak(); val a = r; val b = r; return 1 }` is checked
+- **THEN** the file typechecks
+
+#### Scenario: A state of an Int is not Copy
+- **WHEN** `fun g(s: MutableState<Int>): Int { val a = s; val b = s; return 1 }` is checked
+- **THEN** the borrow checker emits `E5001` at the second `s`
+
+### Requirement: Capture Functions Are Library Declarations
+A `capture` function MUST be an intrinsic extension that the catalog lists as the capture function of its receiver's type, declared in that type's module, with a shared receiver, no parameters, no type parameters but its receiver's, and the result `WeakReference` of its receiver type. A type MUST have at most one. Any other `capture` declaration MUST be `E4029`. The compiler MUST find a type's capture function through its declarations, never by the type's name.
+
+#### Scenario: A capture function the catalog does not list
+- **WHEN** a library test module declares `public intrinsic capture fun String.weak(): WeakReference<String>`
+- **THEN** the type checker emits `E4029`, saying that the compiler provides no capture function for `String`
+
+#### Scenario: A capture function of the wrong shape
+- **WHEN** a library test module of `/prism/compose/runtime` declares `public intrinsic capture fun <T> MutableState<T>.weak(n: Int): WeakReference<MutableState<T>>`
+- **THEN** the type checker emits `E4029`, saying that a capture function takes no parameters
 
 ## Design Rationale
 
@@ -283,3 +298,7 @@ Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by 
 
 - **The toolkit modules** (D21, user direction). `/prism/compose/ui`, `/prism/compose/foundation`, `/prism/compose/layout` and `/prism/compose/material3` are files of the package directory `prism/compose/` beside `/prism/compose/runtime`, outside the prelude, importing each other with sibling imports (`import ui`) in one direction, as Compose's artifacts depend: `ui` on nothing of the toolkit, `foundation` and `layout` on `ui`, `material3` on all three. A program that imports none pays nothing; one importing `material3` loads four cached ABIs. Rejected: one `/prism/ui`, toolkit modules in the prelude.
 - **The UI intrinsics** (D3, D7, D15, D23). `NodeId` (`package`) and `HandlerId` (public, whose catalog equality entry is `prism_ui_handlers_equal`) are one-word intrinsic structs; `Node` and `LeafNode` are `package` intrinsic composables; `runApp` is an intrinsic so that `E4030` names it and its call builds a root content adapter, its defaults being ordinary generators in `/prism/compose/ui` that `BuiltinFunction::declaration_with_defaults` names; `Int.dp` and `Int.sp` are intrinsic properties lowered as constructions. Setters are `package` externals, so only the toolkit's files reach them. `ModifierElement` and `HandlerId` stay public because programs read chains, until fields have visibility.
+
+Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **The library declares how a type is captured: `capture fun`** (D12, L5). `public intrinsic capture fun <T> MutableState<T>.weak(): WeakReference<MutableState<T>>` (and the same for `State<T>`) marks the function attached closures use to capture a value of the receiver's type; the type checker builds a table keyed by the receiver's type constructor from each module's declarations, so the capture pass never tests a type's name. The catalog checks the shape (`E4029`): one per type, a shared receiver, no parameters, no type parameters but the receiver's, a `WeakReference` result, in the type's module. Rejected: testing `IntrinsicStruct::MutableState` (what L5 forbids), a marker on the struct (markers take no arguments), an annotation (no attribute syntax).

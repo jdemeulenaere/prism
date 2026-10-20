@@ -634,18 +634,18 @@ A closure that captures nothing or owns only `Copy` captures MUST have an enviro
 - **THEN** it shows `Screen` with size 16 and alignment 8, and `prism/compose/runtime::Composition` and `prism/compose/runtime::RecomposeScope` with size 8
 
 ### Requirement: State Handles Are One Word
-`State<T>` and `MutableState<T>` MUST be laid out as one 8-byte, 8-aligned word for every `T`, with no drop glue, clone glue that copies the word, and equality glue that compares the words. `prism dump-layout` MUST name them `prism/compose/runtime::State<...>` and `prism/compose/runtime::MutableState<...>`.
+`State<T>`, `MutableState<T>` and `WeakReference<T>` MUST be laid out as one 8-byte, 8-aligned word for every `T`. A state object MUST have drop glue that retires its state, no clone glue, and equality glue that compares the words; a weak reference MUST have no drop glue and compare its words. `prism dump-layout` MUST name them `prism/compose/runtime::State<...>`, `prism/compose/runtime::MutableState<...>` and `prism/compose/runtime::WeakReference<...>`.
 
 #### Scenario: Layout of a state handle
-- **WHEN** `prism dump-layout` runs on a file declaring `struct Todo { val title: String }` and `fun f(s: MutableState<List<Todo>>) { }`
-- **THEN** it prints the layout of `prism/compose/runtime::MutableState<List<Todo>>` as size 8 and alignment 8, holding only the hidden `handle: Int` word that every intrinsic struct has
+- **WHEN** `prism dump-layout` runs on a file declaring `struct Todo { val title: String }` and `fun f(s: MutableState<List<Todo>>, r: WeakReference<MutableState<Int>>) { }`
+- **THEN** it prints the layouts of `prism/compose/runtime::MutableState<List<Todo>>` and `prism/compose/runtime::WeakReference<prism/compose/runtime::MutableState<Int>>` as size 8 and alignment 8, each holding only the hidden `handle: Int` word that every intrinsic struct has
 
 ### Requirement: State Operations Call the Compose Runtime
-Each state operation MUST be a direct call of a compose runtime entry point with the handle word, the slot type record of the value type, and the value passed by address where it moves. When the entry reports a failure, the generated code MUST raise the error the runtime recorded at the operation's location.
+Each state operation MUST be a direct call of a compose runtime entry point with the state's word, loaded through the borrow of the state object, the slot type record of the value type, and the value passed by address where it moves. When the entry reports a failure, the generated code MUST raise the error the runtime recorded at the operation's location.
 
 #### Scenario: A read in the IR dump
-- **WHEN** `prism dump-clif` runs on `fun f(s: State<Int>): Int = s.value`
-- **THEN** the function calls `prism_compose_state_read` with the handle and the record of `Int`, tests the result for null, and on null calls `prism_compose_state_error` with the location of `s.value`
+- **WHEN** `prism dump-clif` runs on `fun f(s: &State<Int>): Int = s.value`
+- **THEN** the function loads the state's word through `s`, calls `prism_compose_state_read` with it and the record of `Int`, tests the result for null, and on null calls `prism_compose_state_error` with the location of `s.value`
 
 ### Requirement: Cell Records Compare by Equality Glue
 The slot type record of a value type held in a cell MUST hold its drop glue, or null, and an equality entry exactly when `==` applies to the type, strings and lists included, or when it is a function type, compared by closure and captures. The equality entry MUST be the type's equality glue.
@@ -655,7 +655,7 @@ The slot type record of a value type held in a cell MUST hold its drop glue, or 
 - **THEN** `main` refers to one slot type record each for `String` and `List<Int>`, and the unit defines `#equals(String)`, `#equals(List<Int>)` and `#drop(List<Int>)`, the glue those records name as their equality and drop entries
 
 ### Requirement: Top-Level Initializers Run as Program Code
-The initializer of a top-level value MUST run between a call that marks program code and a call that ends it, so the cells it creates belong to the program even when it first runs during a pass.
+The initializer of a top-level value MUST run between a call that marks program code and a call that ends it, so it may create states even when it first runs during a pass.
 
 #### Scenario: A global state first read during composition
 - **WHEN** `val Theme: MutableState<Int> = mutableStateOf(3)` and `compose fun C() { println(Theme.value) }` are declared and `fun main() { val c = composition { C() } }` runs with `--check-allocations`
@@ -669,7 +669,7 @@ The JIT MUST resolve `prism-ui`'s entry points by symbol, as it resolves the run
 - **THEN** compiling the program reports `E6005`, saying that the entry point `prism_ui_set_enabled` takes `i8` where the declaration passes `f64`
 
 ### Requirement: One-Word Intrinsic Structs Travel as Words
-A value of an intrinsic struct that the catalog lays out as one word (`NodeId`, `HandlerId`, `State<T>`, `MutableState<T>`, `RecomposeScope`, `Composition`) MUST be passed to and returned from functions and externals as a 64-bit word, not by address. Its representation is fixed by the catalog, so no signature depends on a declared type's layout.
+A value of an intrinsic struct that the catalog lays out as one word (`NodeId`, `HandlerId`, `State<T>`, `MutableState<T>`, `WeakReference<T>`, `RecomposeScope`, `Composition`) MUST be passed to and returned from functions and externals as a 64-bit word, not by address. Its representation is fixed by the catalog, so no signature depends on a declared type's layout.
 
 #### Scenario: An external taking a node handle
 - **WHEN** `prism dump-clif` runs on a library test module declaring `private external fun prism_ui_set_enabled(node: NodeId, enabled: Bool)` and a call of it
@@ -681,6 +681,20 @@ When the catalog gives an intrinsic struct an equality entry, `==` of two of its
 #### Scenario: Comparing handler ids
 - **WHEN** `prism dump-clif` runs on a library test module of `/prism/compose/ui` declaring `fun same(a: HandlerId, b: HandlerId): Bool = a == b` and `struct Pair : Copy { val h: HandlerId }`, with a comparison of two `Pair`s
 - **THEN** the body of `same` and the equality glue of `Pair` each call `prism_ui_handlers_equal` with two 64-bit words
+
+### Requirement: Dropping a State Object Retires Its State
+The drop glue of `State<T>` and `MutableState<T>` MUST call the compose runtime's retire entry with the state's word, so every drop of a state object, of a local, a field, a list element or a slot, retires its state exactly once.
+
+#### Scenario: Retiring the states of a list of items
+- **WHEN** `prism dump-clif` runs on `struct Todo { val title: String, val done: MutableState<Bool> }` and `fun f(todos: List<Todo>) { }`
+- **THEN** the drop glue of `Todo` calls that of `MutableState<Bool>` for `done`, which calls `prism_compose_state_retire` with the word it loads from the state, and `f` drops `todos` through the list's drop glue, which calls `Todo`'s for each element
+
+### Requirement: Weak Captures Are Copied Words
+A weak capture MUST be held in a closure's environment as one word that owns nothing, so a closure holding only weak handles and `Copy` captures has environment equality and duplicate entries, and one holding a single weak handle keeps it inline in the environment word, allocating nothing.
+
+#### Scenario: A handler with one weak capture allocates nothing
+- **WHEN** `fun keep(f: attached () -> Unit) {}` is declared and `prism dump-clif` runs on `fun f(count: &MutableState<Int>) { keep { count.value += 1 } }`
+- **THEN** `f` builds the function value with the weak handle's word inline, without calling the allocator, and the unit defines `main::f#closure0#equals-environment`
 
 ## Design Rationale
 
@@ -822,3 +836,7 @@ Decisions from `ui-toolkit` (planned on 2026-10-18 and revised on 2026-10-19 by 
 - **One-word intrinsic structs are words** (apply). Intrinsic structs travelled by address; they are now `i64` scalars in machine signatures, laid out as one `Int` in memory, and the composer and state operations that wrote a handle through its destination's address write it as a scalar. So an external taking a `NodeId` passes a word and no signature depends on a declared type's layout.
 - **Equality through a catalog entry** (D23). An intrinsic struct whose catalog names an equality entry (`HandlerId`, `prism_ui_handlers_equal`) compares through a call of that entry, inline and in every equality glue that holds it, so a `Modifier` holding handler elements compares its handlers by code and captures.
 - **Environments are unchanged rules over paths** (D8 of `path-captures`). A borrowed path's environment entry is its place's address and a copied path's entry its value, so a handler copying one `Int` or handle through a borrow is held inline and allocates nothing. A closure borrowing several fields of one binding holds one pointer per path, a few stack words in the creating frame; sharing one pointer among them is a possible optimization. A slot's contract fingerprints each capture by its path's type and records the path itself (the binding's and fields' names), so a reload that changes a closure from capturing `t` to `t.id`, or swaps `t.id` for `t.count` of the same type, gives it a new slot: a value made before keeps the code that reads its environment as the paths it copied. Names rather than field indices, so reordering a struct's fields keeps the slot of a closure copying one of them.
+
+Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **State objects in the backend** (D1, D7, D10). A state object is one word with drop glue calling `prism_compose_state_retire` and no clone glue; a `WeakReference` is one `Copy` word; a weak capture is an owned word in the environment, so a one-handle environment is inline and interned; slot contracts record each capture's `Weak` mode. `weak()` copies the word and needs no runtime call.

@@ -290,7 +290,7 @@ Struct fields and enum variant payloads MUST NOT store a borrowed reference (`&T
 - **THEN** the declaration parses
 
 ### Requirement: Contextual Keyword Identifier Permissibility
-`compose`, `consuming`, `context`, `escaping`, `external` and `intrinsic` MUST be contextual modifiers, usable as identifiers in member access and parameter declarations. `consuming` is one only directly before `fun`; `context`, `external` and `intrinsic` only at a top-level declaration's start, `context` directly before `(`; `escaping` only at a parameter type's start, before `(`, `compose`, `mut` or a type name. Elsewhere each is a name, `escaping` also a type name.
+`attached`, `capture`, `compose`, `consuming`, `context`, `escaping`, `external` and `intrinsic` MUST be contextual modifiers, usable as identifiers in member access and parameter declarations. `capture` and `consuming` are ones only directly before `fun`; `context`, `external` and `intrinsic` only at a top-level declaration's start, `context` directly before `(`; `attached` and `escaping` only at a parameter type's start. Elsewhere each is a name, `attached` and `escaping` also type names.
 
 #### Scenario: Member access on compose identifier
 - **WHEN** code accesses a property or method named compose (`pipeline.compose(step)`)
@@ -315,6 +315,10 @@ Struct fields and enum variant payloads MUST NOT store a borrowed reference (`&T
 #### Scenario: context as an identifier
 - **WHEN** parsing `fun context(context: Int): Int = context`, `fun f() { val context = 1; g(context = context); context(context) }`, `struct context { val x: Int }` and `x.context()`
 - **THEN** each `context` parses as a function, parameter, variable, argument, callee, type or member name, not as a modifier
+
+#### Scenario: attached and capture as identifiers
+- **WHEN** parsing `fun attached(attached: Int): Int = attached`, `fun f(x: attached, capture: Int) {}`, `fun g() { val capture = 1; h(attached = capture) }` and `x.capture()`
+- **THEN** each `attached` and `capture` parses as a function, parameter, variable, argument, member or type name, not as a modifier
 
 ### Requirement: Braces Are Closures in Expression Position
 A `{` in expression position MUST start a closure, with or without a parameter header. A `{` MUST start a block only in block position: a function body, an `if`/`else` branch body, a `when` branch body, or a statement in a block or closure body. A closure without a `->` header MUST declare no parameters, and the syntax tree MUST record whether a closure has a header, so that the empty header `{ -> body }` stays distinct from no header. Every closure body MUST be a block.
@@ -821,6 +825,28 @@ A top-level function declaration MAY start with one context parameter, `context(
 - **WHEN** parsing `var Int.twice: Int` or `intrinsic var Int.twice: Int = 2`
 - **THEN** the parser reports `E2001`
 
+### Requirement: Attached Parameter Modifier
+A parameter of a function declaration, or a parameter in a function type's parameter list, MAY be written with `attached` before its type where `escaping` may be written. `attached` before any other type, in any other type position, or together with `escaping`, MUST be rejected with `E2001`, saying that `attached` marks function-typed parameters that the composition keeps.
+
+#### Scenario: Attached parameters
+- **WHEN** parsing `fun Button(onClick: attached () -> Unit, content: compose () -> Unit) {}`, `fun runApp(content: attached compose () -> Unit) {}`, `fun later(f: attached (() -> Unit)? = null) {}` and `fun register(r: (attached (Bool) -> Unit) -> Int) {}`
+- **THEN** `onClick`, `content` of `runApp` and `f` are attached parameters of types `() -> Unit`, `compose () -> Unit` and `(() -> Unit)?`, and the parameter of the type of `r` is attached
+
+#### Scenario: Attached on another type or with escaping rejected
+- **WHEN** parsing `fun f(n: attached Int) {}`, `fun g() { val k: attached () -> Unit = {} }` or `fun h(f: escaping attached () -> Unit) {}`
+- **THEN** the parser reports `E2001` at `attached` for each
+
+### Requirement: Capture Function Modifier
+`capture` MAY appear directly before `fun`, after `intrinsic`, in a declaration with a receiver, to mark the function that closures given to `attached` parameters use to capture a value of the receiver's type. `capture` without `intrinsic`, without a receiver, or together with `compose`, `mut` or `consuming`, MUST be rejected with `E2001`.
+
+#### Scenario: A capture function
+- **WHEN** parsing `public intrinsic capture fun <T> MutableState<T>.weak(): WeakReference<MutableState<T>>`
+- **THEN** it is an intrinsic extension function marked as a capture function, with type parameter `T`, receiver `MutableState<T>` and name `weak`
+
+#### Scenario: Capture outside its form rejected
+- **WHEN** parsing `capture fun Int.weak(): Int = 1`, `public intrinsic capture fun weak(): Int` or `public intrinsic capture mut fun Int.weak(): Int`
+- **THEN** the parser reports `E2001` for each
+
 ## Design Rationale
 Prism chooses Kotlin-like ergonomics combined with value ownership semantics to eliminate GC pauses without lifetime annotation complexity. Decisions from `lexer-parser`:
 
@@ -913,3 +939,7 @@ Decisions from `compose-transform` (planned autonomously on 2026-10-18, reconcil
 Decisions from `state-handles` (planned autonomously on 2026-10-18, reconciled with the archived compose changes and implemented on 2026-10-19, refined at review, and logged in `docs/decisions-for-review.md`):
 
 - **`intrinsic var` properties** (D4). The property form of `intrinsic val` also takes `var`, with a `writable` flag in the AST and the ABI, for `MutableState<T>.value`; `var` with a receiver and no `intrinsic`, or an `intrinsic var` with an initializer, is `E2001`.
+
+Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **`attached` and `capture` are contextual modifiers** (D9, D12). `attached` is parsed where `escaping` is, on function-typed parameters, never both; `capture` directly before `fun`, after `intrinsic`, on an extension; both stay identifiers elsewhere (`E2001` on misuse).

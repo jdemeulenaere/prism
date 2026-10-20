@@ -49,7 +49,7 @@ The counter app MUST show a button whose label is `Count: <n>`, starting at 0, a
 - **THEN** the first click changes nothing, and the dump reads `Count: 0` with the `Reset` button disabled
 
 ### Requirement: The Todo App Adds Items From Its Text Field
-The todo app MUST hold its items in a `MutableState<List<Todo>>`. Clicking `Add` MUST append an item, not done, whose title is the text field's value, and clear the field. With an empty field, `Add` MUST add nothing. Below the items, the app MUST show `<n> left`, the number of items not done.
+The todo app MUST hold its items in a `MutableState<List<Todo>>`, each item holding its done state in a `MutableState<Bool>` of its own. Clicking `Add` MUST append an item, not done, whose title is the text field's value, and clear the field. With an empty field, `Add` MUST add nothing. Below the items, the app MUST show `<n> left`, the number of items not done.
 
 #### Scenario: Adding, toggling and removing
 - **WHEN** the session `adding-toggling-and-removing` adds `Milk`, `Eggs` and `Bread` by `click textfield`, `type` and `click "Add"`, then runs `click checkbox 2`, `click "Remove" 1` and `dump`
@@ -60,7 +60,7 @@ The todo app MUST hold its items in a `MutableState<List<Todo>>`. Clicking `Add`
 - **THEN** the dump shows no row and `0 left`
 
 ### Requirement: Rows Toggle and Remove Their Item
-Each item MUST be shown in a row of a `Checkbox` showing whether it is done, its title and a `Remove` button. The checkbox MUST set the item's done state, and `Remove` MUST remove the item, keeping the others in order.
+Each item MUST be shown in a row of a `Checkbox` showing whether it is done, its title and a `Remove` button. The checkbox MUST write only the item's own done state, and `Remove` MUST remove the item, keeping the others in order.
 
 #### Scenario: Toggling an item back
 - **WHEN** the session `toggling-an-item-back` adds `Milk`, runs `click checkbox 1`, `dump`, `click checkbox 1` and `dump`
@@ -145,3 +145,7 @@ Decisions from `reactive-app-verification` (planned autonomously on 2026-10-18 a
 - **One benchmark reads `--frame-stats`** (D10). The ignored `crates/prism-cli/tests/app_frame_timing.rs` writes generated scripts, runs each five times, takes the median of medians and the largest 99th percentile, and asserts only under `PRISM_ASSERT_TIMING=1`; `ui_run_timing.rs` takes the 1 ms click target (0.216 ms). Shape tests of the report, which do not depend on timing, run in `run_cli_tests.rs`. Rejected: wall clocks around `prism run`, a Criterion harness.
 - **Hot-reload demos are sessions** (D11). The counter's label and the todo row's layout, the edits a UI developer makes most, keep the count, the items, the check, the draft and the focus, and the todo nodes keep their numbers; reloads that change a remembered type are pinned by `compose-hot-reload`'s fixtures. The same edits saved on disk under `prism run --watch` give the same output.
 - **The window checklist** (D12). What no session can drive runs as the opt-in `crates/prism-cli/tests/app_windows.rs` (`PRISM_WINDOW_TESTS=1`), which delivers input through the window system's own mapping and writes the screenshots in `docs/images/`; the hands-on checks of real hardware and the 16 ms window target in a visible window are left to the user (`ROADMAP.md`, "Needs the user").
+
+Decisions from `owned-state` (review items A2′, A2‴ and L5 of A4, agreed with the user on 2026-10-20 in `docs/milestone-2-review-notes.md`: `MutableState<T>` an owning state object as in Compose, no stale-state errors in UI code, weak capture declared by the library; the rest decided while proposing, implementing and reviewing the change, and logged in `docs/decisions-for-review.md`):
+
+- **The todo app keeps a state per item** (D20). `Todo` holds `done: MutableState<Bool>` in a plain `List<Todo>` kept in a remembered state; each row's `DoneBox(todo.done)` is a skippable restart scope that alone reads its item's state, so a toggle recomposes two scopes (the box and `LeftCount`), measured at 0.008 ms median on the 1,000-item screen against 1.909 ms before. A row takes `todos` rather than `onRemove`, since an attached handler cannot yet be forwarded from inside a nested content lambda (open, for the user). The counter's source is unchanged; `examples/run` uses an explicit weak reference for its returned click handler.
