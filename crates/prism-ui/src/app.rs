@@ -101,6 +101,13 @@ pub fn run_app(
         release_functions(&mut vec![content.into_function()]);
         return Err(APP_RUNNING);
     }
+    // `runApp` reached during a pass, through a function value or a wrapper that `E4030` does
+    // not see, is the composition misuse before any window opens (compose, "One Pass at a
+    // Time").
+    if prism_compose::active_composer().is_some() {
+        release_functions(&mut vec![content.into_function()]);
+        return Err(prism_compose::composer::DURING_PASS.into());
+    }
     let Some(host) = configured_host(title, width, height) else {
         release_functions(&mut vec![content.into_function()]);
         return Err(NO_WINDOW_SYSTEM);
@@ -1259,6 +1266,33 @@ mod tests {
         .unwrap();
         assert_eq!(nested.borrow_mut().take(), Some(Err(APP_RUNNING)));
         configure(HostConfiguration::None);
+    }
+
+    /// The scenario "Starting or disposing a composition during a pass", for `runApp` reached
+    /// through a function value: the composition misuse comes before any host is made, so no
+    /// window opens (with no window system configured, the host would fail otherwise).
+    #[test]
+    fn run_app_during_a_pass_opens_no_host() {
+        let _lock = crate::host::test_lock();
+        configure(HostConfiguration::None);
+        reset_drops();
+        let nested = Rc::new(RefCell::new(None));
+        let result = nested.clone();
+        let composition = Composition::start(
+            Box::new(prism_compose::NodeTree::new()),
+            content(move |_| {
+                *result.borrow_mut() = Some(run_app("Prism", 1, 1, handler("inner", || {})));
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            nested.borrow_mut().take(),
+            Some(Err(crate::error::UiError::Composition(
+                "composition operation during a pass"
+            )))
+        );
+        assert_eq!(drops(), ["drop inner"]);
+        Composition::dispose(composition).unwrap();
     }
 
     #[test]

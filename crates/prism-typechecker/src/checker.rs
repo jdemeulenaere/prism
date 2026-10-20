@@ -998,7 +998,7 @@ impl TypeChecker {
             return;
         };
         let mut found = Vec::new();
-        explicit_groups_violations(body, value, false, &mut found);
+        explicit_groups_violations(body, value, false, &mut false, &mut found);
         for (span, what) in found {
             self.errors.push(TypeError::InvalidLibraryDeclaration {
                 message: format!(
@@ -12154,17 +12154,23 @@ pub(crate) fn is_built_in_type(ty: &Type) -> bool {
 /// The calls of `id` of `body`, outside closures, that a composable with explicit groups may
 /// not make (D5 of `compose-library-in-prism`): a `remember` or `key` anywhere, and a
 /// composable call where `grouped`, inside a branch, a loop, the right operand of `&&` or `||`,
-/// the fallback of `?:`, a safe call or a `when`'s tests and branches. Each is recorded with
-/// its span and what it is.
+/// the fallback of `?:`, a safe call or a `when`'s tests and branches, or after a `return` in
+/// one of those, which some passes take and others not. The body is walked in evaluation
+/// order, a block's statements before its value, and `returned` records such a `return`. Each
+/// call is recorded with its span and what it is.
 fn explicit_groups_violations(
     body: &prism_typed_tree::Body,
     id: ExpressionId,
     grouped: bool,
+    returned: &mut bool,
     found: &mut Vec<(Span, String)>,
 ) {
     let expression = &body.expressions[id];
-    let visit = |child: ExpressionId, grouped: bool, found: &mut Vec<(Span, String)>| {
-        explicit_groups_violations(body, child, grouped, found)
+    let visit = |child: ExpressionId,
+                 grouped: bool,
+                 returned: &mut bool,
+                 found: &mut Vec<(Span, String)>| {
+        explicit_groups_violations(body, child, grouped, returned, found)
     };
     match &expression.kind {
         // A closure's calls run in its own body.
@@ -12174,17 +12180,17 @@ fn explicit_groups_violations(
             then_branch,
             else_branch,
         } => {
-            visit(*condition, grouped, found);
-            visit(*then_branch, true, found);
+            visit(*condition, grouped, returned, found);
+            visit(*then_branch, true, returned, found);
             if let Some(branch) = else_branch {
-                visit(*branch, true, found);
+                visit(*branch, true, returned, found);
             }
         }
         ExpressionKind::When {
             subject, branches, ..
         } => {
             if let Some(subject) = subject {
-                visit(*subject, grouped, found);
+                visit(*subject, grouped, returned, found);
             }
             for branch in branches {
                 let mut tests = Vec::new();
@@ -12194,20 +12200,39 @@ fn explicit_groups_violations(
                 tests.extend(branch.guard);
                 tests.push(branch.body);
                 for test in tests {
-                    visit(test, true, found);
+                    visit(test, true, returned, found);
                 }
             }
         }
         ExpressionKind::Logical { left, right, .. } => {
-            visit(*left, grouped, found);
-            visit(*right, true, found);
+            visit(*left, grouped, returned, found);
+            visit(*right, true, returned, found);
         }
         ExpressionKind::Elvis { nullable, fallback } => {
-            visit(*nullable, grouped, found);
-            visit(*fallback, true, found);
+            visit(*nullable, grouped, returned, found);
+            visit(*fallback, true, returned, found);
         }
-        ExpressionKind::SafeNavigation { chain, .. } => visit(*chain, true, found),
+        ExpressionKind::SafeNavigation { chain, .. } => visit(*chain, true, returned, found),
         kind => {
+            let mut statements = Vec::new();
+            let children = kind.children(&mut statements);
+            for statement in statements {
+                let statement = &body.statements[statement];
+                let in_loop = grouped
+                    || matches!(
+                        statement.kind,
+                        prism_typed_tree::StatementKind::While { .. }
+                            | prism_typed_tree::StatementKind::DoWhile { .. }
+                            | prism_typed_tree::StatementKind::For { .. }
+                    );
+                for child in statement.kind.children() {
+                    visit(child, in_loop, returned, found);
+                }
+            }
+            for child in children {
+                visit(child, grouped, returned, found);
+            }
+            // The call runs after its receiver and arguments.
             if let ExpressionKind::Call(call) = kind {
                 match &call.callee {
                     Callee::Builtin(BuiltinFunction::Remember) => {
@@ -12221,25 +12246,16 @@ fn explicit_groups_violations(
                         expression.span,
                         "a composable call in a branch or loop".to_string(),
                     )),
+                    _ if call.is_compose && *returned => found.push((
+                        expression.span,
+                        "a composable call after a return in a branch or loop".to_string(),
+                    )),
                     _ => {}
                 }
             }
-            let mut statements = Vec::new();
-            for child in kind.children(&mut statements) {
-                visit(child, grouped, found);
-            }
-            for statement in statements {
-                let statement = &body.statements[statement];
-                let in_loop = grouped
-                    || matches!(
-                        statement.kind,
-                        prism_typed_tree::StatementKind::While { .. }
-                            | prism_typed_tree::StatementKind::DoWhile { .. }
-                            | prism_typed_tree::StatementKind::For { .. }
-                    );
-                for child in statement.kind.children() {
-                    visit(child, in_loop, found);
-                }
+            // A `return` that only some passes take ends the body before the calls after it.
+            if grouped && matches!(kind, ExpressionKind::Return { .. }) {
+                *returned = true;
             }
         }
     }

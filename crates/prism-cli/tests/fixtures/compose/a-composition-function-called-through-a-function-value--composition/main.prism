@@ -1,0 +1,15 @@
+// expect: ok
+// run: 101
+// `composition` named as a function value escapes the static E4030; the runtime's misuse
+// error is the safety net.
+import /prism/compose/runtime
+import /prism/core
+
+compose fun Screen(start: (attached compose () -> Unit) -> Composition) {
+    println("screen")
+    val d = start { }
+}
+
+fun main() {
+    val c = composition { Screen(composition) }
+}

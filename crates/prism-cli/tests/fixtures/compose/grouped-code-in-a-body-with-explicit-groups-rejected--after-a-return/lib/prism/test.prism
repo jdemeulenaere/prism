@@ -1,0 +1,24 @@
+package prism
+
+import compose/runtime
+
+public compose fun Leaf(): Unit {}
+
+// The call of `Leaf` runs only on the passes that do not return: E4029.
+@ExplicitGroupsComposable
+public compose fun C(on: Bool): Unit {
+    if (on) {
+        return
+    }
+    Leaf()
+}
+
+// A return before which every composable call is made is accepted.
+@ExplicitGroupsComposable
+public compose fun D(on: Bool): Int {
+    Leaf()
+    if (on) {
+        return currentComposer()
+    }
+    return 0
+}

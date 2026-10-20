@@ -1,0 +1,17 @@
+// expect: ok
+// run: 101
+// headless: 100x100
+// `runApp` named as a function value and called during a pass of a plain composition: the
+// misuse comes before any window opens.
+import /prism/compose/ui
+import /prism/compose/runtime
+import /prism/core
+
+compose fun Screen(run: (&String, Int, Int, attached compose () -> Unit) -> Unit) {
+    println("screen")
+    run("inner", 10, 10) { }
+}
+
+fun main() {
+    val c = composition { Screen(runApp) }
+}
