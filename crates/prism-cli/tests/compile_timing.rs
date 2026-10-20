@@ -1211,6 +1211,27 @@ fn vararg_calls(n: usize) -> String {
     source
 }
 
+/// Reads of extension properties (D6 and D14 of `core-library-in-prism`): each of `n`
+/// functions reads a non-generic and a generic extension property of user types, declared once
+/// in the file, and the member `indices` of `/prism/core`, written in Prism. A read costs a
+/// failed field test and a member or extension-table lookup, and calls the getter.
+fn extension_properties(n: usize) -> String {
+    let mut source = String::from(
+        "struct Box : Copy { val w: Int, val h: Int }\n\
+         val Box.area: Int get() = w * h\n\
+         struct Pair<T> { val a: T, val b: T }\n\
+         val <T> Pair<T>.first: &T get() = &a\n",
+    );
+    for i in 0..n {
+        writeln!(
+            source,
+            "fun f{i}(b: Box, p: &Pair<Int>, xs: &List<Int>): Int = b.area + p.first + xs.indices.end + {i}"
+        )
+        .unwrap();
+    }
+    source
+}
+
 /// One generic struct with a drop and a clone hook, instantiated through a generic function at
 /// `n` struct types (D11 and D17 of `drop-and-clone-hooks`): `n` instances of the function and
 /// `2n` hook instances, requested from the file's summary.
@@ -1370,6 +1391,7 @@ fn shapes() -> Vec<Shape> {
         ),
         shape("ui-calls", true, SIZES, ui_calls),
         shape("vararg-calls", true, SIZES, vararg_calls),
+        shape("extension-properties", true, SIZES, extension_properties),
     ]
 }
 

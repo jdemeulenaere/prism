@@ -100,8 +100,8 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 7. Compile timing and measurements (D14)
 
-- [ ] 7.1 Add the `extension-properties` shape to `crates/prism-cli/tests/compile_timing.rs` (D14), which is the scenario "Many property reads check in linear time". Run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` on an idle machine, and record the times per size in `design.md`.
-- [ ] 7.2 Re-run every measurement of task 1.2 on an idle machine and record them beside the baseline in `design.md`. Investigate any cold or warm median more than 5 % slower before going on, rerunning first since concurrent builds inflate timings (`docs/agent-workflow.md` §5). Verify that `run_timing`'s cold run stays under 15 ms and `list_timing` under 20 ms.
+- [x] 7.1 Add the `extension-properties` shape to `crates/prism-cli/tests/compile_timing.rs` (D14), which is the scenario "Many property reads check in linear time". Run `PRISM_ASSERT_TIMING=1 cargo test --release -p prism-cli --test compile_timing -- --ignored --nocapture` on an idle machine, and record the times per size in `design.md`.
+- [x] 7.2 Re-run every measurement of task 1.2 on an idle machine and record them beside the baseline in `design.md`. Investigate any cold or warm median more than 5 % slower before going on, rerunning first since concurrent builds inflate timings (`docs/agent-workflow.md` §5). Verify that `run_timing`'s cold run stays under 15 ms and `list_timing` under 20 ms.
 
 ## 8. Documents and checks
 

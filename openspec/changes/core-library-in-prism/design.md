@@ -381,6 +381,20 @@ The verifier compares the new AST field. No other layout rule changes.
   - `app_frame_timing` (medians, p99): counter click frame 0.003 ms (0.004); todo toggle recomposition 0.153 ms, frame 1.892 ms (p99 3.588); todo typing recomposition 1.499 ms, frame 2.408 ms (p99 4.424, so the "typing frame p99 under 4 ms" target is reported MISSED before this change, a target the test prints but does not assert); todo first frame 29.9 ms cold, 3.0 ms warm.
   - `list_timing`: a million adds, median 7.07 ms (p90 9.45), target 20 ms met.
   - `compile_timing` under `PRISM_ASSERT_TIMING=1`: all three tests pass (253 s); `member scope built once in 0.343 ms`; `library_imports_cost_per_file` at 4,096 files 184.9 ms of imports, 45.1 µs per file, 5.4 µs for members only.
+- **The `extension-properties` shape (task 7.1)**, release build, `PRISM_ASSERT_TIMING=1`, 2026-10-20 14:26 (load average 1.3), in ms per stage (lex, parse, abi, type, mir, borrow, compose, inst, lower, clif):
+  - 256 functions: 0.1, 0.3, 0.0, 2.5, 1.0, 4.7, 0.3, 0.2, 3.3, 10.1;
+  - 1,024: 0.5, 1.3, 0.0, 10.1, 4.5, 19.1, 1.3, 0.6, 13.7, 41.0;
+  - 4,096: 2.3, 5.4, 0.1, 42.6, 22.1, 80.4, 6.7, 2.7, 57.6, 166.3.
+
+  Type checking grows ×4.0 and ×4.2 per ×4, as a method call with no argument does; the assertion passes (single steps of the small `mir` and `compose` stages reach ×4.9 and ×5.0 in one run of two, within the shape's average).
+- **After the change (task 7.2)**, release build, same machine, 2026-10-20 14:23 to 14:31 (load average 1.1 to 1.6 for the reruns):
+  - `run_timing`: cold total to `main` median 11.03 to 11.56 ms over four runs (p90 11.9 to 12.3), front end 5.03 to 5.27, code generation 5.57 to 5.85; warm 2.09 to 2.20 ms (p90 2.13 to 2.25). Target 15 ms met.
+  - `warm_run_timing` (front end / code generation, two reruns): `many_files` 1024 cold 217.6 to 221.5 / 209.0 to 210.8, warm 77.8 to 81.0 / 20.9 to 21.1; `many_instances` 1024 cold 17.5 to 17.8 / 175.4 to 176.7, generic edit 2.7 / 161.0 to 161.5; `instance_chains` 1024 cold 332.8 to 338.1 / 471.8 to 475.5, warm 80.5 to 82.6 / 61.3 to 61.6. All within 4 % of the baseline (a first run right after a release build read up to 8 % slower and did not reproduce).
+  - `ui_run_timing`: 0.227 ms per click (baseline 0.220).
+  - `app_frame_timing`: counter frame 0.003 ms (p99 0.004); todo toggle recomposition 0.167 ms, frame 1.892 ms (p99 3.228); todo typing recomposition 1.483 ms, frame 2.408 ms (p99 4.489, the target already missed before); first frame 31.6 ms cold, 3.1 ms warm. Unit reads became calls with no measurable effect on frames.
+  - `list_timing`: 7.34 ms (p90 9.51), target 20 ms met.
+  - `compile_timing`: all three tests pass (262 s); the member scope builds in 0.261 ms instead of 0.343 (one module instead of two); `library_imports_cost_per_file` 44.3 to 46.7 µs per file, and 6.7 to 8.3 µs for a file using members only (5.4 to 6.9 before: members written in Prism are checked as extension calls rather than built-in calls).
+  - **The cold `run_timing` median is 5 to 9 % slower (+0.5 to +1.0 ms), investigated.** The warm median moves by 2 to 6 %, the size of the run-to-run spread. `examples/run/main.prism` already imported `/prism/collections` and `/prism/core`, so it parses the same modules; what is new is `/prism/core`'s unit, seven Prism bodies and four external declarations, compiled on every cold run since `run_timing`'s cold runs use no cache, plus the instance `List.isEmpty<Int>`. A cold run of `fun main() {}` measures that unit: front end 0.61 ms and code generation 0.30 ms, the latter almost all `/prism/core`. In use, the unit is compiled once per cache and shared by every workspace, as D4 and this decision expected; warm runs load it. Kept, as the price of members written in Prism until Tier 2 inlines them.
 - **Check-cache reuse.** Library entries are keyed as before, and a workspace file's key now carries one member hash. `cache_tests.rs` checks that a second workspace reuses `prism/core.prism` and that a program without imports never mentions `prism/collections.prism`.
 
 ### D15. No new error code (autonomous)
@@ -395,6 +409,20 @@ Every mistake fits an existing code:
 - an ambiguous import is `E4012`.
 
 The `E2001`, `E4006` and `E4010` rows of `diagnostics` are widened.
+
+### Implementation notes (apply, 2026-10-20)
+
+How the implementation realised the decisions above, where the design left it open. None changes a decision; none needed a new error code.
+
+- **A getter is checked as the extension function it is.** `ExtensionPropertyDecl::getter_function` builds a `FunctionDecl` named like the property, with a shared receiver, the property's type parameters, no parameters and the property's type as its result, spanning the declaration. The type checker registers it through `register_extension_decl` with `property: true` and checks its body with `check_function_body`, so the typed tree holds an ordinary function item `main::Box.area` and nothing after the type checker knows properties (D6).
+- **A read is resolved in one place.** `extension_property_read`, called first by `build_member_access`, serves `infer_member_access`, place paths and assignments alike. A name whose visible extensions, in the first layer declaring one (the file's own, else its imports'), include a property reads as a property, so `x.p()` reads `p` and calls the value, and `E4012` names the imports when two export it. The per-name built-in tests of `length`, `size`, `indices` and `Int` are one lookup of a member property with a built-in.
+- **A read is a temporary.** The read's span is recorded (`property_read_spans`), so moving a property read is no move out of a field (`val s = t.first`, `xs.map { it.first }`), and a read is a writable temporary unless it is a borrow (`t.names.add(x)` changes the temporary). Assigning a property, built-in ones included, is `E4003` saying it has no setter. Scenario "A property's value is the getter's result".
+- **Bare names read properties of the receiver.** In an extension or getter body, `area` reads `this.area` when the receiver's type has an extension property of that name, as a field is read (Kotlin's implicit receiver). Scenario "A bare name reads an extension property".
+- **Members of `/prism/core` are found through ingestion.** `ingest_extension` makes an extension of `/prism/core` on a built-in type (`is_built_in_type`) a member instead of an imported extension, for the member scope and for files importing `/prism/core` alike. `/prism/core` itself is checked without a member scope, so its own extensions are its declarations.
+- **Dumps print a generic member's path as declared**: `call prism/core::List<T>.isEmpty<Int>`, as every generic extension's path prints its receiver; `--explain-cache` lists the instance as `prism/core::List.isEmpty<Int>`. The delta specs name the printed form.
+- **Library modules are checked in dependency order**, so `prism/core.prism` now precedes `prism/collections.prism`, which imports it; the cache tests' expected lines follow.
+- **Tests that build programs without the driver** include `/prism/core`'s unit: `prism-codegen`'s `compile_files` adds it, since any file may call its Prism members. The fixtures injecting a modified library module for the list intrinsics now inject `prism/core`.
+- **Hot reload** of a getter's body needs nothing: a getter is a function with a slot, so an edit is applied at the next reload point (checked by hand with `--watch --edits`).
 
 ## Risks / Trade-offs
 
