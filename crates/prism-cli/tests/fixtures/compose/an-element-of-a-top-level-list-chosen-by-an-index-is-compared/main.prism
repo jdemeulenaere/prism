@@ -1,0 +1,24 @@
+// expect: ok
+// run: 0
+struct Item { val title: String }
+val Items: List<String> = listOf("a", "b")
+val Things: List<Item> = listOf(Item("x"), Item("y"))
+val First: Item = Item("f")
+compose fun Show(s: &String) { println("show $s") }
+compose fun ShowItem(s: &Item) { println("item ${s.title}") }
+// The index is a parameter, read in the block of the borrow, so the borrow's change bits are
+// decided there: an element is uncertain, a field of a top-level value is static.
+compose fun Pick(i: Int) {
+    println("pick $i")
+    Show(Items[i])
+    ShowItem(Things[i])
+    Show(Things[i].title)
+    Show(First.title)
+}
+compose fun Screen(i: &State<Int>) { Pick(i.value) }
+fun main() {
+    val i = mutableStateOf(0)
+    val c = composition { Screen(i) }
+    i.value = 1
+    println(c.recompose())
+}

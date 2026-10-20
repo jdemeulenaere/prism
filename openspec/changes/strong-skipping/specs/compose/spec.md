@@ -140,11 +140,15 @@ A skippable composable MUST be a restart scope, except in a call that runs it in
 - **THEN** stdout is `screen`, `a`, `screen`, `a` and `true`
 
 ### Requirement: Callers Say What They Know of Each Argument
-A call of a composable MUST tell the callee, for each argument, that it is static (a constant, a value read from a top-level `val`, or a borrow of one), that it forwards a parameter of the caller with what the caller knows of it (static, the same or different, as the caller was told or found by comparing), a borrow of a borrowed parameter's whole referent included, or that it is uncertain. A callee MUST trust static and same arguments without comparing them.
+A call of a composable MUST tell the callee, for each argument, that it is static (a constant, a value read from a top-level `val`, or a borrow of one or of a field of one, but not of an element chosen by an index), that it forwards a parameter of the caller with what the caller knows of it (static, the same or different, as the caller was told or found by comparing), a borrow of a borrowed parameter's whole referent included, or that it is uncertain. A callee MUST trust static and same arguments without comparing them.
 
 #### Scenario: A forwarded unchanged parameter is not compared again
 - **WHEN** `compose fun Inner(n: Int) { println("inner") }`, `compose fun Outer(n: Int, s: String) { Inner(n) }`, `fun screen(s: String): compose () -> Unit = { Outer(5, s.clone()) }` and `fun main() { val c = composition(screen("a")); c.setContent(screen("b")) }` run
 - **THEN** stdout is `inner` once: `Outer` runs again for its changed `String`, and passes `n` to `Inner` as static
+
+#### Scenario: An element of a top-level list chosen by an index is compared
+- **WHEN** `val Items: List<String> = listOf("a", "b")`, `compose fun Show(s: &String) { println("show $s") }`, `compose fun Pick(i: Int) { println("pick $i"); Show(Items[i]) }` and `compose fun Screen(i: &State<Int>) { Pick(i.value) }` are declared and `fun main() { val i = mutableStateOf(0); val c = composition { Screen(i) }; i.value = 1; println(c.recompose()) }` runs with `--check-allocations`
+- **THEN** stdout is `pick 0`, `show a`, `pick 1`, `show b` and `true`, one per line, and the exit status is 0: a borrow of a top-level value is static only when it names the value or a field of it, since an index may change between passes
 
 ### Requirement: Recomposition After a Reload Skips Unchanged Children
 The pass after a reload MUST run each invalidated scope's body. A skippable composable it calls whose arguments did not change and whose own scope is not invalid MUST skip, as in any pass. In that pass, every argument a skippable composable keeps, borrowed identities included, MUST be compared with the kept one even when its change bits say same or static, since the call site may be new code passing another value: one whose argument changed MUST run its body with the new arguments and keep them.

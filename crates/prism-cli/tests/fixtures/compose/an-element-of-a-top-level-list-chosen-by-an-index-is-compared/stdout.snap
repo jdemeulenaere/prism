@@ -1,0 +1,10 @@
+pick 0
+show a
+item x
+show x
+show f
+pick 1
+show b
+item y
+show y
+true

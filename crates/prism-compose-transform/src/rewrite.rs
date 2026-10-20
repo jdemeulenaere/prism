@@ -774,14 +774,21 @@ impl<'a> Rewriter<'a> {
             Rvalue::Use(Operand::Copy(source, _) | Operand::Move(source, _)) => {
                 self.place_source(source)
             }
-            // A borrow of a top-level value is static, and a reborrow of a whole borrowed
-            // parameter forwards its bits (D10 of `strong-skipping`).
+            // A borrow of a top-level value, or of a part of it named by fields alone, is
+            // static, and a reborrow of a whole borrowed parameter forwards its bits (D10 of
+            // `strong-skipping`). An element chosen by an index is another place whenever the
+            // index changes, so it is uncertain.
             Rvalue::Borrow {
                 mutable: false,
                 place: borrowed,
                 ..
             } if borrowed.projections.first() == Some(&Projection::Deref) => {
-                if self.sources.get(&borrowed.local) == Some(&Source::TopLevelReference) {
+                if self.sources.get(&borrowed.local) == Some(&Source::TopLevelReference)
+                    && !borrowed
+                        .projections
+                        .iter()
+                        .any(|projection| matches!(projection, Projection::Index(_)))
+                {
                     Some(Source::Static)
                 } else if borrowed.projections.len() == 1
                     && borrowed.local.index() >= 1
