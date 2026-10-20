@@ -105,12 +105,12 @@ Commit one group at a time, each passing `cargo test --workspace` ("Implement co
 
 ## 8. Documents and checks
 
-- [ ] 8.1 Make targeted edits:
+- [x] 8.1 Make targeted edits:
   - `openspec/specs/diagnostics/spec.md`: widen the `E2001` row (extension property declarations), the `E4006` row (unknown properties) and the `E4010` row (members written in Prism, `/prism/core` as the one member module, properties duplicating functions, fields or members; `Int.dp` no longer a member).
   - `AGENTS.md`'s reference list: `extension-functions` gains extension properties; `standard-library` says `/prism/core` declares the built-in types' members, intrinsic or written in Prism.
 
   Verify that `openspec validate core-library-in-prism --strict` stays clean.
-- [ ] 8.2 Run the apply checks of `openspec/config.yaml`:
+- [x] 8.2 Run the apply checks of `openspec/config.yaml`:
   - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace`;
   - `prism check` on every file under `examples/`, and `prism fmt --check examples/`;
   - `prism run --check-allocations examples/run/main.prism`, and the four UI entries with `--check-allocations --headless`.

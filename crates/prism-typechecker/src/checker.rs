@@ -11779,6 +11779,23 @@ fn declared_default_inputs(f: &FunctionDecl) -> Vec<Option<prism_ast::DefaultInp
         .collect()
 }
 
+/// Whether `ty` is one of the built-in types, whose members `/prism/core` declares (D3 of
+/// `core-library-in-prism`): the scalars, `String`, `Unit`, `List<T>`, `Heap<T>` and `Range`.
+pub(crate) fn is_built_in_type(ty: &Type) -> bool {
+    match ty {
+        Type::Int
+        | Type::Float
+        | Type::Bool
+        | Type::Char
+        | Type::String
+        | Type::Unit
+        | Type::List(_)
+        | Type::Heap(_) => true,
+        Type::Struct { id, .. } => *id == NominalId::builtin_range(),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -13341,22 +13358,5 @@ mod tests {
             error_codes(&check_source("struct Box<T>(val v: T)\nfun f(b: Box) {}\nfun g(b: Box<&Int>) {}\nfun <T> h(x: T<Int>) {}\n")),
             vec!["E4020", "E4022", "E4020"]
         );
-    }
-}
-
-/// Whether `ty` is one of the built-in types, whose members `/prism/core` declares (D3 of
-/// `core-library-in-prism`): the scalars, `String`, `Unit`, `List<T>`, `Heap<T>` and `Range`.
-pub(crate) fn is_built_in_type(ty: &Type) -> bool {
-    match ty {
-        Type::Int
-        | Type::Float
-        | Type::Bool
-        | Type::Char
-        | Type::String
-        | Type::Unit
-        | Type::List(_)
-        | Type::Heap(_) => true,
-        Type::Struct { id, .. } => *id == NominalId::builtin_range(),
-        _ => false,
     }
 }

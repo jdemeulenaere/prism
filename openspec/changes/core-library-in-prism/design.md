@@ -410,6 +410,22 @@ Every mistake fits an existing code:
 
 The `E2001`, `E4006` and `E4010` rows of `diagnostics` are widened.
 
+### D16. Property reads behave as Kotlin's: temporaries, and bare names through the receiver (autonomous, while applying)
+
+D6 left two behaviours open, which the apply settled the way Kotlin does:
+
+- **A read is a temporary the caller owns.** `val s = t.first` moves the getter's result, not a field of `t`, and `t.names.add(x)` changes the temporary list the getter returned, as any temporary may be changed unless it is reached through a shared borrow. A getter returning `&T` gives a borrow, which stays read-only.
+- **A bare name reads a property of the innermost receiver**, as it reads a field: `val Box.double: Int get() = area * 2` reads `this.area`.
+
+Assigning any property, an intrinsic one such as `length` included, says that it has no setter (`E4003`).
+
+**Compile-time cost.** One hash-set insert per property read, and one extension-table lookup per bare name that is no local, field or member, which an unresolved name already paid.
+
+Rejected:
+
+- **Treating a read as a field for moves and writes** (the syntactic default): `xs.map { it.first }` would be `E4017` though nothing is moved out of `it`.
+- **Requiring `this.` before a property in bodies**: unlike Kotlin and unlike fields.
+
 ### Implementation notes (apply, 2026-10-20)
 
 How the implementation realised the decisions above, where the design left it open. None changes a decision; none needed a new error code.
