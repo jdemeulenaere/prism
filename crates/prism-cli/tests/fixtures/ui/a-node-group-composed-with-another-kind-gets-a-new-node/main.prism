@@ -1,0 +1,30 @@
+// expect: ok
+// run: 0
+// events: events.txt
+// Two node groups with Compose's node key, 125, as `Node` starts them, whose kinds change
+// between passes: each gets a new node, and the texts composed inside the first keep theirs.
+import /prism/compose/ui
+import /prism/compose/foundation
+import /prism/compose/layout
+import /prism/compose/material3
+import /prism/compose/runtime
+import /prism/composer
+
+compose fun Raw(flag: Bool) {
+    val k = currentComposer()
+    val first = startNodeGroup(k, 125, if (flag) 1 else 2)
+    Text("child")
+    Text("second")
+    endGroup(k)
+    val last = startNodeGroup(k, 125, if (flag) 4 else 5)
+    endGroup(k)
+}
+
+compose fun Screen() {
+    val flag = remember { mutableStateOf(true) }
+    Column {
+        Raw(flag.value)
+        Button(onClick = { flag.value = !flag.value }) { Text("flip") }
+    }
+}
+fun main() { runApp(width = 300, height = 300) { Screen() } }
